@@ -92,9 +92,12 @@ describe("MobileLearningPanel — starting a learning", () => {
   it("a valid start enters CONSENTED and persists it", async () => {
     vi.mocked(fetchTrustedDevices).mockResolvedValue([DEVICE] as never);
     render(<MobileLearningPanel />);
-    fireEvent.change(await screen.findByLabelText("Trusted device"), {
-      target: { value: "d1" },
-    });
+    const deviceSelect = await screen.findByLabelText("Trusted device");
+    // The select renders (and its label resolves) BEFORE the mocked
+    // devices land in state; setting "d1" with no matching option
+    // silently no-ops. Wait for the option to exist first.
+    await screen.findByText("My Samsung A54");
+    fireEvent.change(deviceSelect, { target: { value: "d1" } });
     fireEvent.change(screen.getByLabelText("Data category"), {
       target: { value: "OTHER_SELECTED_INFORMATION" },
     });
