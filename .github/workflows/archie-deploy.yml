@@ -1,0 +1,126 @@
+name: ARCHIE Deploy
+
+# =============================================================
+# ARCHIE lives on the FRELUX app's own Supabase project
+# (Freluxtools, hqhvlkunkdrxyuvziorm) — the separate Frelukx
+# project was disconnected 2026-09-13 and receives no traffic.
+# The FRELUX frontend (github.com/petertubin-droid/frelux) calls
+# these deployed functions through its remote bridge.
+#
+# This workflow keeps ARCHIE's edge functions on that project in
+# sync with this repo. Runs on every push to main that touches
+# ARCHIE's functions, the shared archie-ai code, or migrations —
+# plus manual dispatch from the Actions tab.
+#
+# Database migrations are NOT deployed here: the Supabase GitHub
+# integration (the "Supabase Preview" check) replays and applies
+# the migration chain from this repo against the project, so this
+# workflow deliberately covers only edge functions.
+#
+# All archie-* functions enforce their own owner/visitor
+# authorization internally (JWT verified against FRELUX's public
+# JWKS + profiles.role='admin'), and several have anonymous
+# visitor paths — so they deploy with --no-verify-jwt. The anon
+# key grants no privileges; the gateway JWT check would only
+# break the visitor path.
+#
+# Runtime secrets (GEMINI_API_KEY, WHATSAPP_*, etc.) are managed
+# in the ARCHIE project's dashboard (Edge Functions → Secrets) or
+# via `supabase secrets set` — not part of deploys.
+# =============================================================
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/archie-*/**'
+      - 'supabase/functions/_shared/**'
+      - 'supabase/migrations/**'
+      - '.github/workflows/archie-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: archie-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-functions:
+    name: Deploy archie-* edge functions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy every archie-* function (Freluxtools only — Frelukx disconnected 2026-09-13, left intact)
+        # AUDIT FIX HIGH-2 + MEDIUM-5 (2026-09-13): CI used to
+        # deploy only to the mirror project while live traffic
+        # hit the production project — CI-green did not mean
+        # live-current. CI now deploys to BOTH, eliminating
+        # drift by construction. archie-agent-worker has NO
+        # anonymous visitor path (exact service-role bearer
+        # equality inside), so it deploys WITH the gateway
+        # JWT lock; every visitor-path function keeps
+        # --no-verify-jwt as before. NOTE: the Supabase CLI has no
+        # --verify-jwt flag — JWT verification is the DEFAULT, so the
+        # worker deploys with no flag at all.
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          ARCHIE_PROJECT_REFS: hqhvlkunkdrxyuvziorm
+        run: |
+          set -euo pipefail
+          fail=0
+          deployed=0
+          for ref in $ARCHIE_PROJECT_REFS; do
+            for d in supabase/functions/archie-*/; do
+              name="$(basename "$d")"
+              jwt_flag="--no-verify-jwt"
+              if [ "$name" = "archie-agent-worker" ]; then
+                jwt_flag=""  # default: JWT verification ON
+              fi
+              echo "::group::Deploying $name to $ref ($jwt_flag)"
+              if supabase functions deploy "$name" \
+                   --project-ref "$ref" \
+                   $jwt_flag; then
+                deployed=$((deployed + 1))
+              else
+                echo "::error::Failed to deploy $name to $ref"
+                fail=$((fail + 1))
+              fi
+              echo "::endgroup::"
+            done
+          done
+          echo "Deployed $deployed function deployment(s), $fail failure(s)."
+          if [ "$fail" -gt 0 ]; then exit 1; fi
+
+      - name: Post-deploy health check (BOTH projects)
+        env:
+          ARCHIE_PROJECT_URLS: https://pjvtqkshewerpvggtgqx.supabase.co https://hqhvlkunkdrxyuvziorm.supabase.co
+        run: |
+          # archie-status is owner-only by design (hardened in the C-1
+          # batch). An unauthenticated GET must return exactly 401 with
+          # the owner-gate error — proving BOTH that the deployment is
+          # live AND that the owner gate is enforced. Anything else
+          # fails the deploy: 000 = unreachable, 404 = not deployed,
+          # 200 = GATE OFF (security regression). A health check that
+          # cannot fail is decorative; this one asserts liveness + the
+          # security posture in a single request.
+          sleep 10
+          fail=0
+          for url in $ARCHIE_PROJECT_URLS; do
+            resp="$(curl -s -m 15 -w '\n%{http_code}' \
+              "$url/functions/v1/archie-status" || true)"
+            code="$(echo "$resp" | tail -n1)"
+            body="$(echo "$resp" | head -n -1)"
+            echo "archie-status HTTP $code ($url)"
+            if [ "$code" = "401" ] && echo "$body" | grep -q "Unauthorized"; then
+              echo "owner gate verified ON"
+            else
+              echo "::error::archie-status health check failed ($url): HTTP $code, body: $body"
+              fail=$((fail + 1))
+            fi
+          done
+          if [ "$fail" -gt 0 ]; then exit 1; fi

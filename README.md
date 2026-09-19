@@ -48,3 +48,37 @@ Extracted from [FRELUX](https://github.com/petertubin-droid/frelux) on
 2026-09-19. Full git history of the engine remains in the FRELUX repository;
 this repository begins its own history from the extraction point. The FRELUX
 app continues to run the same engine code as the live host.
+
+## CI/CD
+
+Two GitHub Actions workflows protect this repo:
+
+### 1. CI — `.github/workflows/ci.yml`
+Runs on every push to `main` and every pull request:
+`npm ci` → `npx tsc --noEmit -p tsconfig.app.json` → `npx vitest run`
+(full engine test suite: app project + edge-function project under one
+vitest config) → `npm run build`.
+
+### 2. Deploy — `.github/workflows/archie-deploy.yml`
+Deploys every `archie-*` edge function to the Supabase project
+(Freluxtools, hqhvlkunkdrxyuvziorm) on pushes that touch
+`supabase/functions/archie-*/**`, `supabase/functions/_shared/**`,
+`supabase/migrations/**` or the workflow file, plus manual dispatch
+from the Actions tab. Visitor-path functions deploy with
+`--no-verify-jwt` (they enforce their own owner/visitor gates
+internally); the agent worker deploys with the default JWT lock.
+
+**Required secret (repo → Settings → Secrets → Actions):**
+`SUPABASE_ACCESS_TOKEN` — a Supabase access token with functions
+deploy permission. Without it the deploy workflow fails and the
+functions stay on their last deployed versions.
+
+Database migrations are intentionally NOT deployed here: the
+Supabase GitHub integration replays the migration chain from this
+repo against the project.
+
+### What CI guarantees
+- Type safety across engine core + edge functions + PWA surface
+- No regression in the 15 cognitive systems (2,900+ tests)
+- The provider-independence, no-fabrication and owner-authority
+  principles stay enforced by their dedicated test suites
