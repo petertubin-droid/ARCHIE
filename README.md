@@ -45,9 +45,11 @@ npx vitest run                          # full test suite (engine + edge functio
 ## Provenance
 
 Extracted from [FRELUX](https://github.com/petertubin-droid/frelux) on
-2026-09-19. Full git history of the engine remains in the FRELUX repository;
-this repository begins its own history from the extraction point. The FRELUX
-app continues to run the same engine code as the live host.
+2026-09-19; the FRELUX repo was then stripped of all ARCHIE code. Full
+git history of the engine remains in the FRELUX repository; this
+repository begins its own history from the extraction point. The FRELUX
+frontend remains the engine's live host, calling the deployed archie-*
+functions through its remote bridge.
 
 ## CI/CD
 
