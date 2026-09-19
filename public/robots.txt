@@ -1,0 +1,97 @@
+# robots.txt for FRELUX PROJECT CALC
+# https://freluxtools.netlify.app
+# Public pages are crawlable. Admin, auth, and API routes are excluded.
+
+User-agent: *
+Allow: /
+
+# Public feature pages
+Allow: /paint-comparison
+Allow: /gallery
+Allow: /surface-assessment
+
+# Public calculator and estimator routes
+Allow: /start-building
+Allow: /calculators
+Allow: /paint-calculator
+Allow: /screeding-calculator
+Allow: /screeding-cost-estimator
+Allow: /pop-ceiling-calculator
+Allow: /pop-ceiling-cost-estimator
+Allow: /tile-calculator
+Allow: /tile-cost-estimator
+Allow: /cost-estimator
+Allow: /finish-estimator
+Allow: /painting-estimator
+Allow: /build-to-roof-estimator
+Allow: /image-estimator
+Allow: /structural-calculator
+Allow: /foundation-calculator
+Allow: /construction-sequence
+Allow: /project-timeline
+Allow: /tyrolene-estimator
+
+# Colors and design
+Allow: /colors
+Allow: /colors/compare
+Allow: /colors/paint/
+Allow: /colors/
+
+# Learn and templates
+Allow: /learn
+Allow: /learn/category/
+Allow: /learn/
+Allow: /templates
+Allow: /templates/
+
+# Marketplace and Pro Connect
+Allow: /marketplace
+Allow: /marketplace/category/
+Allow: /marketplace/sellers/
+Allow: /marketplace/products
+Allow: /marketplace/products/
+Allow: /pro-connect
+Allow: /pro-connect/
+Allow: /pro/
+
+# Other public pages
+Allow: /contact
+Allow: /about
+Allow: /pricing
+Allow: /privacy-policy
+Allow: /terms
+Allow: /cookie-policy
+Allow: /disclaimer
+Allow: /ai-disclaimer
+Allow: /ai-color-assistant
+Allow: /rewards
+
+# Disallow private/auth/admin routes
+Disallow: /admin
+Disallow: /login
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /achievements
+Disallow: /color-preview
+Disallow: /my-projects
+Disallow: /my-templates
+Disallow: /shared/
+Disallow: /gallery/new
+Disallow: /project-workspace
+Disallow: /estimate/
+Disallow: /marketplace/post
+Disallow: /marketplace/products/post
+Disallow: /marketplace/products/my
+Disallow: /marketplace/my-listings
+Disallow: /marketplace/orders/
+Disallow: /pro-connect/register
+Disallow: /pro-connect/dashboard
+Disallow: /messages
+Disallow: /contractor
+Disallow: /worker-channels
+Disallow: /clients
+Disallow: /onboarding
+Disallow: /analytics
+
+# Sitemap
+Sitemap: https://freluxtools.netlify.app/sitemap.xml

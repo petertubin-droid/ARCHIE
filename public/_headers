@@ -1,0 +1,37 @@
+# Netlify _headers file: security + SEO headers for FRELUX PROJECT CALC
+
+# Security headers for all routes
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-XSS-Protection: 1; mode=block
+  X-DNS-Prefetch-Control: on
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://*.sentry.io https://*.sentry-cdn.com https://connect.facebook.net https://pagead2.googlesyndication.com https://contextual.media.net https://m.servedby-buysellads.com https://cdn.taboola.com https://widgets.outbrain.com https://*.profitabledisplaynetwork.com https://*.highperformanceformat.com https://*.highrevenueformat.com https://*.profitablecpmrate.com https://*.profitableratecpmnetwork.com https://*.adsterrapremium.com https://assets.revcontent.com https://serve.monumetric.com https://cdn.snigelweb.com https://srv.carbonads.net https://media.ethicalads.io https://c.amazon-adsystem.com https://cdn.yllix.net https://*.monetag.com https://propropsl.com https://quge5.com https://*.quge5.com https://omg10.com https://*.omg10.com https://6opo.com https://n6wxm.com https://*.n6wxm.com https://vaimucuvikuwu.net https://tpc.googlesyndication.com https://www.googletagservices.com https://highperformanceformat.com https://highrevenueformat.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co https://*.sentry.io https://*.sentry-cdn.com wss://*.supabase.co https://www.google-analytics.com https://api.openweathermap.org https://api.paystack.co https://quge5.com https://*.quge5.com https://omg10.com https://*.omg10.com https://6opo.com https://n6wxm.com https://*.n6wxm.com https://vaimucuvikuwu.net https://e2ertt.com https://pagead2.googlesyndication.com https://tpc.googlesyndication.com https://googleads.g.doubleclick.net https://*.highperformanceformat.com https://*.highrevenueformat.com https://*.profitablecpmrate.com https://*.profitableratecpmnetwork.com https://*.adsterrapremium.com https://highrevenueformat.com https://*.profitabledisplaynetwork.com; frame-src 'self' https:; object-src 'none'; base-uri 'self'; form-action 'self' https://paystack.com https://standard.paystack.co
+
+# SEO files: short cache with revalidation (crawlers need fresh data)
+/sitemap.xml
+  Content-Type: application/xml; charset=utf-8
+  Cache-Control: public, max-age=3600, must-revalidate
+
+/robots.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=3600, must-revalidate
+
+/manifest.json
+  Content-Type: application/manifest+json; charset=utf-8
+  Cache-Control: public, max-age=86400
+
+# Static assets: long cache
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# HTML files: short cache with revalidation
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Service worker: no cache
+/sw.js
+  Cache-Control: public, max-age=0, must-revalidate

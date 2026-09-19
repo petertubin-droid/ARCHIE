@@ -1,0 +1,34 @@
+-- =========================================================
+-- ARCHIE OFFENSIVE-SECURITY REGISTRY — FIRST REAL AUTHORIZATION
+--
+-- Owner directive (2026-09-10): register a real, in-scope
+-- authorization so the consolidated SECURITY VERDICT GATE
+-- (supabase/functions/_shared/archie-ai/security/verdict.ts,
+-- wired into archie-chat) has a live authorization to
+-- exercise — and so the authorization-gated intrusive path
+-- has a genuine, owner-registered target.
+--
+-- What is being authorized (honestly):
+--   Target: the live FRELUX/ARCHIE Supabase project's public
+--   API surface — the edge-function gateway and the anon REST
+--   surface of the project the owner owns (hqhvlkunkdrxyuvziorm).
+--   This is ARCHIE's own infrastructure, registered by the
+--   owner for authorized security testing.
+--
+--   Scope: ONLY the public API surface. Direct database access,
+--   auth admin endpoints, security/registry tables, and any
+--   write path to production data are EXCLUDED — exclusions
+--   always win over scope.
+--
+--   Phase: DISCOVER — the engagement begins at the start of the
+--   8-phase lifecycle. No intrusive phase has been claimed.
+--
+-- Idempotent: safe to re-run.
+-- =========================================================
+
+-- Amended 2026-09-12: the original seed INSERTs for
+-- archie_offensive_targets / archie_offensive_engagements moved to
+-- 20260911210000_archie_offensive_security_engine.sql. In a fresh replay
+-- of the migration chain those tables are only created by that later file,
+-- so seeding here aborted the run with 42P01. The seed is idempotent
+-- (ON CONFLICT DO NOTHING) and now runs after the tables exist.

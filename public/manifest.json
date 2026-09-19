@@ -1,0 +1,80 @@
+{
+  "id": "/",
+  "name": "FRELUX PROJECT CALC: Construction Estimation & Project Planning",
+  "short_name": "FRELUX Project",
+  "description": "Construction Estimation & Project Planning, calculators, cost estimators, and AI color recommendations.",
+  "start_url": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#0A0A1A",
+  "theme_color": "#6D28D9",
+  "orientation": "any",
+  "scope": "/",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "lifestyle", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Paint Calculator",
+      "short_name": "Paint Calc",
+      "url": "/paint-calculator",
+      "description": "Calculate paint quantities for your project",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Screeding Calculator",
+      "short_name": "Screeding",
+      "url": "/screeding-calculator",
+      "description": "Calculate wall screeding requirements",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Color Library",
+      "short_name": "Colors",
+      "url": "/colors",
+      "description": "Browse and compare paint colors",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Cost Estimator",
+      "short_name": "Estimate",
+      "url": "/cost-estimator",
+      "description": "Estimate painting project costs",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "AI Color Assistant",
+      "short_name": "AI Assistant",
+      "url": "/ai-color-assistant",
+      "description": "Get AI-powered color recommendations",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
