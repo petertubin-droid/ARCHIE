@@ -48,19 +48,3 @@ Extracted from [FRELUX](https://github.com/petertubin-droid/frelux) on
 2026-09-19. Full git history of the engine remains in the FRELUX repository;
 this repository begins its own history from the extraction point. The FRELUX
 app continues to run the same engine code as the live host.
-
-## CI
-
-The `ci-workflow.yml` file at the repo root is the ready-made GitHub
-Actions workflow (type check + full engine test suite). To activate it,
-move it to `.github/workflows/ci.yml` — via the GitHub web UI
-(`Add file` → the integration token used for the extraction lacks the
-`workflow` scope and cannot create workflow files directly.
-
-After activation, every push to `main` and every PR runs:
-
-```
-npm ci
-npx tsc --noEmit -p tsconfig.app.json
-npx vitest run
-```
