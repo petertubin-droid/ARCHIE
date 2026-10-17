@@ -365,3 +365,14 @@ This follow-up supersedes the earlier status for repository finding **#1** only.
 - `npm run lint` remains blocked because the repository has no ESLint 9 flat configuration. Lint has not been represented as passing.
 - The previously documented Supabase Actions credential failure and live deployment/runtime status remain unverified. This change has **not** been deployed; the handoff's production authorization rule remains in effect.
 - Broader agent-readiness items and other repository findings remain open; this update does not imply the whole handoff is complete.
+
+
+## Remediation status update — 2026-10-17 (agent-worker audit persistence)
+
+This update addresses the silent lifecycle-event failure portion of repository finding **#5** on `main` at `be0a2f9`; it does not claim the full finding is closed or the worker is deployed.
+
+- **✅ Schema-valid lifecycle events:** the worker now uses the database's constrained event vocabulary (`REPORT` / `FAIL` for terminal outcomes) and the agent owner's UUID as `actor`. It no longer writes unsupported event labels such as `TASK_EXECUTED` or a non-UUID actor string.
+- **✅ Storage failures are explicit:** the event helper validates UUIDs and event names, and checks Supabase's returned `{ error }` as well as thrown errors. Empty-task/gate outcomes report an explicit 500 if their lifecycle event cannot be recorded. After task execution, a report is persisted first; if the terminal lifecycle event fails, the worker returns an explicit incomplete/error response rather than success. Cycle errors are retained in the report detail instead of disappearing in swallowed event writes.
+- **Validation:** focused worker/audit-event tests pass (**2 files, 7 tests**); `npm run typecheck` passes; `git diff --check` passes. Full `npm test -- --reporter=dot` passes (**263 files, 3,120 passed, 2 expected-fail, 1 skipped**).
+- **Still open for finding #5:** report/event writes are separate operations, so a failure between them can leave a report without its terminal event. Durable outbox/transactional coupling, retry idempotency, and fault-injection coverage of the full HTTP handler remain future work. Non-authoritative security-event/telemetry handling is not changed here.
+- **Deployment:** no deployment, migration, production database query, or credential change was performed. The deploy credential issue in finding #2 remains separate and unverified.

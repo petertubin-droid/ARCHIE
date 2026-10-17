@@ -48,6 +48,7 @@ import { classifySecurityMessage } from "../_shared/archie-ai/security/verdict.t
 import { TaskCompletionEngine } from "../_shared/archie-ai/cognitive/task-completion.ts";
 import { SupabaseTaskStateStore } from "../_shared/archie-ai/cognitive/task-state.ts";
 import { decomposeClauses } from "../_shared/archie-ai/native-engine/nlu.ts";
+import { appendAgentEvent, type AgentEventType } from "./audit-events.ts";
 
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
@@ -62,19 +63,11 @@ function json(status: number, body: Record<string, unknown>) {
 
 async function appendEvent(
   agentId: string,
-  event: string,
+  actorId: string,
+  event: AgentEventType,
   detail: Record<string, unknown>,
 ) {
-  try {
-    await service.from("frelux_archie_agent_events").insert({
-      agent_id: agentId,
-      event,
-      detail,
-      actor: "archie-agent-worker",
-    });
-  } catch {
-    /* audit events never break the worker */
-  }
+  await appendAgentEvent(service, { agentId, actorId, event, detail });
 }
 
 Deno.serve(async (req: Request) => {
@@ -113,9 +106,18 @@ Deno.serve(async (req: Request) => {
 
   const task = String(agent.task ?? "").trim();
   if (!task) {
-    await appendEvent(agent.id, "TASK_EMPTY", {
-      note: "Agent has no task text — nothing to execute honestly.",
-    });
+    try {
+      await appendEvent(agent.id, agent.created_by, "FAIL", {
+        kind: "TASK_EMPTY",
+        note: "Agent has no task text — nothing to execute honestly.",
+      });
+    } catch {
+      return json(500, {
+        ok: false,
+        executed: false,
+        error: "The empty task was not executed, and its lifecycle event could not be persisted.",
+      });
+    }
     return json(200, {
       ok: true,
       executed: false,
@@ -126,11 +128,22 @@ Deno.serve(async (req: Request) => {
   // ---- GATE 1: life-safety (identical to chat entry) ----
   const lifeSafety = classifyLifeSafety(task);
   if (lifeSafety.blocked) {
-    await appendEvent(agent.id, "TASK_GATE_STOP", {
-      gate: "LIFE_SAFETY",
-      reason: lifeSafety.reason,
-      hazard: lifeSafety.hazard ?? null,
-    });
+    try {
+      await appendEvent(agent.id, agent.created_by, "FAIL", {
+        kind: "TASK_GATE_STOP",
+        gate: "LIFE_SAFETY",
+        reason: lifeSafety.reason,
+        hazard: lifeSafety.hazard ?? null,
+      });
+    } catch {
+      return json(500, {
+        ok: false,
+        executed: false,
+        gate: "LIFE_SAFETY",
+        reason: lifeSafety.reason,
+        error: "The task remains blocked, but the lifecycle event could not be persisted.",
+      });
+    }
     try {
       await service.from("frelux_security_events").insert({
         user_id: agent.created_by,
@@ -156,10 +169,21 @@ Deno.serve(async (req: Request) => {
     inScopeIdentifiers: [],
   });
   if (!verdict.allowed) {
-    await appendEvent(agent.id, "TASK_GATE_STOP", {
-      gate: "SECURITY_VERDICT",
-      reason: verdict.reason,
-    });
+    try {
+      await appendEvent(agent.id, agent.created_by, "FAIL", {
+        kind: "TASK_GATE_STOP",
+        gate: "SECURITY_VERDICT",
+        reason: verdict.reason,
+      });
+    } catch {
+      return json(500, {
+        ok: false,
+        executed: false,
+        gate: "SECURITY_VERDICT",
+        reason: verdict.reason,
+        error: "The task remains blocked, but the lifecycle event could not be persisted.",
+      });
+    }
     return json(200, {
       ok: true,
       executed: false,
@@ -181,6 +205,7 @@ Deno.serve(async (req: Request) => {
   let summary = "";
   let trace: Array<{ phase: string; status: string; organs: string[] }> = [];
   let engine = "archie-unified-cognitive";
+  let executionError: string | null = null;
   let taskCompletion: {
     verdict: string;
     achievedRatio: number;
@@ -230,12 +255,6 @@ Deno.serve(async (req: Request) => {
       summary = completion.responseText;
       cycleOk = completion.verdict !== "NOT_ACHIEVED";
       engine = "archie-unified-cognitive/supervised-task-completion";
-      await appendEvent(agent.id, "TASK_STEPS_EXECUTED", {
-        verdict: completion.verdict,
-        succeeded: completion.steps.filter((s) => s.status === "succeeded")
-          .length,
-        total: completion.steps.length,
-      });
     } else {
       const cycle = await kernel.cycle(
         task,
@@ -255,12 +274,10 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     // Honest degradation: never fabricate a work product.
     cycleOk = false;
+    executionError = err instanceof Error ? err.message : String(err);
     engine = "cycle-failed";
     summary = "";
     trace = [];
-    await appendEvent(agent.id, "TASK_CYCLE_ERROR", {
-      error: err instanceof Error ? err.message : String(err),
-    });
   }
 
   // ---- PERSIST the work product ----
@@ -276,6 +293,7 @@ Deno.serve(async (req: Request) => {
         trace,
         executed: cycleOk,
         task_completion: taskCompletion,
+        execution_error: executionError,
       },
       gates: {
         life_safety: { passed: true, checked: true },
@@ -286,15 +304,25 @@ Deno.serve(async (req: Request) => {
     .select("id")
     .single();
 
-  await appendEvent(agent.id, cycleOk ? "TASK_EXECUTED" : "TASK_FAILED", {
-    report_id: report?.id ?? null,
-    engine,
-  });
-
   if (repErr || !report) {
     return json(500, {
       ok: false,
       error: "Execution finished but the report could not be persisted.",
+    });
+  }
+
+  try {
+    await appendEvent(agent.id, agent.created_by, cycleOk ? "REPORT" : "FAIL", {
+      kind: cycleOk ? "TASK_EXECUTED" : "TASK_FAILED",
+      report_id: report.id,
+      engine,
+    });
+  } catch {
+    return json(500, {
+      ok: false,
+      executed: cycleOk,
+      report_id: report.id,
+      error: "The task report was stored, but the lifecycle event could not be persisted; this run is incomplete.",
     });
   }
 
