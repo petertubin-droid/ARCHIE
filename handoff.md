@@ -376,3 +376,12 @@ This update addresses the silent lifecycle-event failure portion of repository f
 - **Validation:** focused worker/audit-event tests pass (**2 files, 7 tests**); `npm run typecheck` passes; `git diff --check` passes. Full `npm test -- --reporter=dot` passes (**263 files, 3,120 passed, 2 expected-fail, 1 skipped**).
 - **Still open for finding #5:** report/event writes are separate operations, so a failure between them can leave a report without its terminal event. Durable outbox/transactional coupling, retry idempotency, and fault-injection coverage of the full HTTP handler remain future work. Non-authoritative security-event/telemetry handling is not changed here.
 - **Deployment:** no deployment, migration, production database query, or credential change was performed. The deploy credential issue in finding #2 remains separate and unverified.
+
+## Remediation status update — 2026-10-17 (bounded chat web inspection)
+
+This update addresses the remaining response-buffering exposure in C-04 for the `archie-chat` `web_intelligence` tool. It does not close DNS rebinding/controlled-egress items in C-03 or constitute live runtime verification.
+
+- **✅ Bounded page and robots bodies:** added a shared streaming text reader that counts raw bytes, cancels once the limit is exceeded, and safely decodes split UTF-8 chunks. `web_intelligence` now caps HTML at 500,000 bytes and robots.txt at 64,000 bytes before parsing or persisting. Oversized page content returns an explicit error and is not partially ingested.
+- **✅ Regression coverage:** covers exact-limit multi-byte UTF-8, cancellation on over-limit input, bodyless responses, and invalid limits.
+- **Validation:** focused bounded-reader tests pass (4/4); full `npm test -- --reporter=dot` passes (264 files, 3,124 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` pass. The implementation is committed on `main`; see repository history for the exact SHA.
+- **Still open:** C-04 response bounding in any other fetch paths must be re-audited; DNS resolution pinning and controlled egress remain outside this change.

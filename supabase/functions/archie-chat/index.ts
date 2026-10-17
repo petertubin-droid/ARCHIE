@@ -87,6 +87,7 @@ import {
   classifyLifeSafety,
   lifeSafetyStopMessage,
 } from "../_shared/archie-ai/security/life-safety.ts";
+import { readBoundedText, ResponseBodyLimitError } from "./bounded-text.ts";
 
 // ---- shared service client --------------------------------
 const db = createClient(SUPABASE_URL, SERVICE_ROLE, {
@@ -755,7 +756,8 @@ const TOOLS: ToolDef[] = [
           8000,
         );
         if (robotsRes.ok) {
-          const rules = starDisallowRules(await robotsRes.text());
+          // robots.txt is untrusted remote input too. Bound it before parsing.
+          const rules = starDisallowRules(await readBoundedText(robotsRes, 64_000));
           blockedBy = robotsBlocks(rules, u.pathname + u.search);
         }
       } catch {
@@ -783,30 +785,21 @@ const TOOLS: ToolDef[] = [
           url: u.href,
         };
       }
-      const reader = res.body?.getReader();
-      let html = "";
-      if (reader) {
-        const decoder = new TextDecoder();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          html += decoder.decode(value, { stream: true });
-          if (html.length > 500_000) {
-            await reader.cancel();
-            return {
-              error:
-                "The page exceeded the 500,000-character inspection limit; no partial result was saved.",
-            };
-          }
-        }
-      } else {
-        html = await res.text();
-        if (html.length > 500_000) {
+      let html: string;
+      try {
+        // Cap bytes, not decoded characters, so multi-byte payloads cannot
+        // bypass the memory bound. Oversized pages are never partially ingested.
+        html = await readBoundedText(res, 500_000);
+      } catch (error) {
+        if (error instanceof ResponseBodyLimitError) {
           return {
             error:
-              "The page exceeded the 500,000-character inspection limit; no partial result was saved.",
+              "The page exceeded the 500,000-byte inspection limit; no partial result was saved.",
           };
         }
+        return {
+          error: `The page response could not be read safely (${error instanceof Error ? error.message : "read error"}); no partial result was saved.`,
+        };
       }
 
       const report = extractSiteReport(html);
