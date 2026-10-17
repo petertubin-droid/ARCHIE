@@ -303,6 +303,37 @@ serveWithCors(async (req: Request) => {
       };
     }
 
+    // Bounded Self-Tuning Engine (gap C-1): owner-approved
+    // envelopes over the REAL reasoning budgets. Reports the
+    // tuned params + the latest audited decision. UNAVAILABLE
+    // honestly on error.
+    let selfTuning: Record<string, unknown>;
+    try {
+      const { data: tunedParams } = await service
+        .from("archie_tuning_params")
+        .select("param_key, current, owner_approved")
+        .eq("owner_approved", true);
+      const { data: lastTuningEvent } = await service
+        .from("archie_tuning_events")
+        .select("param_key, outcome, reason, created_at")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const approved = (tunedParams ?? []).length;
+      selfTuning = {
+        state: approved > 0 ? "OPERATIONAL" : "READY",
+        tuned_params: approved,
+        last_event: (lastTuningEvent ?? [])[0] ?? null,
+      };
+    } catch (tuneErr) {
+      selfTuning = {
+        state: "UNAVAILABLE",
+        note:
+          tuneErr instanceof Error
+            ? tuneErr.message
+            : "tuning query failed",
+      };
+    }
+
     // Ears runs NATIVE (on-device speech recognition, no
     // provider, no key — OpenAI Separation Rule). It is
     // OPERATIONAL only once a REAL transcription exists in
@@ -363,6 +394,7 @@ serveWithCors(async (req: Request) => {
         semantic_graph: semanticGraph,
         reasoning_engine: reasoningEngine,
         uncertainty_engine: uncertaintyEngine,
+        self_tuning: selfTuning,
         knowledge_repository: await knowledgeRepositoryPromise,
       },
     });

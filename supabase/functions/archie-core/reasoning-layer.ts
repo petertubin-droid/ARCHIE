@@ -39,6 +39,7 @@ import {
   type CausalEdge,
 } from "../_shared/archie-ai/cognitive/uncertainty.ts";
 import { classifyProblem } from "../_shared/reasoning/classify.ts";
+import { readTunedLimits } from "../_shared/archie-ai/cognitive/self-tuning.ts";
 import { createReasoningPersistence } from "../_shared/reasoning/persistence.ts";
 import type {
   ReasoningClient,
@@ -189,6 +190,12 @@ export async function runReasoningLayer(args: {
       domain,
     });
 
+    // BOUNDED SELF-TUNING (self-tuning engine, gap C-1):
+    // the reasoning budgets come from the owner-approved
+    // tuning envelopes when present — otherwise the code
+    // defaults. Tuned values are envelope-clamped upstream.
+    const tunedLimits = await readTunedLimits(args.client);
+
     const gt = await reasoningGroundTruth(
       {
         frelux: null, // no FRELUX calculator adapter on this surface — the engine degrades honestly without it
@@ -199,6 +206,7 @@ export async function runReasoningLayer(args: {
         },
       },
       input,
+      tunedLimits,
     );
 
     // Record the REAL outcome for future calibration (atomic,

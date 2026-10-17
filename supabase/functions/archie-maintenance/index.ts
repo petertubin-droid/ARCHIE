@@ -42,6 +42,7 @@ import {
   getNativeEngine,
 } from "../_shared/archie-ai/native-engine/engine.ts";
 import type { SupabaseLike } from "../_shared/archie-ai/native-engine/persistence.ts";
+import { runTuningCycle } from "../_shared/archie-ai/cognitive/self-tuning.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -51,7 +52,7 @@ const REFLECTION_WATERMARK_KEY = "reflection_watermark";
 const WEAK_CONFIDENCE_FLOOR = 0.5;
 const REFLECT_BATCH_LIMIT = 100;
 
-type Mode = "consolidate" | "reflect" | "all";
+type Mode = "consolidate" | "reflect" | "tune" | "all";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
@@ -229,7 +230,7 @@ serveWithCors(async (req: Request) => {
     return json(400, { error: "Body must be JSON." });
   }
   const mode = (body.mode ?? "all") as Mode;
-  if (!["consolidate", "reflect", "all"].includes(mode)) {
+  if (!["consolidate", "reflect", "tune", "all"].includes(mode)) {
     return json(400, { error: `Unknown mode: ${mode}` });
   }
 
@@ -241,6 +242,22 @@ serveWithCors(async (req: Request) => {
     }
     if (mode === "reflect" || mode === "all") {
       result.reflect = await runReflect();
+    }
+    // Bounded self-tuning engine (gap C-1): one evidence-driven
+    // cycle over the owner-approved reasoning envelopes. Runs
+    // hourly with "all" — small deterministic steps, rollback
+    // on regression, every decision audited in
+    // archie_tuning_events. A failed DB read is an honest
+    // empty cycle, never a fabricated one.
+    if (mode === "tune" || mode === "all") {
+      const tuning = await runTuningCycle(service as unknown as Parameters<typeof runTuningCycle>[0]);
+      result.tune = {
+        cycled: tuning.length,
+        applied: tuning.filter((t) => t.decision === "applied").length,
+        rolled_back: tuning.filter((t) => t.decision === "rolled_back").length,
+        kept: tuning.filter((t) => t.decision === "kept").length,
+        decisions: tuning,
+      };
     }
   } catch (err) {
     ok = false;
