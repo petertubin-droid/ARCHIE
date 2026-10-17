@@ -292,6 +292,13 @@ interface EngineSession {
   createdAt: number;
 }
 
+export interface CalculationTraceRecord {
+  calculator: "statistics" | "arithmetic" | "convert_units";
+  valid: boolean;
+  steps: Array<Record<string, unknown>>;
+  verdict: { result?: unknown; error?: string };
+}
+
 export class ArchieNativeEngine implements ArchieRuntime {
   /** Session table — bounded, FIFO-evicted. */
   private sessions = new Map<string, EngineSession>();
@@ -373,6 +380,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
   private reasoning: ReasoningEngine;
   private planner: Planner;
   private tools = new ToolOrchestrator();
+  private calculationTrace?: (record: CalculationTraceRecord) => void;
   private selfEval = new SelfEvaluator();
   private learner: OutcomeLearner;
   private research: ResearchPipeline;
@@ -460,7 +468,11 @@ export class ArchieNativeEngine implements ArchieRuntime {
      *  stays 100% native until an owner explicitly passes a
      *  router with real providers. */
     modelRouter?: LLMRouter;
+    /** Optional provenance sink for deterministic calculations. Sink failures
+     * never alter the calculation result or user-facing answer. */
+    calculationTrace?: (record: CalculationTraceRecord) => void;
   }) {
+    this.calculationTrace = options?.calculationTrace;
     this.currentSessionId = options?.conversationId ?? "default";
     this.cryptoFetcher = options?.cryptoFetcher ?? null;
     this.tradingLimits = options?.tradingLimits ?? DEFAULT_TRADING_LIMITS;
@@ -567,6 +579,45 @@ export class ArchieNativeEngine implements ArchieRuntime {
       pageFetcher,
     );
     registerBuiltInTools(this.tools, { pageFetcher });
+  }
+
+  /** Execute a deterministic calculator and emit an optional, non-authoritative
+   * provenance record. The sink is isolated so persistence/telemetry cannot
+   * change the computed result. */
+  private async invokeCalculation(
+    calculator: CalculationTraceRecord["calculator"],
+    args: Record<string, unknown>,
+  ) {
+    const invocation = await this.tools.invoke(calculator, args);
+    if (this.calculationTrace) {
+      const steps: Array<Record<string, unknown>> =
+        calculator === "statistics"
+          ? [{ op: args.op, values: args.values }]
+          : calculator === "arithmetic"
+            ? [{ expression: args.expression }]
+            : [{ value: args.value, from: args.from, to: args.to }];
+      try {
+        this.calculationTrace({
+          calculator,
+          valid: invocation.ok,
+          steps,
+          verdict: invocation.ok
+            ? {
+                result:
+                  calculator === "statistics" &&
+                  invocation.output &&
+                  typeof invocation.output === "object" &&
+                  "result" in invocation.output
+                    ? (invocation.output as { result: unknown }).result
+                    : invocation.output,
+              }
+            : { error: invocation.error ?? "calculation failed" },
+        });
+      } catch {
+        // Provenance sinks are best-effort and must never corrupt a result.
+      }
+    }
+    return invocation;
   }
 
   /** Hydrate persisted knowledge + seed foundational facts. */
@@ -1775,7 +1826,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
         const op = statsMatch[1]
           .toLowerCase()
           .replace(/std\.?\s*dev/, "standard deviation");
-        const invocation = await this.tools.invoke("statistics", {
+        const invocation = await this.invokeCalculation("statistics", {
           values: statsNumbers.join(", "),
           op,
         });
@@ -2219,7 +2270,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
           /convert\s+(-?\d+(?:\.\d+)?)\s*([a-z°]+)\s+(?:to|into|in)\s+([a-z°]+)/i,
         );
         if (conv) {
-          const invocation = await this.tools.invoke("convert_units", {
+          const invocation = await this.invokeCalculation("convert_units", {
             value: Number(conv[1]),
             from: conv[2],
             to: conv[3],
@@ -2239,7 +2290,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
             [],
           );
         }
-        const invocation = await this.tools.invoke("arithmetic", {
+        const invocation = await this.invokeCalculation("arithmetic", {
           expression,
         });
         let text = invocation.ok
@@ -2258,7 +2309,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
             const passed = Math.abs(inverse - Number(pct[1])) < 1e-6;
             text += ` Cross-check ${passed ? "passed" : "FAILED"}: ${String(invocation.output)} ÷ ${pct[2]} × 100 = ${Number(inverse.toFixed(4))}% — inverse verification of the ${pct[1]}% claim.`;
           } else {
-            const recompute = await this.tools.invoke("arithmetic", {
+            const recompute = await this.invokeCalculation("arithmetic", {
               expression,
             });
             const passed =

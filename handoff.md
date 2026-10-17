@@ -348,3 +348,20 @@ This status update supersedes the earlier “Required work” only for the findi
 - `npm run lint` — **blocked**: repository has no `eslint.config.js`/`.mjs`/`.cjs` for the installed ESLint 9; this is a repository configuration gap, not a passing lint result.
 - `npm run build` — **blocked**: the checked-out repository tree has no root `index.html`, so Vite cannot resolve its entry module. No successful production build is claimed.
 - No function was deployed, no migration was applied, and no production runtime was queried.
+
+## Remediation status update — 2026-10-17 (follow-up on `main` 4266a8c)
+
+This follow-up supersedes the earlier status for repository finding **#1** only. Changes are prepared on a non-production branch; they have not been deployed. No production token, migration, or runtime configuration was changed.
+
+### Repository finding #1 — calculation provenance and escrow test stability
+
+- **✅ Calculation provenance:** `ArchieNativeEngine` now accepts an optional typed calculation trace sink and emits provenance for actual deterministic statistics, arithmetic, and unit-conversion invocations. Records include the calculator, inputs/operation, valid/failed status, and computed result or error. Sink exceptions are isolated and cannot change the calculation answer. Invalid arithmetic that is never invoked produces no fabricated success record.
+- **✅ Escrow timing test stability:** the test's old/recent delivery fixtures are now calculated relative to the test's real clock, rather than fixed September 2026 dates that silently became stale. The production acceptance-window calculation and threshold were not loosened or changed.
+- **Validation:** focused calculation-trace and escrow tests pass (**2 files, 17 tests**); full `npm test -- --reporter=dot` passes (**262 files, 3,115 passed, 2 expected-fail, 1 skipped**); `npm run typecheck` passes; `git diff --check` passes.
+
+### Remaining release gates (not addressed by this follow-up)
+
+- `npm run build` remains blocked because this repository snapshot has no root `index.html` or app entry. This appears to be an engine repository rather than a complete Vite web-app checkout; no placeholder app was fabricated.
+- `npm run lint` remains blocked because the repository has no ESLint 9 flat configuration. Lint has not been represented as passing.
+- The previously documented Supabase Actions credential failure and live deployment/runtime status remain unverified. This change has **not** been deployed; the handoff's production authorization rule remains in effect.
+- Broader agent-readiness items and other repository findings remain open; this update does not imply the whole handoff is complete.

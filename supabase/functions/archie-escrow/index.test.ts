@@ -261,8 +261,10 @@ describe("archie-escrow — the honest workflow", () => {
 
 describe("archie-escrow — acceptance window + disputes", () => {
   it("accepts by window lapse only when it has truly lapsed", async () => {
-    const OLD = "2026-09-01T10:00:00Z";
-    const RECENT = "2026-09-16T20:00:00Z";
+    // Keep this fixture relative to the real clock so it remains valid over time.
+    const now = Date.now();
+    const OLD = new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const RECENT = new Date(now - 24 * 60 * 60 * 1000).toISOString();
     givenTransaction();
     givenMilestone({ status: "DELIVERED", delivered_at: RECENT });
     givenUserWithRole("11111111-1111-4111-8111-111111111111", "admin");
