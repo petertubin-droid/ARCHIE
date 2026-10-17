@@ -4335,6 +4335,7 @@ export function createConfiguredNativeEngine(
     worldTimeline?: WorldTimelinePort;
     conversationId?: string;
     strategyStore?: StrategyStatsStore | null;
+    verbosity?: Verbosity;
   } = {},
 ): ArchieNativeEngine {
   return new ArchieNativeEngine({
@@ -4351,6 +4352,7 @@ export function createConfiguredNativeEngine(
     systemAdapters: overrides.systemAdapters ?? configuredSystemAdapters,
     worldTimeline: overrides.worldTimeline ?? configuredWorldTimeline,
     conversationId: overrides.conversationId,
+    verbosity: overrides.verbosity,
   });
 }
 

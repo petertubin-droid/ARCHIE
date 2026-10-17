@@ -57,6 +57,7 @@ import { CreationEngine, makeProposal } from "./creation.ts";
 import { SecurityIntegrityEngine } from "./security-integrity.ts";
 import { orchestrate } from "./orchestrator.ts";
 import { WorldModel } from "./world-model.ts";
+import { getOwnerModel } from "./user-model.ts";
 import { CognitivePersistence } from "./persistence.ts";
 import { LOOP_PHASES } from "./types.ts";
 import type {
@@ -246,6 +247,10 @@ export class CognitiveKernel implements ArchieRuntime {
   private creation = new CreationEngine();
   private security: SecurityIntegrityEngine;
   private world: WorldModel;
+  // OWNER MODEL (audit gap 12, engine 12): ARCHIE's theory
+  // of the owner — direct statements with verbatim evidence,
+  // supersession history, inferred counters labeled as such.
+  private ownerModel = getOwnerModel();
   private tracePersistence: CognitivePersistence;
   private bootedAt = Date.now();
   private booted = false;
@@ -304,6 +309,10 @@ export class CognitiveKernel implements ArchieRuntime {
         persistence: db ?? null,
         conversationId: requestScope.conversationId,
         worldTimeline,
+        // The owner's STATED brevity preference drives the
+        // substrate's verbosity — real consumption, not a
+        // decorative profile. No statement, no override.
+        verbosity: this.ownerModel.verbosityPreference() ?? undefined,
       });
     } else {
       configureNativeEngineWorldTimeline(worldTimeline);
@@ -505,6 +514,11 @@ export class CognitiveKernel implements ArchieRuntime {
           .join(" ")
           .trim()
       : "";
+    // THEORY OF MIND: observe the owner's own words BEFORE
+    // reasoning. Deterministic direct-statement extraction —
+    // entries carry verbatim evidence; nothing inferred is
+    // ever presented as the owner's will.
+    if (text) this.ownerModel.observe(text);
     const result = await this.cycle(text, req.turns, req.systemInstruction, {
       conversationId,
     });
