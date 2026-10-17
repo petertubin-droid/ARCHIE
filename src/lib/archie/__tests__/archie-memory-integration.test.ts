@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { ArchieNativeEngine } from "@studio-shared/archie-ai/native-engine/engine.ts";
 import {
   CognitiveKernel,
+  createRequestCognitiveEngine,
   ORGAN_PHASE_BINDINGS,
 } from "@studio-shared/archie-ai/cognitive/kernel.ts";
 import { LOOP_PHASES } from "@studio-shared/archie-ai/cognitive/types.ts";
@@ -379,7 +380,8 @@ describe("production wiring (archie-chat source)", () => {
   const source = read("supabase/functions/archie-chat/index.ts");
 
   it("owner chat runs the unified kernel cycle — the full loop is live", () => {
-    expect(source).toContain("getCognitiveEngine().cycle");
+    expect(source).toContain("createRequestCognitiveEngine");
+    expect(source).toContain("kernel.cycle(");
     expect(source).toContain("cognitiveTrace");
   });
 
@@ -393,6 +395,23 @@ describe("production wiring (archie-chat source)", () => {
     expect(visitorBlock).toContain("new ArchieNativeEngine()");
     expect(visitorBlock).not.toContain("resolveArchieCapabilityEngine");
     expect(visitorBlock).toContain("archie-native-isolated");
+  });
+
+  it("consent-sensitive request kernels are fresh instances, not the shared singleton", () => {
+    const optedOut = createRequestCognitiveEngine(null, "conversation-a");
+    const optedIn = createRequestCognitiveEngine(
+      new MockDb(),
+      "conversation-b",
+    );
+    expect(optedOut).not.toBe(optedIn);
+    expect(
+      (optedOut as unknown as { substrate: { persistence: unknown } }).substrate
+        .persistence,
+    ).toBeNull();
+    expect(
+      (optedIn as unknown as { substrate: { persistence: unknown } }).substrate
+        .persistence,
+    ).not.toBeNull();
   });
 
   it("the kernel singleton shares the same service DB (world model, audit, traces persist)", () => {

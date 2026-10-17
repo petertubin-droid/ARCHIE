@@ -72,9 +72,9 @@ export class VerificationEngine {
     } else {
       checks.push({
         check: "correctness",
-        passed: true,
-        detail:
-          "not applicable — the output makes no deterministic correctness claim; integrity rests on the checks below",
+        passed: false,
+        applicable: false,
+        detail: "not evaluated — no deterministic re-checker was supplied",
       });
     }
 
@@ -142,11 +142,14 @@ export class VerificationEngine {
     );
     checks.push({
       check: "completeness",
-      passed: missing.length === 0,
+      passed: req.requiredAspects.length > 0 && missing.length === 0,
+      applicable: req.requiredAspects.length > 0,
       detail:
-        missing.length === 0
-          ? `all ${req.requiredAspects.length} required aspect(s) addressed or declared unknown`
-          : `output does not address: ${missing.join(", ")}`,
+        req.requiredAspects.length === 0
+          ? "not evaluated — no task-specific completeness contract was supplied"
+          : missing.length === 0
+            ? `all ${req.requiredAspects.length} required aspect(s) addressed or declared unknown`
+            : `output does not address: ${missing.join(", ")}`,
     });
 
     // 4. SECURITY — no leaked secrets; generated code must
@@ -218,16 +221,16 @@ export class VerificationEngine {
           : `weakest cited confidence ${(minConfidence * 100).toFixed(0)}%${minConfidence < 0.5 ? " — flagged as low-confidence" : ""}`,
     });
 
-    const hardFail = checks.some(
-      (c) =>
-        !c.passed &&
-        (c.check === "correctness" ||
-          c.check === "consistency" ||
-          c.check === "security"),
+    // PASS is an aggregate claim: every executed check must pass.
+    // A failed completeness/source/uncertainty check is not downgraded
+    // to a warning just because correctness was not a hard failure.
+    const failedCheck = checks.some(
+      (check) => check.applicable !== false && !check.passed,
     );
     const unverified =
-      req.correctnessRecheck === undefined && req.citedFacts.length === 0;
-    const verdict: VerificationVerdict["verdict"] = hardFail
+      checks.some((check) => check.applicable === false) ||
+      (req.correctnessRecheck === undefined && req.citedFacts.length === 0);
+    const verdict: VerificationVerdict["verdict"] = failedCheck
       ? "FAIL"
       : unverified
         ? "UNVERIFIED"

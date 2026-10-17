@@ -22,6 +22,8 @@ import {
   weakestStatus,
 } from "@studio-shared/archie-ai/cognitive/metacognition.ts";
 import { VerificationEngine } from "@studio-shared/archie-ai/cognitive/verification.ts";
+import { ToolOrchestrator } from "@studio-shared/archie-ai/native-engine/tools.ts";
+import { validateToolCall } from "@studio-shared/archie-ai/native-engine/runtime-schema.ts";
 import { ToolIntelligenceEngine } from "@studio-shared/archie-ai/cognitive/tool-intelligence.ts";
 import {
   CreationEngine,
@@ -489,13 +491,80 @@ describe("meta-cognition engine", () => {
   });
 });
 
+describe("chat JSON-schema tool validation", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      targetKey: { type: "string", maxLength: 40 },
+      input: {
+        type: "object",
+        properties: { count: { type: "integer", minimum: 1, maximum: 5 } },
+        required: ["count"],
+        additionalProperties: false,
+      },
+    },
+    required: ["targetKey"],
+    additionalProperties: false,
+  };
+  it("validates nested shapes, bounds and unknown properties", () => {
+    expect(
+      validateToolCall(schema, { targetKey: "staging", input: { count: 3 } })
+        .valid,
+    ).toBe(true);
+    expect(
+      validateToolCall(schema, { targetKey: "x", input: { count: 8 } }).valid,
+    ).toBe(false);
+    expect(
+      validateToolCall(schema, {
+        targetKey: "x",
+        input: { count: 2, extra: true },
+      }).valid,
+    ).toBe(false);
+    expect(validateToolCall(schema, { targetKey: 7 }).valid).toBe(false);
+  });
+});
+
+describe("native tool argument validation", () => {
+  it("rejects wrong types, unknown fields and non-finite numbers before dispatch", async () => {
+    const tools = new ToolOrchestrator();
+    let executions = 0;
+    tools.register(
+      {
+        name: "sample",
+        description: "test",
+        parameters: { amount: "number", label: "string" },
+      },
+      () => {
+        executions += 1;
+        return { ok: true };
+      },
+    );
+    expect(
+      (
+        await tools.invoke("sample", {
+          amount: "2",
+          label: "ok",
+        } as unknown as Record<string, unknown>)
+      ).ok,
+    ).toBe(false);
+    expect(
+      (await tools.invoke("sample", { amount: 2, label: "ok", extra: true }))
+        .ok,
+    ).toBe(false);
+    expect(
+      (await tools.invoke("sample", { amount: Number.NaN, label: "ok" })).ok,
+    ).toBe(false);
+    expect(executions).toBe(0);
+  });
+});
+
 // ---------------------------------------------------------
 // Verification
 // ---------------------------------------------------------
 describe("verification engine", () => {
   const verifier = new VerificationEngine();
 
-  it("PASSes a deterministic computation with re-execution", () => {
+  it("does not claim PASS when completeness was not evaluated", () => {
     const verdict = verifier.verify({
       target: "math answer",
       output: "25 * 48 = 1200",
@@ -506,8 +575,23 @@ describe("verification engine", () => {
         detail: "re-executed: 1200",
       }),
     });
-    expect(verdict.verdict).toBe("PASS");
-    expect(verdict.checks.every((c) => c.passed)).toBe(true);
+    expect(verdict.verdict).toBe("UNVERIFIED");
+    expect(
+      verdict.checks.find((c) => c.check === "completeness")?.applicable,
+    ).toBe(false);
+  });
+
+  it("FAILs the aggregate when an applicable completeness check fails", () => {
+    const verdict = verifier.verify({
+      target: "multi-part answer",
+      output: "cement is included",
+      citedFacts: [
+        fact({ subject: "cement", predicate: "used", object: "yes" }),
+      ],
+      requiredAspects: ["sand"],
+      correctnessRecheck: () => ({ passed: true, detail: "rechecked" }),
+    });
+    expect(verdict.verdict).toBe("FAIL");
   });
 
   it("FAILs on contradictions between cited facts", () => {
@@ -797,14 +881,17 @@ describe("cognitive kernel (end-to-end loop)", () => {
     expect(result.verification).not.toBeNull();
   });
 
-  it("computes math deterministically with strict verification PASS", async () => {
+  it("reports math as unverified when there is no task-specific completeness contract", async () => {
     const kernel = new CognitiveKernel();
     await kernel.boot();
     const result = await kernel.cycle("what is 25 * 48?");
     expect(result.responseText).toContain("1200");
     expect(result.trace.route.verificationLevel).toBe("strict");
-    expect(result.verification?.verdict).toBe("PASS");
-    expect(result.epistemic).toBe("VERIFIED");
+    expect(result.verification?.verdict).toBe("UNVERIFIED");
+    expect(
+      result.verification?.checks.find((c) => c.check === "completeness")
+        ?.applicable,
+    ).toBe(false);
   });
 
   it("learns when taught, updates the world model, and persists the trace", async () => {

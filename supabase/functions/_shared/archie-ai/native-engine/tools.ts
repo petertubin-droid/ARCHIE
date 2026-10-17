@@ -28,9 +28,10 @@ export function computeStatistics(
   const modes = new Map<number, number>();
   for (const v of values) modes.set(v, (modes.get(v) ?? 0) + 1);
   const maxFreq = Math.max(...modes.values());
-  const modeList = maxFreq > 1
-    ? [...modes.entries()].filter(([, f]) => f === maxFreq).map(([v]) => v)
-    : [];
+  const modeList =
+    maxFreq > 1
+      ? [...modes.entries()].filter(([, f]) => f === maxFreq).map(([v]) => v)
+      : [];
   const norm = op.toLowerCase().replace(/\s+/g, " ").trim();
   if (norm === "mean" || norm === "average") return { result: mean };
   if (norm === "median") return { result: median };
@@ -41,7 +42,12 @@ export function computeStatistics(
   if (norm === "count" || norm === "length") return { result: n };
   if (norm === "mode") return { result: modeList.length > 0 ? modeList : [] };
   if (norm === "variance") return { result: variance };
-  if (norm === "standard deviation" || norm === "stddev" || norm === "stdev" || norm === "std dev")
+  if (
+    norm === "standard deviation" ||
+    norm === "stddev" ||
+    norm === "stdev" ||
+    norm === "std dev"
+  )
     return { result: Math.sqrt(variance) };
   return {
     result: mean,
@@ -56,6 +62,72 @@ export type ToolHandler = (
 interface RegisteredTool {
   spec: ToolSpecInternal;
   handler: ToolHandler;
+}
+
+const MAX_TOOL_INPUT_BYTES = 32_768;
+const MAX_TOOL_STRING_LENGTH = 10_000;
+
+function validateToolValue(value: unknown, depth = 0): boolean {
+  if (depth > 8) return false;
+  if (typeof value === "string") return value.length <= MAX_TOOL_STRING_LENGTH;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean" || value === null) return true;
+  if (Array.isArray(value))
+    return (
+      value.length <= 1_000 &&
+      value.every((item) => validateToolValue(item, depth + 1))
+    );
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return (
+      entries.length <= 100 &&
+      entries.every(
+        ([key, item]) =>
+          key.length <= 200 && validateToolValue(item, depth + 1),
+      )
+    );
+  }
+  return false;
+}
+
+function validateToolArgs(
+  args: Record<string, unknown>,
+  parameters: Record<string, string>,
+): string | null {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return "tool arguments must be a JSON object";
+  }
+  try {
+    if (
+      new TextEncoder().encode(JSON.stringify(args)).byteLength >
+      MAX_TOOL_INPUT_BYTES
+    ) {
+      return `tool arguments exceed ${MAX_TOOL_INPUT_BYTES} bytes`;
+    }
+  } catch {
+    return "tool arguments must be serializable JSON";
+  }
+  for (const key of Object.keys(args)) {
+    if (!(key in parameters)) return `unexpected parameter "${key}"`;
+  }
+  for (const [key, kind] of Object.entries(parameters)) {
+    if (!(key in args)) return `missing required parameter "${key}" (${kind})`;
+    const value = args[key];
+    if (kind === "number") {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        return `parameter "${key}" must be a finite number`;
+      }
+    } else if (kind === "string") {
+      if (typeof value !== "string")
+        return `parameter "${key}" must be a string`;
+      if (value.length > MAX_TOOL_STRING_LENGTH) {
+        return `parameter "${key}" exceeds ${MAX_TOOL_STRING_LENGTH} characters`;
+      }
+    } else if (!validateToolValue(value)) {
+      return `parameter "${key}" is not safe JSON input`;
+    }
+  }
+  return null;
 }
 
 export class ToolOrchestrator {
@@ -93,16 +165,15 @@ export class ToolOrchestrator {
         durationMs: Date.now() - started,
       };
     }
-    for (const [param, kind] of Object.entries(tool.spec.parameters)) {
-      if (!(param in args)) {
-        return {
-          tool: name,
-          ok: false,
-          output: null,
-          error: `missing required parameter "${param}" (${kind})`,
-          durationMs: Date.now() - started,
-        };
-      }
+    const validationError = validateToolArgs(args, tool.spec.parameters);
+    if (validationError) {
+      return {
+        tool: name,
+        ok: false,
+        output: null,
+        error: validationError,
+        durationMs: Date.now() - started,
+      };
     }
     try {
       const output = await tool.handler(args);
@@ -230,49 +301,85 @@ export function evaluateExpression(expression: string): number {
 // real affine formulas, not factors.
 // ---------------------------------------------------------
 const LENGTH_UNITS: Record<string, number> = {
-  mm: 0.001, millimeter: 0.001, millimetre: 0.001,
-  cm: 0.01, centimeter: 0.01, centimetre: 0.01,
-  m: 1, meter: 1, metre: 1,
-  km: 1000, kilometer: 1000, kilometre: 1000,
-  ft: 0.3048, foot: 0.3048, feet: 0.3048,
-  in: 0.0254, inch: 0.0254, inches: 0.0254,
-  yd: 0.9144, yard: 0.9144, yards: 0.9144,
+  mm: 0.001,
+  millimeter: 0.001,
+  millimetre: 0.001,
+  cm: 0.01,
+  centimeter: 0.01,
+  centimetre: 0.01,
+  m: 1,
+  meter: 1,
+  metre: 1,
+  km: 1000,
+  kilometer: 1000,
+  kilometre: 1000,
+  ft: 0.3048,
+  foot: 0.3048,
+  feet: 0.3048,
+  in: 0.0254,
+  inch: 0.0254,
+  inches: 0.0254,
+  yd: 0.9144,
+  yard: 0.9144,
+  yards: 0.9144,
 };
 const MASS_UNITS: Record<string, number> = {
-  mg: 1e-6, g: 0.001, gram: 0.001, gramme: 0.001,
-  kg: 1, kilogram: 1, kilogramme: 1,
-  t: 1000, tonne: 1000, tonnes: 1000, ton: 1000, tons: 1000,
-  lb: 0.453592, pound: 0.453592, pounds: 0.453592,
+  mg: 1e-6,
+  g: 0.001,
+  gram: 0.001,
+  gramme: 0.001,
+  kg: 1,
+  kilogram: 1,
+  kilogramme: 1,
+  t: 1000,
+  tonne: 1000,
+  tonnes: 1000,
+  ton: 1000,
+  tons: 1000,
+  lb: 0.453592,
+  pound: 0.453592,
+  pounds: 0.453592,
 };
 const VOLUME_UNITS: Record<string, number> = {
-  ml: 0.001, cl: 0.01, dl: 0.1, l: 1, liter: 1, litre: 1,
-  liters: 1, litres: 1, m3: 1000, "cubic-meter": 1000,
+  ml: 0.001,
+  cl: 0.01,
+  dl: 0.1,
+  l: 1,
+  liter: 1,
+  litre: 1,
+  liters: 1,
+  litres: 1,
+  m3: 1000,
+  "cubic-meter": 1000,
 };
 
 /** Normalized unit: dimension + factor to base. */
-function unitEntry(
-  unit: string,
-): { dimension: string; factor: number } | null {
+function unitEntry(unit: string): { dimension: string; factor: number } | null {
   const u = unit.toLowerCase().replace(/\.$/, "").replace(/°/, "");
-  if (u in LENGTH_UNITS) return { dimension: "length", factor: LENGTH_UNITS[u] };
+  if (u in LENGTH_UNITS)
+    return { dimension: "length", factor: LENGTH_UNITS[u] };
   if (u in MASS_UNITS) return { dimension: "mass", factor: MASS_UNITS[u] };
-  if (u in VOLUME_UNITS) return { dimension: "volume", factor: VOLUME_UNITS[u] };
+  if (u in VOLUME_UNITS)
+    return { dimension: "volume", factor: VOLUME_UNITS[u] };
   // Plural fallback: "meters" -> "meter".
   const singular = u.endsWith("s") ? u.slice(0, -1) : u;
-  if (singular in LENGTH_UNITS) return { dimension: "length", factor: LENGTH_UNITS[singular] };
-  if (singular in MASS_UNITS) return { dimension: "mass", factor: MASS_UNITS[singular] };
-  if (singular in VOLUME_UNITS) return { dimension: "volume", factor: VOLUME_UNITS[singular] };
+  if (singular in LENGTH_UNITS)
+    return { dimension: "length", factor: LENGTH_UNITS[singular] };
+  if (singular in MASS_UNITS)
+    return { dimension: "mass", factor: MASS_UNITS[singular] };
+  if (singular in VOLUME_UNITS)
+    return { dimension: "volume", factor: VOLUME_UNITS[singular] };
   return null;
 }
 
 const TEMPERATURE: Record<string, (c: number) => number> = {
-  "celsius": (c) => c,
+  celsius: (c) => c,
   centigrade: (c) => c,
-  "c": (c) => c,
-  "fahrenheit": (c) => (c * 9) / 5 + 32,
-  "f": (c) => (c * 9) / 5 + 32,
-  "kelvin": (c) => c + 273.15,
-  "k": (c) => c + 273.15,
+  c: (c) => c,
+  fahrenheit: (c) => (c * 9) / 5 + 32,
+  f: (c) => (c * 9) / 5 + 32,
+  kelvin: (c) => c + 273.15,
+  k: (c) => c + 273.15,
 };
 const FROM_C: Record<string, (v: number) => number> = {
   celsius: (v) => v,
@@ -286,11 +393,7 @@ const FROM_C: Record<string, (v: number) => number> = {
 
 /** Convert a value between units. Throws honest errors for
  *  unknown units or cross-dimension conversions. */
-export function convertUnits(
-  value: number,
-  from: string,
-  to: string,
-): number {
+export function convertUnits(value: number, from: string, to: string): number {
   if (Number.isNaN(value)) throw new Error("value must be a number");
   const fRaw = from.toLowerCase().replace(/\.$/, "");
   const tRaw = to.toLowerCase().replace(/\.$/, "");
@@ -300,12 +403,20 @@ export function convertUnits(
   }
   const f = unitEntry(from);
   const t = unitEntry(to);
-  if (!f) throw new Error(`unknown unit "${from}" — I convert length, mass, volume and temperature only`);
-  if (!t) throw new Error(`unknown unit "${to}" — I convert length, mass, volume and temperature only`);
+  if (!f)
+    throw new Error(
+      `unknown unit "${from}" — I convert length, mass, volume and temperature only`,
+    );
+  if (!t)
+    throw new Error(
+      `unknown unit "${to}" — I convert length, mass, volume and temperature only`,
+    );
   if (f.dimension !== t.dimension) {
-    throw new Error(`cannot convert ${f.dimension} (${from}) to ${t.dimension} (${to}) — different dimensions, honestly refused`);
+    throw new Error(
+      `cannot convert ${f.dimension} (${from}) to ${t.dimension} (${to}) — different dimensions, honestly refused`,
+    );
   }
-  return Math.round((value * f.factor) / t.factor * 1e6) / 1e6;
+  return Math.round(((value * f.factor) / t.factor) * 1e6) / 1e6;
 }
 
 export function registerBuiltInTools(
@@ -324,7 +435,8 @@ export function registerBuiltInTools(
   orchestrator.register(
     {
       name: "convert_units",
-      description: "Deterministically convert a value between units of the same dimension",
+      description:
+        "Deterministically convert a value between units of the same dimension",
       parameters: { value: "number", from: "string", to: "string" },
       trust: "deterministic",
     },

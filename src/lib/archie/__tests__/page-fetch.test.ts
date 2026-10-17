@@ -166,6 +166,62 @@ describe("PageFetcher", () => {
     expect(fetcher).toBeTruthy();
   });
 
+  it("checks each redirect destination before fetching it", async () => {
+    const calls: string[] = [];
+    const fn = (async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nDisallow:\n", { status: 200 });
+      }
+      if (url === "https://public.example/start") {
+        expect(init?.redirect).toBe("manual");
+        return new Response(null, {
+          status: 302,
+          headers: { location: "http://127.0.0.1/admin" },
+        });
+      }
+      throw new Error("private redirect destination must not be requested");
+    }) as typeof fetch;
+    const result = await new PageFetcher({ fetchFn: fn }).fetch(
+      "https://public.example/start",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.note).toMatch(/loopback/i);
+    expect(calls).not.toContain("http://127.0.0.1/admin");
+  });
+
+  it("cancels an oversized streamed response before buffering it all", async () => {
+    let cancelled = false;
+    let reads = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        reads += 1;
+        controller.enqueue(new Uint8Array(60));
+        if (reads > 10) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fn = (async (input: unknown) => {
+      if (String(input).endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nDisallow:\n", { status: 200 });
+      }
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as typeof fetch;
+    const result = await new PageFetcher({ maxBytes: 100, fetchFn: fn }).fetch(
+      "https://large.example/page",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.note).toMatch(/100 byte limit/);
+    expect(cancelled).toBe(true);
+    expect(reads).toBeLessThan(11);
+  });
+
   it("extracts readable content from a real HTML page", async () => {
     const fn = (async (input: unknown) => {
       const url = String(input);

@@ -940,9 +940,10 @@ export class ArchieNativeEngine implements ArchieRuntime {
     // execution request is ONE program — its semicolons are
     // statement separators, not request separators. It is
     // never clause-split, at any layer.
-    const clauses = matchCodeRequest(input) !== null
-      ? [{ text: input, negated: false }]
-      : decomposeClauses(input);
+    const clauses =
+      matchCodeRequest(input) !== null
+        ? [{ text: input, negated: false }]
+        : decomposeClauses(input);
     let outcome: ConverseResult;
     if (clauses.length > MAX_COMPOUND_CLAUSES) {
       outcome = this.compose(
@@ -1771,19 +1772,25 @@ export class ArchieNativeEngine implements ArchieRuntime {
       );
       const statsNumbers = (input.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
       if (statsMatch && statsNumbers.length >= 2) {
-        const op = statsMatch[1].toLowerCase().replace(/std\.?\s*dev/, "standard deviation");
+        const op = statsMatch[1]
+          .toLowerCase()
+          .replace(/std\.?\s*dev/, "standard deviation");
         const invocation = await this.tools.invoke("statistics", {
           values: statsNumbers.join(", "),
           op,
         });
         let text: string;
         if (invocation.ok) {
-          const res = invocation.output as { result: number | number[]; note?: string };
+          const res = invocation.output as {
+            result: number | number[];
+            note?: string;
+          };
           const shown = Array.isArray(res.result)
-            ? (res.result.length > 0 ? res.result.join(", ") : "no repeated value (no mode)")
+            ? res.result.length > 0
+              ? res.result.join(", ")
+              : "no repeated value (no mode)"
             : String(res.result);
-          text =
-            `${op} of ${statsNumbers.join(", ")} = ${shown} (computed deterministically in-engine from ${statsNumbers.length} numbers)`;
+          text = `${op} of ${statsNumbers.join(", ")} = ${shown} (computed deterministically in-engine from ${statsNumbers.length} numbers)`;
           if ("note" in res && res.note) text += `. ${res.note}`;
         } else {
           text = `I could not compute that: ${invocation.error}. My statistics are honest — errors are reported, never guessed.`;
@@ -1809,7 +1816,8 @@ export class ArchieNativeEngine implements ArchieRuntime {
             steps: number;
           };
           const lines = res.output.slice(0, 20);
-          text = "I ran that in my deterministic sandbox — no network, no I/O, step-capped.";
+          text =
+            "I ran that in my deterministic sandbox — no network, no I/O, step-capped.";
           if (lines.length > 0) {
             text += ` Output:\n${lines.map((l) => `  ${l}`).join("\n")}`;
           }
@@ -1826,9 +1834,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
         } else {
           text = `The sandbox refused that honestly: ${invocation.error}. My code execution is whitelisted and bounded — no network, no filesystem, no Date/random — and it reports the exact reason instead of half-running.`;
         }
-        return this.compose(text, nlu.confidence, [], undefined, [
-          invocation,
-        ]);
+        return this.compose(text, nlu.confidence, [], undefined, [invocation]);
       }
 
       // (b) direct page reading — "open/read <url>"
@@ -1852,14 +1858,14 @@ export class ArchieNativeEngine implements ArchieRuntime {
           text =
             `I read that page directly (${title}${res.url}, ${res.contentChars} characters extracted${res.note ? `, ${res.note}` : ""}). ` +
             `Beginning of the content:\n\n${res.content.slice(0, 1200)}` +
-            (res.content.length > 1200 ? "\n\n(…truncated in the reply — the full extraction was fetched)" : "") +
+            (res.content.length > 1200
+              ? "\n\n(…truncated in the reply — the full extraction was fetched)"
+              : "") +
             "\n\nThis is fetched page content, not validated knowledge — I have not stored it as a fact.";
         } else {
           text = `I could not read that page: ${invocation.error}. My page reading is honest — robots-checked, timeout-guarded, and it reports failures instead of inventing content.`;
         }
-        return this.compose(text, nlu.confidence, [], undefined, [
-          invocation,
-        ]);
+        return this.compose(text, nlu.confidence, [], undefined, [invocation]);
       }
 
       // (c) sentry duty — the caller's sentry_diagnostics tool
@@ -4100,6 +4106,32 @@ export function configureNativeEngineWorldTimeline(
 export function configureNativeEngineLessonLookup(lookup: LessonLookup): void {
   configuredLessonLookup = lookup;
   singleton = undefined;
+}
+
+/** Create a fresh engine using the deployment's immutable adapters,
+ * while allowing request-owned state (especially persistence and the
+ * world timeline) to be supplied without mutating isolate globals. */
+export function createConfiguredNativeEngine(
+  overrides: {
+    persistence?: SupabaseLike | null;
+    marketPriceLookup?: MarketPriceLookup;
+    lessonLookup?: LessonLookup;
+    systemAdapters?: SystemAdapters;
+    worldTimeline?: WorldTimelinePort;
+    conversationId?: string;
+  } = {},
+): ArchieNativeEngine {
+  return new ArchieNativeEngine({
+    persistence:
+      "persistence" in overrides
+        ? overrides.persistence
+        : configuredPersistence,
+    marketPriceLookup: overrides.marketPriceLookup ?? configuredMarketLookup,
+    lessonLookup: overrides.lessonLookup ?? configuredLessonLookup,
+    systemAdapters: overrides.systemAdapters ?? configuredSystemAdapters,
+    worldTimeline: overrides.worldTimeline ?? configuredWorldTimeline,
+    conversationId: overrides.conversationId,
+  });
 }
 
 export function getNativeEngine(): ArchieNativeEngine {

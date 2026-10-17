@@ -308,3 +308,43 @@ ARCHIE contains substantial deterministic logic, but the checked-in code does no
 - Concurrency and SSRF findings need regression tests and safe test harnesses, not assumptions about a particular edge runtime.
 - Keep the previous repository/workflow findings above until each is individually rechecked and completed. This addendum does not mark any old work done.
 - Do not apply migrations, rotate secrets, deploy, or change production behavior without the owner’s explicit authorization and a verified target.
+
+
+## Remediation status update — 2026-10-17
+
+This status update supersedes the earlier “Required work” only for the finding IDs explicitly marked below. It records source changes and tests on the remediation branch; it does **not** claim deployment, production configuration, a successful full CI run, or closure of findings marked partial/open.
+
+### Addressed in this branch
+
+- **✅ C-01 — request-scoped consent/persistence isolation:** owner chat now creates a fresh cognitive kernel/native engine for the request and fixes its persistence adapter at construction. The request-specific world timeline is attached to that engine, rather than reconfiguring the shared native singleton. Focused isolation and consent tests pass.
+- **✅ C-02 — aggregate verifier verdict:** every applicable failed check now produces `FAIL`; absent recheck/completeness evidence is represented as `UNVERIFIED`, not a pass. Strict routes withhold unverified output. Regression coverage was added.
+- **✅ C-05 — tool outcome reporting:** operational tool results now record explicit failures and thrown errors as failed tool runs rather than unconditional success. Contradictory result objects containing both a success flag and an explicit failure are treated as failures.
+- **✅ C-13 — consent-read fallback:** memory persistence is opt-in for owner chat. Missing rows, revoked/malformed records, and consent query errors leave request persistence disabled; vocabulary capture is also gated on affirmative consent.
+
+### Partially addressed; remaining work is still required
+
+- **⚠️ C-03 — public URL/redirect safety:** native page fetching validates every redirect destination, limits redirect hops, and rejects IPv6 literals it cannot verify. Chat URL inspection also validates redirects. DNS resolution pinning/rebinding and controlled egress are still not implemented or live-tested.
+- **⚠️ C-04 — response-size bounds:** the native page fetcher streams response bodies and cancels when the byte limit is exceeded; `robots.txt` is bounded too. The separate chat site-inspection path still calls `Response.text()` before checking its character limit, so it is not protected by a streaming byte cap yet.
+- **⚠️ C-06 — rate limiting:** authenticated non-owner requests now key the isolate-local quota by account ID rather than caller-controlled conversation ID. Anonymous callers can still rotate IDs, and all isolate-local counters remain bypassable across instances; trusted edge identity and a shared limiter are outstanding.
+- **⚠️ C-07 — tool-hop completion:** the final unexecuted tool call is now recorded as pending and the reply says the action was not run. The chat and reasoning-loop budgets are not unified, and broader state-machine tests for all boundary counts remain outstanding.
+- **⚠️ C-09 — runtime schemas:** chat tool calls receive bounded nested JSON-schema validation before dispatch, and native tools reject wrong primitive types, unknown top-level keys, oversized/deep/non-finite values. This is a deliberately small schema subset, not full JSON Schema; every tool's enums, optional fields, and semantic/range constraints still need a complete contract and coverage.
+- **⚠️ C-10 — completeness:** a missing task-specific contract is now explicitly `UNVERIFIED` and cannot pass strict verification. The production path still supplies no derived per-task required aspects, so completeness is not yet evaluated against the user's actual request.
+- **⚠️ C-14 — validation:** typecheck and focused regression coverage pass (details below), but the full suite is red and lint/build cannot currently complete in this checkout. Live deployment, database/migration, consent-service, and egress verification have not been performed.
+
+### Still open
+
+- **C-08:** no observation-driven plan/action/replan state machine was implemented; narrow claims or build and evaluate that capability.
+- **C-11:** FRELUX host coupling remains; no host-adapter separation was implemented.
+- **C-12:** a tested user-facing capability matrix and revised capability labels remain outstanding.
+- The earlier repository/release finding **#1** remains open: the current full run still has three calculation-provenance test failures and one escrow acceptance-window failure. No production release should be claimed until those are resolved and CI passes.
+- Other repository-level findings (#2–#12) above were not re-audited or changed in this remediation.
+
+### Validation evidence on the remediation checkout
+
+- `npm run typecheck` — **passed**.
+- Focused tests for memory integration, cognitive engine/verifier/tool validation, page fetch, and PWA source checks — **4 files passed; 112 tests passed; 1 skipped**.
+- `git diff --check` — **passed** before the handoff update; rerun before commit.
+- Full `npm test -- --reporter=dot` — **failed**: 260/262 test files passed; 3,111 tests passed, 4 failed, 2 expected failures, 1 skipped. Failures: three existing calculation-trace assertions and one escrow acceptance-window assertion. These paths were not modified by this remediation.
+- `npm run lint` — **blocked**: repository has no `eslint.config.js`/`.mjs`/`.cjs` for the installed ESLint 9; this is a repository configuration gap, not a passing lint result.
+- `npm run build` — **blocked**: the checked-out repository tree has no root `index.html`, so Vite cannot resolve its entry module. No successful production build is claimed.
+- No function was deployed, no migration was applied, and no production runtime was queried.

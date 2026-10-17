@@ -29,6 +29,7 @@ import type {
 } from "../runtime.ts";
 import {
   getNativeEngine,
+  createConfiguredNativeEngine,
   configureNativeEnginePersistence,
   type ConverseResult,
 } from "../native-engine/engine.ts";
@@ -117,6 +118,16 @@ export function getCognitiveEngine(): CognitiveKernel {
     kernelSingleton = new CognitiveKernel(configuredDb);
   }
   return kernelSingleton;
+}
+
+/** A consent-sensitive chat request gets a fresh kernel and substrate.
+ * Persistence is fixed at construction and cannot be changed by another
+ * concurrent request in the same edge isolate. */
+export function createRequestCognitiveEngine(
+  db: SupabaseLike | null,
+  conversationId: string,
+): CognitiveKernel {
+  return new CognitiveKernel(db, { conversationId });
 }
 
 /** Honest capability manifest of the unified engine. */
@@ -242,7 +253,10 @@ export class CognitiveKernel implements ArchieRuntime {
   private unknownTopicHits = 0;
   private verificationFails = 0;
 
-  constructor(db?: SupabaseLike) {
+  constructor(
+    db?: SupabaseLike | null,
+    requestScope?: { conversationId: string },
+  ) {
     // WORLD FIRST (audit HIGH-1 fix, 2026-09-13): the kernel
     // owns the WorldModel and exposes it to the substrate
     // engine through the world-timeline port — the engine
@@ -250,10 +264,11 @@ export class CognitiveKernel implements ArchieRuntime {
     // change-over-time questions from real recorded
     // transitions. The engine never owns the model; the
     // kernel never loses the writes.
-    this.world = new WorldModel(db);
-    // Wire the port BEFORE the substrate singleton resolves.
-    configureNativeEngineWorldTimeline({
-      transitionsFor: (subject) =>
+    this.world = new WorldModel(db ?? undefined);
+    // The timeline belongs to this kernel instance. Request-scoped
+    // kernels must never configure a process-wide substrate singleton.
+    const worldTimeline = {
+      transitionsFor: (subject: string) =>
         this.world.transitions(subject).map((t) => ({
           subject: t.subject,
           relation: t.relation,
@@ -263,7 +278,12 @@ export class CognitiveKernel implements ArchieRuntime {
           toObservedAt: t.toObservedAt,
           confidence: t.confidence,
         })),
-      recordState: (subject, state, observedAt, provenance) => {
+      recordState: (
+        subject: string,
+        state: string,
+        observedAt: string,
+        provenance: string,
+      ) => {
         void this.world
           .relate({
             subject,
@@ -278,10 +298,19 @@ export class CognitiveKernel implements ArchieRuntime {
             // the in-memory model still holds the observation
           });
       },
-    });
-    this.substrate = getNativeEngine();
-    this.security = new SecurityIntegrityEngine(db);
-    this.tracePersistence = new CognitivePersistence(db);
+    };
+    if (requestScope) {
+      this.substrate = createConfiguredNativeEngine({
+        persistence: db ?? null,
+        conversationId: requestScope.conversationId,
+        worldTimeline,
+      });
+    } else {
+      configureNativeEngineWorldTimeline(worldTimeline);
+      this.substrate = getNativeEngine();
+    }
+    this.security = new SecurityIntegrityEngine(db ?? undefined);
+    this.tracePersistence = new CognitivePersistence(db ?? undefined);
   }
 
   async boot(): Promise<{
@@ -882,11 +911,16 @@ ${worldCtx.block}`
     }
     if (
       verification &&
-      verification.verdict === "FAIL" &&
+      verification.verdict !== "PASS" &&
       route.verificationLevel === "strict"
     ) {
       responseText += `\n[Verification: ${verification.verdict}] ${verification.checks
-        .filter((c) => !c.passed)
+        .filter((c) => c.applicable !== false && !c.passed)
+        .concat(
+          verification.verdict === "UNVERIFIED"
+            ? verification.checks.filter((c) => c.applicable === false)
+            : [],
+        )
         .map((c) => c.detail)
         .join("; ")}`;
       epistemic = "ASSUMED";

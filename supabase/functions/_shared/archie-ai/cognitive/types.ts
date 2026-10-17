@@ -204,6 +204,8 @@ export interface VerificationVerdict {
       | "assumptions"
       | "uncertainty";
     passed: boolean;
+    /** False means the check was not applicable or lacked a task contract. */
+    applicable?: boolean;
     detail: string;
   }>;
 }

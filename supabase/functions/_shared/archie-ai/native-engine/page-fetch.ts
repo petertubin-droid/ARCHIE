@@ -168,11 +168,18 @@ function ssrfRefusalReason(u: URL): string | null {
   const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (v4) {
     if (v4.slice(1).some((d) => Number(d) > 255)) {
-      return null; // malformed literal — the fetch itself will fail honestly
+      return `target ${host} is a malformed IPv4 literal`;
     }
     const o = v4.slice(1).map(Number);
     const [a, b] = [o[0], o[1]];
-    if (a === 127 || a === 10 || a === 0) {
+    if (
+      a === 127 ||
+      a === 10 ||
+      a === 0 ||
+      a >= 224 ||
+      (a === 192 && b === 0) ||
+      (a === 198 && (b === 18 || b === 19))
+    ) {
       return `target ${host} is a loopback/private address`;
     }
     if (a === 172 && b >= 16 && b <= 31) {
@@ -187,22 +194,12 @@ function ssrfRefusalReason(u: URL): string | null {
     if (a === 100 && b >= 64 && b <= 127) {
       return `target ${host} is a shared-address-space (CGNAT) address`;
     }
-    if (o[0] >= 224) {
-      return `target ${host} is a multicast/reserved address`;
-    }
     return null;
   }
-  // IPv6 literal — refuse loopback, link-local, unique-local
+  // IPv6 address literals are refused entirely until the edge runtime
+  // can pin and verify the resolved network destination.
   if (host.includes(":")) {
-    const h = host.replace(/^\[|\]$/g, "");
-    if (
-      h === "::1" ||
-      h === "::" ||
-      h.toLowerCase().startsWith("fe80") ||
-      /^f[cd]/i.test(h)
-    ) {
-      return `target ${host} is a loopback/link-local/unique-local address`;
-    }
+    return `target ${host} is an IPv6 literal and cannot be safely verified`;
   }
   return null;
 }
@@ -247,12 +244,10 @@ export class PageFetcher {
       note: "",
     };
     try {
-      const res = await this.fetchFn(`${origin}/robots.txt`, {
-        headers: { "user-agent": UA },
-        signal: this.abortSignal(this.timeoutMs),
-      });
+      const res = await this.fetchPublicUrl(`${origin}/robots.txt`);
       if (res.ok) {
-        const parsed = parseRobots(await res.text());
+        const robotsText = await this.readBoundedBody(res, 256_000);
+        const parsed = parseRobots(robotsText);
         rules.disallow = parsed.disallow;
         rules.allow = parsed.allow;
         rules.note = "robots.txt consulted";
@@ -275,6 +270,81 @@ export class PageFetcher {
     const ctrl = new AbortController();
     setTimeout(() => ctrl.abort(), ms);
     return ctrl.signal;
+  }
+
+  /** Validate each redirect URL before making the next request. DNS
+   * resolution/rebinding still requires a controlled egress layer. */
+  private async fetchPublicUrl(url: string): Promise<Response> {
+    let current = new URL(url);
+    for (let hop = 0; hop <= 5; hop += 1) {
+      if (current.protocol !== "http:" && current.protocol !== "https:") {
+        throw new Error("redirect used an unsupported protocol");
+      }
+      if (current.username || current.password) {
+        throw new Error("URL credentials are not allowed");
+      }
+      const blocked = ssrfRefusalReason(current);
+      if (blocked) throw new Error(`${blocked} — refused`);
+      const response = await this.fetchFn(current.href, {
+        headers: {
+          "user-agent": UA,
+          accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
+        },
+        signal: this.abortSignal(this.timeoutMs),
+        redirect: "manual",
+      });
+      if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+      const location = response.headers?.get?.("location");
+      if (!location) return response;
+      if (hop === 5) throw new Error("too many redirects — page not fetched");
+      try {
+        current = new URL(location, current);
+      } catch {
+        throw new Error("invalid redirect destination — page not fetched");
+      }
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* discard redirect body */
+      }
+    }
+    throw new Error("too many redirects — page not fetched");
+  }
+
+  private async readBoundedBody(
+    response: Response,
+    byteLimit = this.maxBytes,
+  ): Promise<string> {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      const text = await response.text();
+      if (new TextEncoder().encode(text).byteLength > byteLimit) {
+        throw new Error(`body exceeded ${byteLimit} byte limit`);
+      }
+      return text;
+    }
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let text = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > byteLimit) {
+          await reader.cancel("response size limit exceeded");
+          throw new Error(`body exceeded ${byteLimit} byte limit`);
+        }
+        text += decoder.decode(value, { stream: true });
+      }
+      return text + decoder.decode();
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* already released */
+      }
+    }
   }
 
   /** Fetch ONE source page honestly: robots-checked,
@@ -339,14 +409,7 @@ export class PageFetcher {
     // ── fetch with a hard timeout.
     let res: Response;
     try {
-      res = await this.fetchFn(url, {
-        headers: {
-          "user-agent": UA,
-          accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
-        },
-        signal: this.abortSignal(this.timeoutMs),
-        redirect: "follow",
-      });
+      res = await this.fetchPublicUrl(url);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const timedOut = /abort/i.test(msg);
@@ -395,23 +458,14 @@ export class PageFetcher {
     }
     let html: string;
     try {
-      html = await res.text();
+      html = await this.readBoundedBody(res);
     } catch (err) {
       return {
         url,
         ok: false,
         content: "",
         title: "",
-        note: `body read failed: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`,
-      };
-    }
-    if (html.length > this.maxBytes) {
-      return {
-        url,
-        ok: false,
-        content: "",
-        title: "",
-        note: `body exceeded ${this.maxBytes} bytes mid-read — aborted`,
+        note: `body read refused: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`,
       };
     }
     const content = extractReadableText(html).slice(0, this.maxContentChars);

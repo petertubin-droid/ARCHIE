@@ -89,11 +89,14 @@ describe("ARCHIE PWA — legal & AI-disclosure surfaces", () => {
 
   // Same gate: skipped only when the host router file is absent (standalone
   // engine repo); runs as the full contract inside the host repo.
-  ;(app ? it : it.skip)("routes /archie/legal, /archie/privacy and the admin legal console", () => {
-    expect(app).toMatch(/path="legal" element=\{<ArchieLegal \/>\}/);
-    expect(app).toMatch(/path="privacy" element=\{<ArchiePrivacy \/>\}/);
-    expect(app).toMatch(/path="archie-legal"[\s\S]{0,80}AdminArchieLegal/);
-  });
+  (app ? it : it.skip)(
+    "routes /archie/legal, /archie/privacy and the admin legal console",
+    () => {
+      expect(app).toMatch(/path="legal" element=\{<ArchieLegal \/>\}/);
+      expect(app).toMatch(/path="privacy" element=\{<ArchiePrivacy \/>\}/);
+      expect(app).toMatch(/path="archie-legal"[\s\S]{0,80}AdminArchieLegal/);
+    },
+  );
 
   it("has an honest offline indicator (no fake offline chat)", () => {
     expect(layout).toContain("OFFLINE — cached screens only");
@@ -111,7 +114,10 @@ describe("ARCHIE PWA — voice & personalization consent wiring", () => {
 
   it("archie-chat honors the personalization_memory consent as a REAL gate", () => {
     expect(chat).toContain("personalization_memory");
-    expect(chat).toMatch(/revoked \? null : db/);
+    expect(chat).toContain("createRequestCognitiveEngine");
+    expect(chat).toContain("consent?.granted === true");
+    expect(chat).toContain("memoryConsentGranted");
+    expect(chat).not.toContain("revoked ? null : db");
   });
 
   it("archie-ears refuses voice processing when voice_audio consent is revoked", () => {

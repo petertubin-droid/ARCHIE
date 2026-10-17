@@ -35,6 +35,7 @@ import {
   type ArchieToolSpec,
 } from "../_shared/archie-ai/runtime.ts";
 import { checkRateLimit } from "../_shared/rate-limit.ts";
+import { validateToolCall } from "../_shared/archie-ai/native-engine/runtime-schema.ts";
 import { createSupabaseCredentialStore } from "../_shared/archie-ai/security/api-credential-store.ts";
 import {
   authenticateCredential,
@@ -382,17 +383,18 @@ configureNativeEngineSystemAdapters({
 // service client: world model, audit log + traces persist.
 import {
   configureCognitiveEnginePersistence,
+  createRequestCognitiveEngine,
   getCognitiveEngine,
 } from "../_shared/archie-ai/cognitive/kernel.ts";
 import { ArchieNativeEngine } from "../_shared/archie-ai/native-engine/engine.ts";
 import {
   captureUnknownVocabulary,
-  loadLearnedTerms,
   lookupTerms,
-  registerLearnedTerms,
   teachTerm,
 } from "../_shared/archie-ai/knowledge/vocabulary.ts";
 import { serveWithCors } from "../_shared/serve.ts";
+// The default kernel is for non-consent-sensitive utility paths only.
+// Owner chat constructs a fresh request-scoped kernel after consent lookup.
 configureCognitiveEnginePersistence(
   db as unknown as import("../_shared/archie-ai/native-engine/persistence.ts").SupabaseLike,
 );
@@ -452,7 +454,7 @@ interface ToolDef extends ArchieToolSpec {
   operational: boolean;
   execute?: (
     input: Record<string, unknown>,
-    ctx: { userId: string },
+    ctx: { userId: string; memoryConsentGranted: boolean },
   ) => Promise<unknown>;
 }
 
@@ -558,7 +560,12 @@ const TOOLS: ToolDef[] = [
       required: ["term"],
     },
     operational: true,
-    execute: async (input) => {
+    execute: async (input, ctx) => {
+      if (!ctx.memoryConsentGranted) {
+        return {
+          error: "Personalization memory is not enabled for this account.",
+        };
+      }
       const term = String(input.term ?? "").slice(0, 60);
       const rows = await lookupTerms(db, term);
       if (rows.length === 0) {
@@ -595,13 +602,18 @@ const TOOLS: ToolDef[] = [
       required: ["term", "meaning"],
     },
     operational: true,
-    execute: async (input) => {
+    execute: async (input, ctx) => {
       const term = String(input.term ?? "").slice(0, 60);
       const meaning = String(input.meaning ?? "").slice(0, 500);
+      if (!ctx.memoryConsentGranted) {
+        return {
+          error: "Personalization memory is not enabled for this account.",
+        };
+      }
       if (!term || !meaning) return { error: "term and meaning are required" };
       const ok = await teachTerm(
         db,
-        activeOwnerUserId,
+        ctx.userId || null,
         term,
         meaning,
         String(input.word_class ?? "unknown").slice(0, 40),
@@ -675,10 +687,10 @@ const TOOLS: ToolDef[] = [
       required: ["targetKey"],
     },
     operational: true,
-    execute: async (input) => {
+    execute: async (input, ctx) => {
       const targetKey = String(input.targetKey ?? "").trim();
       const payload = input.input ?? {};
-      return await chatExecute(targetKey, payload);
+      return await chatExecute(targetKey, payload, ctx.userId);
     },
   },
   {
@@ -738,7 +750,7 @@ const TOOLS: ToolDef[] = [
       // robots.txt (standard crawler behavior; unreachable => proceed)
       let blockedBy: string | null = null;
       try {
-        const robotsRes = await fetchWithTimeout(
+        const robotsRes = await fetchPublicWebUrl(
           `${u.origin}/robots.txt`,
           8000,
         );
@@ -757,7 +769,7 @@ const TOOLS: ToolDef[] = [
         };
       }
 
-      const res = await fetchWithTimeout(u.href, 15000);
+      const res = await fetchPublicWebUrl(u.href, 15000);
       const contentType = res.headers.get("content-type") ?? "";
       if (!res.ok) {
         return {
@@ -781,11 +793,20 @@ const TOOLS: ToolDef[] = [
           html += decoder.decode(value, { stream: true });
           if (html.length > 500_000) {
             await reader.cancel();
-            break;
+            return {
+              error:
+                "The page exceeded the 500,000-character inspection limit; no partial result was saved.",
+            };
           }
         }
       } else {
-        html = (await res.text()).slice(0, 500_000);
+        html = await res.text();
+        if (html.length > 500_000) {
+          return {
+            error:
+              "The page exceeded the 500,000-character inspection limit; no partial result was saved.",
+          };
+        }
       }
 
       const report = extractSiteReport(html);
@@ -1241,12 +1262,7 @@ const chatEngineDeps: EngineDeps = {
   log: (m) => console.log(`[archie-chat/exec] ${m}`),
 };
 
-// Active owner user id for this request (audit identity);
-// set in the handler after authentication, cleared otherwise.
-let activeOwnerUserId: string | null = null;
-
-async function chatExecute(targetKey: string, input: unknown) {
-  const ownerId = activeOwnerUserId;
+async function chatExecute(targetKey: string, input: unknown, ownerId: string) {
   if (!ownerId) {
     return {
       ok: false,
@@ -1325,7 +1341,9 @@ function isBlockedHost(hostname: string): boolean {
     h.endsWith(".localhost") ||
     h.endsWith(".local") ||
     h.endsWith(".internal") ||
-    h.endsWith(".lan")
+    h.endsWith(".lan") ||
+    h === "home.arpa" ||
+    h.endsWith(".home.arpa")
   ) {
     return true;
   }
@@ -1333,10 +1351,10 @@ function isBlockedHost(hostname: string): boolean {
   if (m) {
     const a = Number(m[1]),
       b = Number(m[2]);
-    if (a === 0 || a === 10 || a === 127 || a >= 240) return true;
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return true;
     if (a === 169 && b === 254) return true;
     if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
+    if (a === 192 && (b === 168 || b === 0)) return true;
     if (a === 100 && b >= 64 && b <= 127) return true;
     if (a === 198 && (b === 18 || b === 19)) return true;
   }
@@ -1394,22 +1412,81 @@ async function fetchWithTimeout(
   ms: number,
   headers: Record<string, string> = {},
   method = "GET",
+  redirect: RequestRedirect = "follow",
 ): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
+  const response = await fetch(url, {
+    method,
+    headers: {
+      "user-agent": "ARCHIE-Inspector/1.0 (owner-authorized site inspection)",
+      ...headers,
+    },
+    redirect,
+    signal: ctrl.signal,
+  });
+  // Keep the timeout active after headers arrive so a stalled body stream
+  // is aborted too; the timer expires automatically within the request bound.
+  return response;
+}
+
+/** Follow only a small chain of explicitly validated public URLs.
+ * This blocks redirect-based private-host bypasses; it does not provide
+ * DNS pinning, so hostname resolution/rebinding still requires egress controls. */
+async function fetchPublicWebUrl(
+  input: string,
+  timeoutMs: number,
+): Promise<Response> {
+  let current: URL;
   try {
-    return await fetch(url, {
-      method,
-      headers: {
-        "user-agent": "ARCHIE-Inspector/1.0 (owner-authorized site inspection)",
-        ...headers,
-      },
-      redirect: "follow",
-      signal: ctrl.signal,
-    });
-  } finally {
-    clearTimeout(t);
+    current = new URL(input);
+  } catch {
+    throw new Error("Invalid web URL");
   }
+  for (let hop = 0; hop <= 5; hop += 1) {
+    if (
+      (current.protocol !== "http:" && current.protocol !== "https:") ||
+      current.username ||
+      current.password ||
+      isBlockedHost(current.hostname)
+    ) {
+      throw new Error("Blocked non-public URL or redirect destination");
+    }
+    const response = await fetchWithTimeout(
+      current.href,
+      timeoutMs,
+      {},
+      "GET",
+      "manual",
+    );
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get("location");
+    if (!location) return response;
+    if (hop === 5) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* discard redirect body */
+      }
+      throw new Error("Too many web redirects");
+    }
+    try {
+      current = new URL(location, current);
+    } catch {
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* discard redirect body */
+      }
+      throw new Error("Invalid web redirect destination");
+    }
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* discard redirect body */
+    }
+  }
+  throw new Error("Too many web redirects");
 }
 
 function decodeEntities(s: string): string {
@@ -1936,7 +2013,7 @@ async function executeChat(
       isOwner = profile?.role === "admin";
     }
   }
-  activeOwnerUserId = isOwner && user ? user.id : null;
+  const ownerUserId = isOwner && user ? user.id : null;
 
   // 2. Parse + validate request
   let body: ChatRequest;
@@ -2101,7 +2178,11 @@ async function executeChat(
   //     guidance through the same ARCHIE inference boundary.
   if (!isOwner) {
     const clientId = sanitize(String(body.clientId ?? "anon")).slice(0, 80);
-    const rl = checkRateLimit(`archie-chat:visitor:${clientId}`, {
+    // Authenticated non-owner accounts cannot evade the isolate-local quota
+    // by rotating conversation IDs. Anonymous global/distributed limiting
+    // still requires a trusted edge identity and shared store.
+    const visitorRateKey = user?.id ? `user:${user.id}` : `anon:${clientId}`;
+    const rl = checkRateLimit(`archie-chat:visitor:${visitorRateKey}`, {
       maxRequests: 12,
       windowMs: 60_000,
     });
@@ -2317,22 +2398,34 @@ async function executeChat(
   // already-learned words are never re-captured or mangled by
   // the typo corrector), and capture still completes before
   // the cycle so this message's new words are protected too.
-  const learnedTermsPromise = loadLearnedTerms(db).catch(() => [] as string[]);
-  try {
-    const { data: consent } = await db
-      .from("archie_privacy_consents")
-      .select("granted, revoked_at")
-      .eq("user_id", activeOwnerUserId ?? user?.id ?? "")
-      .eq("consent_key", "personalization_memory")
-      .maybeSingle();
-    const revoked = consent
-      ? consent.granted === false || consent.revoked_at !== null
-      : false;
-    configureCognitiveEnginePersistence(revoked ? null : db);
-  } catch {
-    // Consent table unavailable → default: memory stays wired.
-    configureCognitiveEnginePersistence(db);
+  let memoryConsentGranted = false;
+  if (ownerUserId) {
+    try {
+      const { data: consent, error: consentError } = await db
+        .from("archie_privacy_consents")
+        .select("granted, revoked_at")
+        .eq("user_id", ownerUserId)
+        .eq("consent_key", "personalization_memory")
+        .maybeSingle();
+      // Personalization is opt-in. Missing rows, query errors, revoked
+      // rows and malformed grant records all remain in-memory only.
+      memoryConsentGranted = Boolean(
+        !consentError &&
+        consent?.granted === true &&
+        consent.revoked_at === null,
+      );
+    } catch {
+      memoryConsentGranted = false;
+    }
   }
+  const requestKernel = ownerUserId
+    ? createRequestCognitiveEngine(
+        memoryConsentGranted
+          ? (db as unknown as import("../_shared/archie-ai/native-engine/persistence.ts").SupabaseLike)
+          : null,
+        conversationId,
+      )
+    : null;
 
   // The owner path runs the UNIFIED COGNITIVE LOOP — the same
   // kernel the tests verify: perception (secret redaction on
@@ -2347,8 +2440,9 @@ async function executeChat(
   // yet (usage provenance, no meaning guess — learning is
   // free, never breaks the conversation).
   try {
-    registerLearnedTerms(await learnedTermsPromise);
-    await captureUnknownVocabulary(db, message, activeOwnerUserId);
+    if (ownerUserId && memoryConsentGranted) {
+      await captureUnknownVocabulary(db, message, ownerUserId);
+    }
   } catch {
     /* vocabulary learning never breaks the chat */
   }
@@ -2371,11 +2465,12 @@ async function executeChat(
       // dead registration on this path (live incident:
       // 'run sentry duty' misrouted to farewell while the
       // sentry_diagnostics tool sat unreachable).
-      getCognitiveEngine().declareTools(
+      const kernel = requestKernel ?? getCognitiveEngine();
+      kernel.declareTools(
         activeToolSpecs().map((t) => t.name),
         conversationId,
       );
-      const cycle = await getCognitiveEngine().cycle(
+      const cycle = await kernel.cycle(
         message + attachmentsNote,
         request.turns.slice(0, -1),
         undefined,
@@ -2439,6 +2534,31 @@ async function executeChat(
       if (!call) break;
 
       const tool = TOOLS.find((t) => t.name === call.name);
+      if (tool?.operational && tool.execute) {
+        const validation = validateToolCall(
+          tool.parameters as Record<string, unknown>,
+          call.args,
+        );
+        if (!validation.valid) {
+          const output = {
+            error: validation.error ?? "Invalid tool arguments",
+          };
+          toolRuns.push({
+            tool: tool.name,
+            ok: false,
+            input: call.args,
+            output,
+            at: new Date().toISOString(),
+          });
+          request.turns.push({ role: "archie", parts: result.parts });
+          request.turns.push({
+            role: "owner",
+            parts: [{ toolResult: { name: tool.name, output } }],
+          });
+          result = await runtime.generate(request);
+          continue;
+        }
+      }
       if (!tool || !tool.operational || !tool.execute) {
         request.turns.push({ role: "archie", parts: result.parts });
         request.turns.push({
@@ -2456,12 +2576,37 @@ async function executeChat(
         continue;
       }
 
-      const output = await tool.execute(call.args ?? {}, {
-        userId: user?.id ?? "",
-      });
+      let output: unknown;
+      let toolOk = false;
+      try {
+        output = await tool.execute(call.args ?? {}, {
+          userId: ownerUserId ?? "",
+          memoryConsentGranted,
+        });
+        const result =
+          output && typeof output === "object"
+            ? (output as Record<string, unknown>)
+            : null;
+        const resultStatus = String(result?.status ?? "").toLowerCase();
+        const explicitFailure =
+          result?.ok === false ||
+          result?.success === false ||
+          result?.stored === false ||
+          result?.persisted_to_learning === false ||
+          (typeof result?.error === "string" && result.error.length > 0) ||
+          ["failed", "error", "denied", "blocked", "rejected"].includes(
+            resultStatus,
+          );
+        toolOk = !explicitFailure;
+      } catch (error) {
+        output = {
+          error:
+            error instanceof Error ? error.message : "Tool execution failed",
+        };
+      }
       toolRuns.push({
         tool: tool.name,
-        ok: true,
+        ok: toolOk,
         input: call.args ?? {},
         output,
         at: new Date().toISOString(),
@@ -2473,6 +2618,26 @@ async function executeChat(
         parts: [{ toolResult: { name: tool.name, output } }],
       });
       result = await runtime.generate(request);
+    }
+
+    // Never silently present an unfinished tool chain as complete.
+    const pendingToolCall = result.parts.find(
+      (part) => part.toolCall,
+    )?.toolCall;
+    if (pendingToolCall) {
+      toolRuns.push({
+        tool: pendingToolCall.name,
+        ok: false,
+        input: pendingToolCall.args,
+        output: {
+          status: "pending",
+          reason: "tool-hop limit reached; this call was not executed",
+        },
+        at: new Date().toISOString(),
+      });
+      result.parts.push({
+        text: "\n\nI stopped before the next tool action because the chat tool limit was reached. That action is still pending and was not run.",
+      });
     }
 
     // OWNER DIRECTIVE (2026-09-16): no em dashes in ARCHIE's
@@ -2567,7 +2732,7 @@ serveWithCors(async (req) => {
           at: new Date().toISOString(),
         });
         const outcome = await executeChat(req, (event, data) =>
-          send("progress", { event, ...data })
+          send("progress", { event, ...data }),
         );
         const reply = (outcome.body as { reply?: string }).reply;
         if (typeof reply === "string" && reply.length > 0) {
