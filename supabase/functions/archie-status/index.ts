@@ -12,6 +12,7 @@ import { verifyAuthorityJwt } from "../_shared/archie-ai/security/cross-project-
 import { createKnowledgeRepository } from "../_shared/knowledge/repository.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { serveWithCors } from "../_shared/serve.ts";
+import { readReasoningStatus } from "../_shared/reasoning/persistence.ts";
 import {
   checkRateLimit,
   getRateLimitKey,
@@ -236,6 +237,47 @@ serveWithCors(async (req: Request) => {
       };
     }
 
+    // Fifth intelligence layer — Advanced Reasoning &
+    // Problem-Solving Engine health: REAL counts from the
+    // reasoning tables (problems, runs, solutions, patterns).
+    // OPERATIONAL once real problems are recorded; READY when
+    // wired but not yet exercised; UNAVAILABLE honestly when
+    // the tables are absent (pre-migration deploy). Never a
+    // fabricated "OK".
+    let reasoningEngine: Record<string, unknown>;
+    try {
+      const reason = await readReasoningStatus(
+        service as unknown as import("../_shared/reasoning/types.ts").ReasoningClient,
+      );
+      const total = reason.metrics.problemsProcessed;
+      reasoningEngine = {
+        state:
+          reason.health.status === "OPERATIONAL" && total > 0
+            ? "OPERATIONAL"
+            : total === 0 && reason.degraded.length === 0
+              ? "READY"
+              : reason.health.status,
+        problems: total,
+        solved: reason.metrics.solutionsValidated,
+        unresolved: reason.metrics.unresolvedProblems,
+        validation_failures: reason.metrics.validationFailures,
+        contradiction_detections: reason.metrics.contradictionDetections,
+        average_depth: reason.averageDepth,
+        success_rate: reason.successRate,
+        patterns: reason.patterns,
+        issues: reason.health.issues,
+        degraded: reason.degraded,
+      };
+    } catch (reasonErr) {
+      reasoningEngine = {
+        state: "UNAVAILABLE",
+        note:
+          reasonErr instanceof Error
+            ? reasonErr.message
+            : "reasoning status query failed",
+      };
+    }
+
     // Ears runs NATIVE (on-device speech recognition, no
     // provider, no key — OpenAI Separation Rule). It is
     // OPERATIONAL only once a REAL transcription exists in
@@ -294,6 +336,7 @@ serveWithCors(async (req: Request) => {
           price_observations: priceObservations,
         },
         semantic_graph: semanticGraph,
+        reasoning_engine: reasoningEngine,
         knowledge_repository: await knowledgeRepositoryPromise,
       },
     });

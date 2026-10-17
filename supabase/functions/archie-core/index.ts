@@ -165,6 +165,11 @@ import type { GraphClient } from "../_shared/semantic-graph/retrieval.ts";
 // assembles bounded context, builds evidence premises, runs
 // controlled inference with FACT vs INFERENCE labels intact,
 // flags contradictions, and preserves uncertainty honestly.
+// FIFTH INTELLIGENCE LAYER — Advanced Reasoning & Problem-
+// Solving Engine (wired live 2026-10-17). Consumes the four
+// lower layers' ground truth; deterministic gate; bounded
+// budgets; failure never blocks the chat path.
+import { runReasoningLayer } from "./reasoning-layer.ts";
 import { inferenceGroundTruth } from "../_shared/inference/engine.ts";
 import type { InferenceGroundTruth } from "../_shared/inference/types.ts";
 import { EMPTY_INFERENCE_GROUND_TRUTH } from "../_shared/inference/types.ts";
@@ -1078,6 +1083,29 @@ async function executeCore(
       }
     }
 
+    // ARCHIE Advanced Reasoning & Problem-Solving Engine
+    // (fifth intelligence layer, spec §§3-36): consumes the
+    // REAL ground truth the four lower layers produced this
+    // turn, decomposes actual problems, runs deterministic
+    // math / unit conversion / chained inference, validates
+    // candidates, and appends a bounded reasoning block.
+    // Greetings/social turns are excluded by the deterministic
+    // gate; failure NEVER blocks the chat path (honest
+    // degradation, same contract as the four lower layers).
+    // Problems + runs persist to archie_reasoning_* (migration
+    // 20260920140000 — replay-safe on a fresh database).
+    emit?.("progress", { type: "stage", stage: "reasoning-layer" });
+    const reasoningGT = await runReasoningLayer({
+      client: service as unknown as import("../_shared/reasoning/types.ts").ReasoningClient,
+      ownerId: userId,
+      conversationId: body.conversation_id ?? null,
+      message: message ?? "",
+      intent,
+      inferenceGT,
+      evidenceGT,
+      conceptKeys: graphGT.conceptsIdentified.map((c) => c.conceptKey),
+    });
+
     const languageDirective =
       language.res.language_code === "en"
         ? ""
@@ -1107,7 +1135,8 @@ async function executeCore(
       (lexical.block ? `\n\n${lexical.block}` : "") +
       (graphGT.block ? `\n\n${graphGT.block}` : "") +
       (inferenceGT.block ? `\n\n${inferenceGT.block}` : "") +
-      (evidenceGT.block ? `\n\n${evidenceGT.block}` : "");
+      (evidenceGT.block ? `\n\n${evidenceGT.block}` : "") +
+      (reasoningGT.block ? `\n\n${reasoningGT.block}` : "");
 
     emit?.("progress", { type: "stage", stage: "reasoning" });
     const inference = await infer({
