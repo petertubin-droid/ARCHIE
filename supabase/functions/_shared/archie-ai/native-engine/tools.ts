@@ -8,7 +8,12 @@
 // Tools never fake success — failures carry reasons.
 // =========================================================
 
-import type { ToolInvocation, ToolSpecInternal } from "./types.ts";
+import type {
+  NativeToolParameter,
+  NativeToolParameterSpec,
+  ToolInvocation,
+  ToolSpecInternal,
+} from "./types.ts";
 import { runJavaScript } from "./sandbox.ts";
 import type { PageFetcher } from "./page-fetch.ts";
 
@@ -18,11 +23,26 @@ export function computeStatistics(
   values: number[],
   op: string,
 ): Record<string, number | number[] | string> {
+  if (values.length < 2) {
+    throw new Error(`need at least 2 numbers — found ${values.length}`);
+  }
+  if (!values.every(Number.isFinite)) {
+    throw new Error("statistics values must all be finite numbers");
+  }
   const sorted = [...values].sort((a, b) => a - b);
   const n = sorted.length;
   const sum = sorted.reduce((a, b) => a + b, 0);
   const mean = sum / n;
   const variance = sorted.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
+  if (
+    !Number.isFinite(sum) ||
+    !Number.isFinite(mean) ||
+    !Number.isFinite(variance)
+  ) {
+    throw new Error(
+      "statistics overflowed finite numeric precision; use a smaller range",
+    );
+  }
   const median =
     n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
   const modes = new Map<number, number>();
@@ -49,10 +69,9 @@ export function computeStatistics(
     norm === "std dev"
   )
     return { result: Math.sqrt(variance) };
-  return {
-    result: mean,
-    note: "no specific statistic named — returned the mean; ask for mean, median, mode, sum, min, max, range, variance or standard deviation",
-  };
+  throw new Error(
+    `unsupported statistic "${op}" — choose mean, median, mode, sum, min, max, range, count, variance or standard deviation`,
+  );
 }
 
 export type ToolHandler = (
@@ -90,9 +109,15 @@ function validateToolValue(value: unknown, depth = 0): boolean {
   return false;
 }
 
+function normalizeParameterSpec(
+  parameter: NativeToolParameter,
+): NativeToolParameterSpec {
+  return typeof parameter === "string" ? { type: parameter } : parameter;
+}
+
 function validateToolArgs(
   args: Record<string, unknown>,
-  parameters: Record<string, string>,
+  parameters: Record<string, NativeToolParameter>,
 ): string | null {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     return "tool arguments must be a JSON object";
@@ -108,20 +133,67 @@ function validateToolArgs(
     return "tool arguments must be serializable JSON";
   }
   for (const key of Object.keys(args)) {
-    if (!(key in parameters)) return `unexpected parameter "${key}"`;
+    if (!Object.prototype.hasOwnProperty.call(parameters, key)) {
+      return `unexpected parameter "${key}"`;
+    }
   }
-  for (const [key, kind] of Object.entries(parameters)) {
-    if (!(key in args)) return `missing required parameter "${key}" (${kind})`;
+  for (const [key, parameter] of Object.entries(parameters)) {
+    const spec = normalizeParameterSpec(parameter);
+    if (!Object.prototype.hasOwnProperty.call(args, key)) {
+      if (!spec.optional) {
+        return `missing required parameter "${key}" (${spec.type})`;
+      }
+      continue;
+    }
     const value = args[key];
-    if (kind === "number") {
+    if (spec.type === "number") {
       if (typeof value !== "number" || !Number.isFinite(value)) {
         return `parameter "${key}" must be a finite number`;
       }
-    } else if (kind === "string") {
-      if (typeof value !== "string")
+      if (spec.minimum !== undefined && value < spec.minimum) {
+        return `parameter "${key}" must be at least ${spec.minimum}`;
+      }
+      if (spec.maximum !== undefined && value > spec.maximum) {
+        return `parameter "${key}" must be at most ${spec.maximum}`;
+      }
+    } else if (spec.type === "string") {
+      if (typeof value !== "string") {
         return `parameter "${key}" must be a string`;
-      if (value.length > MAX_TOOL_STRING_LENGTH) {
-        return `parameter "${key}" exceeds ${MAX_TOOL_STRING_LENGTH} characters`;
+      }
+      const maxLength = spec.maxLength ?? MAX_TOOL_STRING_LENGTH;
+      if (value.length > maxLength) {
+        return `parameter "${key}" exceeds ${maxLength} characters`;
+      }
+      if (spec.minLength !== undefined && value.length < spec.minLength) {
+        return `parameter "${key}" must be at least ${spec.minLength} characters`;
+      }
+      if (spec.enum && !spec.enum.includes(value)) {
+        return `parameter "${key}" must be one of: ${spec.enum.join(", ")}`;
+      }
+      if (spec.pattern && !new RegExp(spec.pattern).test(value)) {
+        return `parameter "${key}" does not match the required format`;
+      }
+    } else if (spec.type === "array") {
+      if (!Array.isArray(value)) {
+        return `parameter "${key}" must be an array`;
+      }
+      if (spec.minItems !== undefined && value.length < spec.minItems) {
+        return `parameter "${key}" must contain at least ${spec.minItems} item(s)`;
+      }
+      const maxItems = spec.maxItems ?? 1_000;
+      if (value.length > maxItems) {
+        return `parameter "${key}" must contain at most ${maxItems} item(s)`;
+      }
+      if (!spec.items) {
+        return `parameter "${key}" has no declared item type`;
+      }
+      const invalidItem = value.findIndex((item) =>
+        spec.items === "number"
+          ? typeof item !== "number" || !Number.isFinite(item)
+          : typeof item !== "string" || item.length > MAX_TOOL_STRING_LENGTH,
+      );
+      if (invalidItem !== -1) {
+        return `parameter "${key}" item ${invalidItem} must be a finite ${spec.items}`;
       }
     } else if (!validateToolValue(value)) {
       return `parameter "${key}" is not safe JSON input`;
@@ -427,7 +499,9 @@ export function registerBuiltInTools(
     {
       name: "arithmetic",
       description: "Deterministically evaluate an arithmetic expression",
-      parameters: { expression: "string" },
+      parameters: {
+        expression: { type: "string", minLength: 1, maxLength: 10_000 },
+      },
       trust: "deterministic",
     },
     (args) => evaluateExpression(String(args.expression)),
@@ -437,7 +511,11 @@ export function registerBuiltInTools(
       name: "convert_units",
       description:
         "Deterministically convert a value between units of the same dimension",
-      parameters: { value: "number", from: "string", to: "string" },
+      parameters: {
+        value: "number",
+        from: { type: "string", minLength: 1, maxLength: 100 },
+        to: { type: "string", minLength: 1, maxLength: 100 },
+      },
       trust: "deterministic",
     },
     (args) =>
@@ -450,26 +528,48 @@ export function registerBuiltInTools(
       name: "statistics",
       description:
         "Deterministically compute descriptive statistics (mean, median, mode, sum, min, max, range, variance, standard deviation) for a list of numbers",
-      parameters: { values: "string", op: "string" },
+      parameters: {
+        values: {
+          type: "array",
+          items: "number",
+          minItems: 2,
+          maxItems: 1_000,
+        },
+        op: {
+          type: "string",
+          enum: [
+            "mean",
+            "average",
+            "median",
+            "mode",
+            "sum",
+            "total",
+            "min",
+            "minimum",
+            "max",
+            "maximum",
+            "range",
+            "count",
+            "length",
+            "variance",
+            "standard deviation",
+            "stddev",
+            "stdev",
+            "std dev",
+          ],
+        },
+      },
       trust: "deterministic",
     },
-    (args) => {
-      const raw = String(args.values);
-      const values = (raw.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
-      if (values.length < 2) {
-        throw new Error(
-          `need at least 2 numbers — found ${values.length}; give a list like "12, 7, 3, 41"`,
-        );
-      }
-      return computeStatistics(values, String(args.op ?? "mean"));
-    },
+    (args) =>
+      computeStatistics(args.values as number[], String(args.op ?? "mean")),
   );
   orchestrator.register(
     {
       name: "run_javascript",
       description:
         "Run owner-supplied JavaScript in the deterministic in-engine sandbox (whitelisted subset, no I/O, no network, step-capped) and return the printed output and final value",
-      parameters: { code: "string" },
+      parameters: { code: { type: "string", minLength: 1, maxLength: 10_000 } },
       trust: "deterministic",
     },
     (args) => {
@@ -483,7 +583,14 @@ export function registerBuiltInTools(
       name: "read_page",
       description:
         "Fetch ONE web page honestly: robots-checked, timeout-guarded, size-capped, text extracted — a failure is returned as a failure",
-      parameters: { url: "string" },
+      parameters: {
+        url: {
+          type: "string",
+          minLength: 9,
+          maxLength: 2_048,
+          pattern: "^https?://",
+        },
+      },
       trust: "deterministic",
     },
     async (args) => {
@@ -508,7 +615,10 @@ export function registerBuiltInTools(
     {
       name: "percent_of",
       description: "Compute a percentage of a number",
-      parameters: { percent: "number", value: "number" },
+      parameters: {
+        percent: { type: "number", minimum: -1_000_000, maximum: 1_000_000 },
+        value: "number",
+      },
       trust: "deterministic",
     },
     (args) => {

@@ -1827,7 +1827,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
           .toLowerCase()
           .replace(/std\.?\s*dev/, "standard deviation");
         const invocation = await this.invokeCalculation("statistics", {
-          values: statsNumbers.join(", "),
+          values: statsNumbers,
           op,
         });
         let text: string;

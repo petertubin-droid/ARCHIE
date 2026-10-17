@@ -395,6 +395,66 @@ describe("Tool orchestration", () => {
     expect(unknown.ok).toBe(false);
     expect(unknown.error).toContain("not registered");
   });
+
+  it("enforces declared enums, numeric ranges, array item types, and optional fields", async () => {
+    const tools = new ToolOrchestrator();
+    let calls = 0;
+    tools.register(
+      {
+        name: "typed_contract",
+        description: "Test-only typed contract",
+        parameters: {
+          mode: { type: "string", enum: ["safe", "strict"] },
+          values: { type: "array", items: "number", minItems: 1, maxItems: 2 },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+            optional: true,
+          },
+        },
+      },
+      () => {
+        calls += 1;
+        return "accepted";
+      },
+    );
+
+    expect(
+      (await tools.invoke("typed_contract", { mode: "unsafe", values: [1] }))
+        .error,
+    ).toContain("must be one of");
+    expect(
+      (await tools.invoke("typed_contract", { mode: "safe", values: [1, "2"] }))
+        .error,
+    ).toContain("item 1");
+    expect(
+      (
+        await tools.invoke("typed_contract", {
+          mode: "safe",
+          values: [1],
+          confidence: 1.1,
+        })
+      ).error,
+    ).toContain("at most 1");
+    expect(
+      (
+        await tools.invoke("typed_contract", {
+          mode: "safe",
+          values: [1],
+          surprise: true,
+        })
+      ).error,
+    ).toContain("unexpected parameter");
+    expect(
+      await tools.invoke("typed_contract", {
+        mode: "strict",
+        values: [1],
+        confidence: 0.5,
+      }),
+    ).toMatchObject({ ok: true, output: "accepted" });
+    expect(calls).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------

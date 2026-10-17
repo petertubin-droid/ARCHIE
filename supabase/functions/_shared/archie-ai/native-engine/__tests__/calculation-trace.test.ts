@@ -28,7 +28,7 @@ describe("§calculation provenance trace — statistics", () => {
     expect(stats).toBeDefined();
     expect(stats!.valid).toBe(true);
     expect(stats!.steps[0].op).toBe("mean");
-    expect(stats!.steps[0].values).toBe("1, 2, 3");
+    expect(stats!.steps[0].values).toEqual([1, 2, 3]);
     expect(stats!.verdict).toHaveProperty("result", 2);
   });
 });

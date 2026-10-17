@@ -203,10 +203,28 @@ export interface PlanAlternative {
   tradeoff: string;
 }
 
+export interface NativeToolParameterSpec {
+  type: "string" | "number" | "array";
+  /** Array item primitive; required when type is array. */
+  items?: "string" | "number";
+  minItems?: number;
+  maxItems?: number;
+  /** All parameters are required unless explicitly marked optional. */
+  optional?: boolean;
+  enum?: readonly string[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+}
+
+export type NativeToolParameter = "string" | "number" | NativeToolParameterSpec;
+
 export interface ToolSpecInternal {
   name: string;
   description: string;
-  parameters: Record<string, string>;
+  parameters: Record<string, NativeToolParameter>;
   /**
    * Trust classification (ts-2): "deterministic" — output is
    * recomputable exactly (arithmetic, unit conversion);

@@ -142,6 +142,9 @@ describe("statistics tool", () => {
     expect((computeStatistics(vals, "variance") as { result: number }).result).toBe(4);
     expect((computeStatistics(vals, "standard deviation") as { result: number }).result).toBe(2);
     expect((computeStatistics(vals, "range") as { result: number }).result).toBe(7);
+    expect(() => computeStatistics(vals, "surprise")).toThrow(/unsupported statistic/i);
+    expect(() => computeStatistics([1], "mean")).toThrow(/at least 2/);
+    expect(() => computeStatistics([1, Number.NaN], "mean")).toThrow(/finite numbers/);
   });
 
   it("is registered with contract validation", () => {
@@ -153,6 +156,16 @@ describe("statistics tool", () => {
     expect(orch.has("arithmetic")).toBe(true);
     expect(orch.has("convert_units")).toBe(true);
     expect(orch.has("percent_of")).toBe(true);
+  });
+
+  it("rejects malformed statistics tool inputs before calculation", async () => {
+    const orch = new ToolOrchestrator();
+    registerBuiltInTools(orch);
+    expect((await orch.invoke("statistics", { values: "1,2", op: "mean" })).error).toContain("must be an array");
+    expect((await orch.invoke("statistics", { values: [1, "2"], op: "mean" })).error).toContain("item 1");
+    expect((await orch.invoke("statistics", { values: [1, 2], op: "mystery" })).error).toContain("must be one of");
+    const good = await orch.invoke("statistics", { values: [2, 4, 6], op: "mean" });
+    expect(good).toMatchObject({ ok: true, output: { result: 4 } });
   });
 
   it("runs a program through the orchestrator and reports honestly on errors", async () => {
