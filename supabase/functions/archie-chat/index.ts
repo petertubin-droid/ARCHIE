@@ -37,6 +37,10 @@ import {
 import { checkRateLimit } from "../_shared/rate-limit.ts";
 import { isToolHopWithinBudget } from "../_shared/archie-ai/native-engine/tool-budget.ts";
 import {
+  detectLanguage,
+  multilingualReply,
+} from "../_shared/archie-ai/native-engine/multilingual.ts";
+import {
   SupabaseGoalStore,
   decomposeHonest,
   describeProgress,
@@ -2919,8 +2923,15 @@ async function executeChat(
         engine: result.engine,
       });
     }
+    // MULTILINGUAL ENGINE (audit E-2, engine 11): for a
+    // non-English message, ARCHIE answers in English (its only
+    // composed language) and says so FIRST in the owner's own
+    // language — one fixed human-reviewable notice sentence,
+    // never invented fluency. English messages are untouched.
+    const langDetection = detectLanguage(message);
+    const replyText = multilingualReply(langDetection, text);
     return respond(200, {
-      reply: sanitize(text),
+      reply: sanitize(replyText),
       toolRuns,
       engine: result.engine,
       // The unified loop trace — which organs executed this
