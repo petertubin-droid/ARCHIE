@@ -32,7 +32,7 @@ describe("Fix 25 — integer schemas reject non-integer numbers", () => {
       3.5,
     );
     expect(ok).toBe(false);
-    expect(errors[0]).toContain("expected integer");
+    expect(errors[0]).toContain("wrong type");
   });
 
   it("4 passes an integer schema", () => {

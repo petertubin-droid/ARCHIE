@@ -4,6 +4,8 @@
 // deterministic estimate; owner path → full cognitive engine.
 import { describe, it, expect } from "vitest";
 import "./index.ts";
+import { getRegisteredToolSchemas, validateRegisteredToolCall } from "./index.ts";
+import { validateToolCall } from "../_shared/archie-ai/native-engine/runtime-schema.ts";
 import {
   getHandler,
   givenOwnerIsAdmin,
@@ -180,5 +182,35 @@ describe("archie-chat — SSE streaming (gap 3)", () => {
     const events = parseSSE(await res.text());
     const done = events.find(([n]) => n === "done")![1] as { error: string };
     expect(done.error).toMatch(/Message is required/);
+  });
+});
+
+
+describe("archie-chat — complete production tool contracts", () => {
+  it("declares valid bounded object schemas and rejects unknown fields for every registered tool", () => {
+    const contracts = getRegisteredToolSchemas();
+    expect(contracts.length).toBeGreaterThan(0);
+    for (const { name, parameters } of contracts) {
+      const emptyCall = validateToolCall(parameters, {});
+      expect(emptyCall.error ?? "", name).not.toMatch(/invalid tool schema/);
+      expect(validateRegisteredToolCall(name, { __unexpected_archie_field__: true }).valid, name).toBe(false);
+    }
+  });
+
+  it("enforces nested building facts, required code source, bounds and integer limits before dispatch", () => {
+    expect(validateRegisteredToolCall("property_intelligence", {
+      location: "Lagos", building: { floor_area_m2: 120, stories: 2, roof_type: "hip" },
+    }).valid).toBe(true);
+    expect(validateRegisteredToolCall("property_intelligence", {
+      location: "Lagos", building: { stories: 1.5 },
+    }).valid).toBe(false);
+    expect(validateRegisteredToolCall("property_intelligence", {
+      location: "Lagos", building: { invented_fact: 1 },
+    }).valid).toBe(false);
+    expect(validateRegisteredToolCall("code_intelligence", { question: "review" }).valid).toBe(false);
+    expect(validateRegisteredToolCall("code_intelligence", { code: "const x = 1" }).valid).toBe(true);
+    expect(validateRegisteredToolCall("execution_engine_history", { limit: 1.2 }).valid).toBe(false);
+    expect(validateRegisteredToolCall("execution_engine_history", { limit: 51 }).valid).toBe(false);
+    expect(validateRegisteredToolCall("execution_engine_history", { limit: 50 }).valid).toBe(true);
   });
 });

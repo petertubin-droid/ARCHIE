@@ -44,6 +44,8 @@
 // future ARCHIE systems.
 // =========================================================
 
+import { validateRuntimeSchema } from "../native-engine/runtime-schema.ts";
+
 // ---------------------------------------------------------
 // 1. Types
 // ---------------------------------------------------------
@@ -211,93 +213,8 @@ export function validateAgainstSchema(
   schema: Record<string, unknown> | null | undefined,
   input: unknown,
 ): { ok: boolean; errors: string[] } {
-  if (!schema || Object.keys(schema).length === 0)
-    return { ok: true, errors: [] };
-  const errors: string[] = [];
-  walk(schema, input, "$", errors);
-  return { ok: errors.length === 0, errors };
-
-  function walk(
-    s: Record<string, unknown>,
-    v: unknown,
-    path: string,
-    errs: string[],
-  ): void {
-    if (typeof s.type === "string") {
-      const t = s.type;
-      let actual = Array.isArray(v)
-        ? "array"
-        : v === null
-          ? "null"
-          : typeof v === "number"
-            ? Number.isInteger(v)
-              ? "integer"
-              : "number"
-            : typeof v;
-      if (t === "number" && actual === "integer") actual = "number";
-      // FIX 25 (remediation batch 8, Level 5 execution audit
-      // 2026-09-13): the type-coercion exception was written
-      // backwards — schema type "integer" ACCEPTED non-integer
-      // numbers (3.5 passed an integer input/result schema).
-      // The only legitimate coercion is the reverse: an
-      // integral value under a "number" schema.
-      if (actual !== t && !(t === "number" && actual === "integer")) {
-        errs.push(`${path}: expected ${t}, got ${actual}`);
-        return;
-      }
-    }
-    if (Array.isArray(s.enum) && !s.enum.some((e) => e === v)) {
-      errs.push(`${path}: value not in enum [${s.enum.join(", ")}]`);
-    }
-    if (
-      typeof s.minimum === "number" &&
-      typeof v === "number" &&
-      v < s.minimum
-    ) {
-      errs.push(`${path}: ${v} < minimum ${s.minimum}`);
-    }
-    if (
-      typeof s.maximum === "number" &&
-      typeof v === "number" &&
-      v > s.maximum
-    ) {
-      errs.push(`${path}: ${v} > maximum ${s.maximum}`);
-    }
-    if (
-      s.type === "object" &&
-      v &&
-      typeof v === "object" &&
-      !Array.isArray(v)
-    ) {
-      const obj = v as Record<string, unknown>;
-      for (const req of (s.required as string[] | undefined) ?? []) {
-        if (!(req in obj))
-          errs.push(`${path}.${req}: required property missing`);
-      }
-      const props = (s.properties as Record<string, unknown> | undefined) ?? {};
-      for (const [k, child] of Object.entries(props)) {
-        if (k in obj && obj[k] !== undefined) {
-          walk(child as Record<string, unknown>, obj[k], `${path}.${k}`, errs);
-        }
-      }
-      if (s.additionalProperties === false) {
-        for (const k of Object.keys(obj)) {
-          if (!(k in props))
-            errs.push(`${path}.${k}: additional property not allowed`);
-        }
-      }
-    }
-    if (s.type === "array" && Array.isArray(v)) {
-      if (typeof s.minItems === "number" && v.length < s.minItems) {
-        errs.push(`${path}: needs at least ${s.minItems} items`);
-      }
-      if (s.items && typeof s.items === "object") {
-        v.forEach((item, i) =>
-          walk(s.items as Record<string, unknown>, item, `${path}[${i}]`, errs),
-        );
-      }
-    }
-  }
+  const result = validateRuntimeSchema(input, schema && Object.keys(schema).length ? schema : {});
+  return { ok: result.valid, errors: result.error ? [result.error] : [] };
 }
 
 /** Exponential backoff with a cap; attempt is 1-based. */

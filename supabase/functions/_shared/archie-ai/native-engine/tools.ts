@@ -15,6 +15,7 @@ import type {
   ToolSpecInternal,
 } from "./types.ts";
 import { runJavaScript } from "./sandbox.ts";
+import { validateToolCall } from "./runtime-schema.ts";
 import type { PageFetcher } from "./page-fetch.ts";
 
 /** Deterministic descriptive statistics for a list of
@@ -83,123 +84,58 @@ interface RegisteredTool {
   handler: ToolHandler;
 }
 
-const MAX_TOOL_INPUT_BYTES = 32_768;
-const MAX_TOOL_STRING_LENGTH = 10_000;
-
-function validateToolValue(value: unknown, depth = 0): boolean {
-  if (depth > 8) return false;
-  if (typeof value === "string") return value.length <= MAX_TOOL_STRING_LENGTH;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value === "boolean" || value === null) return true;
-  if (Array.isArray(value))
-    return (
-      value.length <= 1_000 &&
-      value.every((item) => validateToolValue(item, depth + 1))
-    );
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>);
-    return (
-      entries.length <= 100 &&
-      entries.every(
-        ([key, item]) =>
-          key.length <= 200 && validateToolValue(item, depth + 1),
-      )
-    );
-  }
-  return false;
-}
-
 function normalizeParameterSpec(
   parameter: NativeToolParameter,
 ): NativeToolParameterSpec {
   return typeof parameter === "string" ? { type: parameter } : parameter;
 }
 
+function nativeSchema(parameter: NativeToolParameterSpec): Record<string, unknown> {
+  const schema: Record<string, unknown> = { ...parameter };
+  delete schema.optional;
+  if (parameter.items && typeof parameter.items === "object") {
+    schema.items = nativeSchema(parameter.items);
+  } else if (typeof parameter.items === "string") {
+    schema.items = { type: parameter.items };
+  }
+  if (parameter.properties) {
+    const properties: Record<string, unknown> = {};
+    const required = new Set(parameter.required ?? []);
+    for (const [key, value] of Object.entries(parameter.properties)) {
+      const spec = normalizeParameterSpec(value);
+      properties[key] = nativeSchema(spec);
+      if (!spec.optional && !required.has(key)) required.add(key);
+    }
+    schema.properties = properties;
+    schema.required = [...required];
+  }
+  if (parameter.additionalProperties && typeof parameter.additionalProperties === "object") {
+    schema.additionalProperties = nativeSchema(parameter.additionalProperties);
+  }
+  for (const keyword of ["anyOf", "oneOf", "allOf"] as const) {
+    const list = parameter[keyword];
+    if (list) schema[keyword] = list.map(nativeSchema);
+  }
+  if (parameter.not) schema.not = nativeSchema(parameter.not);
+  return schema;
+}
+
 function validateToolArgs(
   args: Record<string, unknown>,
   parameters: Record<string, NativeToolParameter>,
 ): string | null {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return "tool arguments must be a JSON object";
-  }
-  try {
-    if (
-      new TextEncoder().encode(JSON.stringify(args)).byteLength >
-      MAX_TOOL_INPUT_BYTES
-    ) {
-      return `tool arguments exceed ${MAX_TOOL_INPUT_BYTES} bytes`;
-    }
-  } catch {
-    return "tool arguments must be serializable JSON";
-  }
-  for (const key of Object.keys(args)) {
-    if (!Object.prototype.hasOwnProperty.call(parameters, key)) {
-      return `unexpected parameter "${key}"`;
-    }
-  }
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
   for (const [key, parameter] of Object.entries(parameters)) {
     const spec = normalizeParameterSpec(parameter);
-    if (!Object.prototype.hasOwnProperty.call(args, key)) {
-      if (!spec.optional) {
-        return `missing required parameter "${key}" (${spec.type})`;
-      }
-      continue;
-    }
-    const value = args[key];
-    if (spec.type === "number") {
-      if (typeof value !== "number" || !Number.isFinite(value)) {
-        return `parameter "${key}" must be a finite number`;
-      }
-      if (spec.minimum !== undefined && value < spec.minimum) {
-        return `parameter "${key}" must be at least ${spec.minimum}`;
-      }
-      if (spec.maximum !== undefined && value > spec.maximum) {
-        return `parameter "${key}" must be at most ${spec.maximum}`;
-      }
-    } else if (spec.type === "string") {
-      if (typeof value !== "string") {
-        return `parameter "${key}" must be a string`;
-      }
-      const maxLength = spec.maxLength ?? MAX_TOOL_STRING_LENGTH;
-      if (value.length > maxLength) {
-        return `parameter "${key}" exceeds ${maxLength} characters`;
-      }
-      if (spec.minLength !== undefined && value.length < spec.minLength) {
-        return `parameter "${key}" must be at least ${spec.minLength} characters`;
-      }
-      if (spec.enum && !spec.enum.includes(value)) {
-        return `parameter "${key}" must be one of: ${spec.enum.join(", ")}`;
-      }
-      if (spec.pattern && !new RegExp(spec.pattern).test(value)) {
-        return `parameter "${key}" does not match the required format`;
-      }
-    } else if (spec.type === "array") {
-      if (!Array.isArray(value)) {
-        return `parameter "${key}" must be an array`;
-      }
-      if (spec.minItems !== undefined && value.length < spec.minItems) {
-        return `parameter "${key}" must contain at least ${spec.minItems} item(s)`;
-      }
-      const maxItems = spec.maxItems ?? 1_000;
-      if (value.length > maxItems) {
-        return `parameter "${key}" must contain at most ${maxItems} item(s)`;
-      }
-      if (!spec.items) {
-        return `parameter "${key}" has no declared item type`;
-      }
-      const invalidItem = value.findIndex((item) =>
-        spec.items === "number"
-          ? typeof item !== "number" || !Number.isFinite(item)
-          : typeof item !== "string" || item.length > MAX_TOOL_STRING_LENGTH,
-      );
-      if (invalidItem !== -1) {
-        return `parameter "${key}" item ${invalidItem} must be a finite ${spec.items}`;
-      }
-    } else if (!validateToolValue(value)) {
-      return `parameter "${key}" is not safe JSON input`;
-    }
+    properties[key] = nativeSchema(spec);
+    if (!spec.optional) required.push(key);
   }
-  return null;
+  const result = validateToolCall(
+    { type: "object", properties, required, additionalProperties: false },
+    args,
+  );
+  return result.valid ? null : result.error ?? "tool arguments failed schema validation";
 }
 
 export class ToolOrchestrator {

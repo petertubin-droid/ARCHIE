@@ -390,10 +390,38 @@ describe("Tool orchestration", () => {
     expect(ok.output).toBe(4);
     const missing = await tools.invoke("arithmetic", {});
     expect(missing.ok).toBe(false);
-    expect(missing.error).toContain("missing required parameter");
+    expect(missing.error).toContain("is required");
     const unknown = await tools.invoke("nonexistent", {});
     expect(unknown.ok).toBe(false);
     expect(unknown.error).toContain("not registered");
+  });
+
+  it("validates nested object contracts and cross-property requirements before handler execution", async () => {
+    const tools = new ToolOrchestrator();
+    let calls = 0;
+    tools.register({
+      name: "nested_contract",
+      description: "Nested schema contract",
+      parameters: {
+        request: {
+          type: "object",
+          properties: {
+            mode: { type: "string", enum: ["text", "file"] },
+            code: { type: "string", minLength: 1, maxLength: 32, pattern: "\\S" , optional: true },
+            repo_path: { type: "string", minLength: 1, maxLength: 64, optional: true },
+          },
+          required: ["mode"],
+          dependentRequired: { mode: ["code"] },
+          additionalProperties: false,
+        },
+      },
+    }, () => { calls += 1; return "ok"; });
+
+    expect((await tools.invoke("nested_contract", { request: { mode: "text", code: "x" } })).ok).toBe(true);
+    expect((await tools.invoke("nested_contract", { request: { mode: "text" } })).ok).toBe(false);
+    expect((await tools.invoke("nested_contract", { request: { mode: "invalid", code: "x" } })).ok).toBe(false);
+    expect((await tools.invoke("nested_contract", { request: { mode: "text", code: "x", extra: true } })).ok).toBe(false);
+    expect(calls).toBe(1);
   });
 
   it("enforces declared enums, numeric ranges, array item types, and optional fields", async () => {
@@ -423,11 +451,11 @@ describe("Tool orchestration", () => {
     expect(
       (await tools.invoke("typed_contract", { mode: "unsafe", values: [1] }))
         .error,
-    ).toContain("must be one of");
+    ).toContain("not an allowed value");
     expect(
       (await tools.invoke("typed_contract", { mode: "safe", values: [1, "2"] }))
         .error,
-    ).toContain("item 1");
+    ).toContain("[1]");
     expect(
       (
         await tools.invoke("typed_contract", {
@@ -436,7 +464,7 @@ describe("Tool orchestration", () => {
           confidence: 1.1,
         })
       ).error,
-    ).toContain("at most 1");
+    ).toContain("maximum");
     expect(
       (
         await tools.invoke("typed_contract", {
@@ -445,7 +473,7 @@ describe("Tool orchestration", () => {
           surprise: true,
         })
       ).error,
-    ).toContain("unexpected parameter");
+    ).toContain("not allowed");
     expect(
       await tools.invoke("typed_contract", {
         mode: "strict",

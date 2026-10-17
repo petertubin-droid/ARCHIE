@@ -472,7 +472,7 @@ const TOOLS: ToolDef[] = [
     name: "frelux_status",
     description:
       "Live FRELUX platform status: counts of user profiles, saved client estimates, active knowledge items, active ARCHIE domains, and ARCHIE internal agents grouped by lifecycle state.",
-    parameters: { type: "object", properties: {}, required: [] },
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     operational: true,
     execute: async () => {
       const [profiles, estimates, knowledge, domains, agents, events] =
@@ -508,8 +508,9 @@ const TOOLS: ToolDef[] = [
       "Search ARCHIE's approved knowledge (ACTIVE knowledge items) by keyword — covers all ARCHIE domains including coding and cybersecurity intelligence. Returns topic, capability, scope, confidence and a content excerpt.",
     parameters: {
       type: "object",
-      properties: { query: { type: "string" } },
+      properties: { query: { type: "string", minLength: 1, maxLength: 120 } },
       required: ["query"],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input) => {
@@ -557,8 +558,9 @@ const TOOLS: ToolDef[] = [
       "Look up a word, abbreviation, phrase, idiom or expression in ARCHIE's living vocabulary registry (seeded English foundation + Nigerian English + words learned from the owner's own usage + owner-taught meanings). Use FIRST for any what does X mean / define X / what is X question. Returns the meaning, word class and provenance, or an honest missing.",
     parameters: {
       type: "object",
-      properties: { term: { type: "string" } },
+      properties: { term: { type: "string", minLength: 1, maxLength: 60 } },
       required: ["term"],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input, ctx) => {
@@ -596,11 +598,12 @@ const TOOLS: ToolDef[] = [
     parameters: {
       type: "object",
       properties: {
-        term: { type: "string" },
-        meaning: { type: "string" },
-        word_class: { type: "string" },
+        term: { type: "string", minLength: 1, maxLength: 60 },
+        meaning: { type: "string", minLength: 1, maxLength: 500 },
+        word_class: { type: "string", maxLength: 40 },
       },
       required: ["term", "meaning"],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input, ctx) => {
@@ -628,7 +631,7 @@ const TOOLS: ToolDef[] = [
     name: "archie_agent_status",
     description:
       "Inspect ARCHIE internal agents: role, display name, lifecycle status, task, and cost fields.",
-    parameters: { type: "object", properties: {}, required: [] },
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     operational: true,
     execute: async () => {
       const { data, error } = await db
@@ -646,7 +649,7 @@ const TOOLS: ToolDef[] = [
     name: "archie_domains",
     description:
       "List ARCHIE knowledge domains (the registry of what ARCHIE knows and is learning), with risk class and active state.",
-    parameters: { type: "object", properties: {}, required: [] },
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     operational: true,
     execute: async () => {
       const { data, error } = await db
@@ -662,7 +665,7 @@ const TOOLS: ToolDef[] = [
     name: "execution_engine_list",
     description:
       "List the ARCHIE Execution & Runtime Engine registry: authorized execution targets with environment (SANDBOX/STAGING/PRODUCTION), risk class and whether the Owner Secret is required. Production targets are never executable from chat.",
-    parameters: { type: "object", properties: {}, required: [] },
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     operational: true,
     execute: async () => {
       const { data, error } = await db
@@ -682,10 +685,11 @@ const TOOLS: ToolDef[] = [
     parameters: {
       type: "object",
       properties: {
-        targetKey: { type: "string" },
-        input: { type: "object" },
+        targetKey: { type: "string", minLength: 1, maxLength: 120 },
+        input: { type: "object", additionalProperties: {} },
       },
       required: ["targetKey"],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input, ctx) => {
@@ -700,8 +704,9 @@ const TOOLS: ToolDef[] = [
       "Recent ARCHIE execution engine runs (audit trail): target, environment, status, attempts, duration, initiator, authority method.",
     parameters: {
       type: "object",
-      properties: { limit: { type: "number" } },
+      properties: { limit: { type: "integer", minimum: 1, maximum: 50 } },
       required: [],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input) => {
@@ -725,8 +730,9 @@ const TOOLS: ToolDef[] = [
       "Inspect a website URL: fetches the live page (robots.txt respected, private addresses blocked), extracts title/meta/headings/content/counts, and persists the inspection into the ARCHIE learning pipeline. Use whenever the Owner supplies a website URL or asks to inspect, review or analyze a website. Returns REAL data from the live response - report findings and recommendations from it.",
     parameters: {
       type: "object",
-      properties: { url: { type: "string" } },
+      properties: { url: { type: "string", minLength: 1, maxLength: 2_048 } },
       required: ["url"],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input, ctx) => {
@@ -845,14 +851,19 @@ const TOOLS: ToolDef[] = [
       properties: {
         region: {
           type: "string",
+          minLength: 1,
+          maxLength: 80,
           description: "Region, state or country, e.g. 'Lagos', 'Nigeria'",
         },
         item: {
           type: "string",
+          minLength: 1,
+          maxLength: 80,
           description: "Optional item filter, e.g. 'cement', 'paint'",
         },
       },
       required: ["region"],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input, ctx) => {
@@ -931,11 +942,13 @@ const TOOLS: ToolDef[] = [
     parameters: {
       type: "object",
       properties: {
-        code: { type: "string" },
-        repo_path: { type: "string" },
-        question: { type: "string" },
+        code: { type: "string", minLength: 1, maxLength: 10_000, pattern: "\\S" },
+        repo_path: { type: "string", minLength: 1, maxLength: 200, pattern: "\\S" },
+        question: { type: "string", maxLength: 2_000 },
       },
       required: [],
+      anyOf: [{ required: ["code"] }, { required: ["repo_path"] }],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input, ctx) => {
@@ -1016,7 +1029,7 @@ const TOOLS: ToolDef[] = [
     name: "sentry_diagnostics",
     description:
       "Run ARCHIE's own sentry duty: live boot/health checks of all five ARCHIE edge functions (chat, agents, crypto, extract, ingestion) plus deterministic counts of the core ARCHIE database tables. Returns REAL status only - report exactly what is up or down, never guess.",
-    parameters: { type: "object", properties: {}, required: [] },
+    parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     operational: true,
     execute: async () => {
       const fns = [
@@ -1098,16 +1111,27 @@ const TOOLS: ToolDef[] = [
       properties: {
         location: {
           type: "string",
+          minLength: 1,
+          maxLength: 120,
           description: "Region, state or country, e.g. 'Lagos, Nigeria'",
         },
         building: {
           type: "object",
           description:
             "Known building facts supplied by the Owner, e.g. {floor_area_m2, stories, roof_type, use}",
+          properties: {
+            floor_area_m2: { type: "number", exclusiveMinimum: 0, maximum: 10_000_000 },
+            stories: { type: "integer", minimum: 1, maximum: 200 },
+            roof_type: { type: "string", minLength: 1, maxLength: 80 },
+            use: { type: "string", minLength: 1, maxLength: 80 },
+          },
+          required: [],
+          additionalProperties: false,
         },
-        question: { type: "string" },
+        question: { type: "string", maxLength: 2_000 },
       },
       required: ["location"],
+      additionalProperties: false,
     },
     operational: true,
     execute: async (input, ctx) => {
@@ -1199,6 +1223,24 @@ function activeToolSpecs(): ArchieToolSpec[] {
 const PENDING_TOOL_NOTE = TOOLS.filter((t) => !t.operational)
   .map((t) => `${t.name} (${t.description})`)
   .join("; ");
+
+/** Read-only contract metadata for regression tests and diagnostics. */
+export function getRegisteredToolSchemas(): Array<{
+  name: string;
+  parameters: Record<string, unknown>;
+}> {
+  return TOOLS.map((tool) => ({
+    name: tool.name,
+    parameters: tool.parameters as Record<string, unknown>,
+  }));
+}
+
+/** Validate a registered production tool contract without invoking its handler. */
+export function validateRegisteredToolCall(name: string, args: unknown) {
+  const tool = TOOLS.find((candidate) => candidate.name === name);
+  if (!tool) return { valid: false, error: "unknown tool" };
+  return validateToolCall(tool.parameters as Record<string, unknown>, args);
+}
 
 // ---- ARCHIE Execution & Runtime Engine (chat binding) ------
 // Chat may only run NON-PRODUCTION targets that explicitly list
@@ -2572,10 +2614,20 @@ async function executeChat(
       let output: unknown;
       let toolOk = false;
       try {
-        output = await tool.execute(call.args ?? {}, {
-          userId: ownerUserId ?? "",
-          memoryConsentGranted,
-        });
+        // Revalidate immediately before dispatch, at the side-effect boundary.
+        // This is intentionally separate from the earlier provider-call gate.
+        const executionValidation = validateToolCall(
+          tool.parameters as Record<string, unknown>,
+          call.args ?? {},
+        );
+        if (!executionValidation.valid) {
+          output = { error: executionValidation.error ?? "Invalid tool arguments" };
+          toolOk = false;
+        } else {
+          output = await tool.execute(call.args ?? {}, {
+            userId: ownerUserId ?? "",
+            memoryConsentGranted,
+          });
         const result =
           output && typeof output === "object"
             ? (output as Record<string, unknown>)
@@ -2590,7 +2642,8 @@ async function executeChat(
           ["failed", "error", "denied", "blocked", "rejected"].includes(
             resultStatus,
           );
-        toolOk = !explicitFailure;
+          toolOk = !explicitFailure;
+        }
       } catch (error) {
         output = {
           error:

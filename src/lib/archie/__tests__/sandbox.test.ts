@@ -161,9 +161,9 @@ describe("statistics tool", () => {
   it("rejects malformed statistics tool inputs before calculation", async () => {
     const orch = new ToolOrchestrator();
     registerBuiltInTools(orch);
-    expect((await orch.invoke("statistics", { values: "1,2", op: "mean" })).error).toContain("must be an array");
-    expect((await orch.invoke("statistics", { values: [1, "2"], op: "mean" })).error).toContain("item 1");
-    expect((await orch.invoke("statistics", { values: [1, 2], op: "mystery" })).error).toContain("must be one of");
+    expect((await orch.invoke("statistics", { values: "1,2", op: "mean" })).error).toContain("wrong type");
+    expect((await orch.invoke("statistics", { values: [1, "2"], op: "mean" })).error).toContain("[1]");
+    expect((await orch.invoke("statistics", { values: [1, 2], op: "mystery" })).error).toContain("not an allowed value");
     const good = await orch.invoke("statistics", { values: [2, 4, 6], op: "mean" });
     expect(good).toMatchObject({ ok: true, output: { result: 4 } });
   });

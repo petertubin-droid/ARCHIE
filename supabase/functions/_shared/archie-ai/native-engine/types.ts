@@ -204,19 +204,35 @@ export interface PlanAlternative {
 }
 
 export interface NativeToolParameterSpec {
-  type: "string" | "number" | "array";
-  /** Array item primitive; required when type is array. */
-  items?: "string" | "number";
+  type: "string" | "number" | "integer" | "boolean" | "null" | "array" | "object";
+  /** Recursive JSON constraints used only for arrays/objects. */
+  items?: "string" | "number" | "integer" | "boolean" | "null" | NativeToolParameterSpec;
+  properties?: Record<string, NativeToolParameter>;
+  required?: readonly string[];
+  additionalProperties?: boolean | NativeToolParameterSpec;
   minItems?: number;
   maxItems?: number;
-  /** All parameters are required unless explicitly marked optional. */
+  uniqueItems?: boolean;
+  /** At a top-level parameter, optional means omitted from the required list. */
   optional?: boolean;
-  enum?: readonly string[];
+  enum?: readonly (string | number | boolean | null)[];
+  const?: string | number | boolean | null;
   minimum?: number;
   maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  multipleOf?: number;
   minLength?: number;
   maxLength?: number;
   pattern?: string;
+  format?: "uri" | "url" | "email" | "uuid" | "date-time";
+  anyOf?: readonly NativeToolParameterSpec[];
+  oneOf?: readonly NativeToolParameterSpec[];
+  allOf?: readonly NativeToolParameterSpec[];
+  not?: NativeToolParameterSpec;
+  dependentRequired?: Record<string, readonly string[]>;
+  description?: string;
+  title?: string;
 }
 
 export type NativeToolParameter = "string" | "number" | NativeToolParameterSpec;
