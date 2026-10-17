@@ -463,6 +463,10 @@ export const INTENTS = [
   // observations → honest refusal, never invention.
   "temporal_change_query",
   "state_change_claim",
+  // --- SIMULATION ENGINE (audit 2026-10-17): hypothetical
+  // "what if" questions route to honest counterfactual
+  // projection over RECORDED observations — never invention.
+  "what_if_projection",
 ] as const;
 
 export type Intent = (typeof INTENTS)[number];
@@ -1245,6 +1249,17 @@ const RULE_CASCADE: Array<{
     pattern:
       /[a-z][a-z0-9' -]{1,40}?\s+(?:was|were)\s+[a-z0-9' -]{2,40}?\s+(?:yesterday|last (?:week|month|year)|[0-9]{4}-[0-9]{2}-[0-9]{2})\b[^.?!]{0,80}?\b(?:now|currently|today)\b/i,
     confidence: 0.8,
+  },
+  {
+    // SIMULATION ENGINE: a hypothetical question —
+    // "what happens if X rises 20%", "what if the site
+    // doubles", "suppose Y becomes Z". Projects arithmetic
+    // over RECORDED observations only, capped below
+    // observation confidence; refuses to invent.
+    intent: "what_if_projection",
+    pattern:
+      /\b(?:what\s+(?:happens|happen|would\s+happen)\s+if|what\s+if|suppose\s+(?:that\s+)?|hypothetically[,:]?\s*)\s*(?:the\s+)?[a-z0-9' -]{2,40}?\s+(?:rises|falls|drops|increases|decreases|doubles|halves|becomes|is|changes)\b/i,
+    confidence: 0.75,
   },
   {
     // Change-over-time QUESTION about a subject.

@@ -137,6 +137,11 @@ import type {
 import { SupabasePersistence, type SupabaseLike } from "./persistence.ts";
 import { parseStateChangeClaim } from "../cognitive/world-model.ts";
 import {
+  candidateSubjects,
+  parseHypothetical,
+  projectHypothetical,
+} from "../cognitive/simulation.ts";
+import {
   extractMeaningResearchRequest,
   researchTermMeaning,
   type FetchLike,
@@ -2231,6 +2236,48 @@ export class ArchieNativeEngine implements ArchieRuntime {
         return this.compose(
           `From my recorded observations, "${subject}" changed as follows: ${lines.join("; ")}. This is the full recorded version history — nothing interpolated, nothing invented.`,
           nlu.confidence,
+          [],
+        );
+      }
+      case "what_if_projection": {
+        // SIMULATION ENGINE (audit 2026-10-17, engine 15):
+        // honest counterfactual projection. The premise is
+        // the owner's; the basis is RECORDED transitions only;
+        // the math is shown; the label says PROJECTION;
+        // downstream effects are refused, never invented.
+        const hyp = parseHypothetical(input);
+        if (!hyp) {
+          return this.compose(
+            'I heard a hypothesis in that, but I could not pin down the subject and the change cleanly. Ask it as: "what happens if <subject> rises/falls/changes <amount>" and I will project from my recorded observations, with the arithmetic shown.',
+            nlu.confidence * 0.5,
+            [],
+          );
+        }
+        if (!this.worldTimeline) {
+          return this.compose(
+            `My world model is not wired in this deployment, so I cannot honestly project what happens if ${hyp.premise} here.`,
+            nlu.confidence * 0.5,
+            [],
+          );
+        }
+        // Subject resolution: "price of cement" → recorded
+        // subject "cement". Deterministic qualifier strip.
+        const candidates = candidateSubjects(hyp.subject);
+        let transitions = candidates
+          .flatMap((c) => this.worldTimeline!.transitionsFor(c))
+          .filter((t) => t.toValue !== "");
+        // Prefer the FIRST candidate that has observations —
+        // never merge two subjects' histories into one.
+        const firstHit = candidates.find(
+          (c) => this.worldTimeline!.transitionsFor(c).length > 0,
+        );
+        if (firstHit) {
+          transitions = this.worldTimeline!.transitionsFor(firstHit);
+        }
+        const projection = projectHypothetical(transitions, hyp);
+        return this.compose(
+          projection.text,
+          Math.min(projection.confidence, nlu.confidence),
           [],
         );
       }
