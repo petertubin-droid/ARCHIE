@@ -13,6 +13,7 @@ import { createKnowledgeRepository } from "../_shared/knowledge/repository.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { serveWithCors } from "../_shared/serve.ts";
 import { readReasoningStatus } from "../_shared/reasoning/persistence.ts";
+import { createCalibrationStore } from "../_shared/archie-ai/cognitive/uncertainty.ts";
 import {
   checkRateLimit,
   getRateLimitKey,
@@ -278,6 +279,30 @@ serveWithCors(async (req: Request) => {
       };
     }
 
+    // Uncertainty & Causal Inference Engine (gap A-2):
+    // Beta-Bayes calibration keys with REAL outcome counts.
+    // OPERATIONAL once real outcomes are recorded; READY when
+    // wired but unexercised; UNAVAILABLE honestly on error.
+    let uncertaintyEngine: Record<string, unknown>;
+    try {
+      const calibrationKeys = await createCalibrationStore(
+        service as unknown as Parameters<typeof createCalibrationStore>[0],
+      ).keys();
+      uncertaintyEngine = {
+        state: calibrationKeys > 0 ? "OPERATIONAL" : "READY",
+        calibration_keys: calibrationKeys,
+        engine: "beta-bayes + causal propagation",
+      };
+    } catch (uncertErr) {
+      uncertaintyEngine = {
+        state: "UNAVAILABLE",
+        note:
+          uncertErr instanceof Error
+            ? uncertErr.message
+            : "calibration query failed",
+      };
+    }
+
     // Ears runs NATIVE (on-device speech recognition, no
     // provider, no key — OpenAI Separation Rule). It is
     // OPERATIONAL only once a REAL transcription exists in
@@ -337,6 +362,7 @@ serveWithCors(async (req: Request) => {
         },
         semantic_graph: semanticGraph,
         reasoning_engine: reasoningEngine,
+        uncertainty_engine: uncertaintyEngine,
         knowledge_repository: await knowledgeRepositoryPromise,
       },
     });

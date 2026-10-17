@@ -32,6 +32,12 @@ import {
   reasoningApplicable,
   reasoningGroundTruth,
 } from "../_shared/reasoning/engine.ts";
+import {
+  confidenceStatement,
+  createCalibrationStore,
+  propagateCausal,
+  type CausalEdge,
+} from "../_shared/archie-ai/cognitive/uncertainty.ts";
 import { classifyProblem } from "../_shared/reasoning/classify.ts";
 import { createReasoningPersistence } from "../_shared/reasoning/persistence.ts";
 import type {
@@ -42,6 +48,33 @@ import type {
 import { emptyReasoningGroundTruth } from "../_shared/reasoning/types.ts";
 import type { InferenceGroundTruth } from "../_shared/inference/types.ts";
 import type { EvidenceGroundTruth } from "../_shared/evidence/types.ts";
+
+/** Causal confidence annotations over this turn's real
+ *  inferences (uncertainty engine, gap A-2). Deterministic. */
+function buildCausalBlock(input: import("../_shared/reasoning/types.ts").ReasoningTurnInput): string[] {
+  if (input.inferences.length === 0 || input.facts.length === 0) return [];
+  const factIds = new Set(input.facts.map((f) => f.id));
+  const edges: CausalEdge[] = [];
+  for (const inf of input.inferences) {
+    const premise = inf.premiseIds.find((p) => factIds.has(p)) ?? inf.premiseIds[0];
+    if (!premise) continue;
+    edges.push({
+      from: premise,
+      to: inf.id,
+      strength: 0.9, // a derived inference supports its own conclusion
+      because: inf.statement.slice(0, 160),
+    });
+  }
+  const start = input.facts[0].id;
+  const results = propagateCausal(edges, start, 6);
+  const lines: string[] = [];
+  for (const r of results.slice(0, 4)) {
+    lines.push(
+      `[causal] ${r.explanation} — propagated confidence ${r.confidence.toFixed(3)}`,
+    );
+  }
+  return lines;
+}
 
 /** Map the four lower layers' real outputs into the engine's
  *  turn input. Pure, deterministic, no I/O. */
@@ -127,6 +160,22 @@ export async function runReasoningLayer(args: {
     const persistence = createReasoningPersistence(args.client);
     const classification = classifyProblem(args.message);
     const domain = input.domainCandidates[0] ?? "general";
+    const calibrationKey = `reasoning:${classification.primary}`;
+    const calibration = createCalibrationStore(args.client);
+
+    // BETA-BAYES CALIBRATION (uncertainty engine): quote the
+    // calibrated confidence for this problem category with its
+    // REAL outcome basis — never a bare number.
+    const calibrationNote =
+      confidenceStatement(0.5, await calibration.read(calibrationKey));
+
+    // CAUSAL PROPAGATION (uncertainty engine): over this
+    // turn's REAL inference chain — premise fact → derived
+    // conclusion, edge strength = the inference's own
+    // confidence, because = the conclusion statement. The
+    // strongest-path product + causal explanation ride into
+    // the reasoning block.
+    const causalBlock = buildCausalBlock(input);
 
     // Record the problem BEFORE the run so every run row is
     // anchored. Persistence failure → problemId null → the
@@ -151,6 +200,20 @@ export async function runReasoningLayer(args: {
       },
       input,
     );
+
+    // Record the REAL outcome for future calibration (atomic,
+    // best-effort — a failed write degrades to the prior).
+    await calibration.record(calibrationKey, !gt.failure && gt.solution !== null);
+
+    // Uncertainty engine annotations ride with the reasoning
+    // block — calibrated confidence + causal explanations.
+    const annotations = [
+      `[calibrated] ${calibrationKey} ${calibrationNote.statement}`,
+      ...causalBlock,
+    ].join("\n");
+    gt.block = gt.block
+      ? `${gt.block}\n${annotations}`
+      : annotations;
     return gt;
   } catch (err) {
     console.warn("[archie-core] reasoning layer failed:", err);

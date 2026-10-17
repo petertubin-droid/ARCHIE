@@ -122,7 +122,10 @@ function recordingClient(rows: { id?: string; problemId?: string | null }[] = []
           },
         }),
       }),
-      upsert: () => ({ then: () => Promise.resolve({ data: null, error: null }) }),
+      upsert: async () => ({ data: null, error: null }),
+      select: () => ({ eq: () => ({ limit: async () => ({ data: [], error: null }) }) }),
+      // atomic calibration RPC available on this mock
+      rpc: async () => ({ data: null, error: null }),
     }),
   } as unknown as ReasoningClient;
   return { client, inserted };
