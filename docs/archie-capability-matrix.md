@@ -205,3 +205,19 @@ rebuild needed. The scheduler migration self-schedules the heartbeat
 cron on any fresh database, and the entire archie-* surface remains
 100% external-AI-free (zero Gemini/OpenAI/Claude consumers; the
 isolated `nlu.ts` hit is a comment about truthful denial, not a call).
+- **Strategy Learning (C-4, 20261018050000)** — closes the loop
+  the audit called static: strategy selection now learns from
+  REAL owner verdicts only. Attribution stashes the
+  intent + chosen strategies when a strategy actually composed
+  the answer; the next explicit confirmation (positive) or
+  correction (negative) — engagement and citations never
+  count, per audit C3 — records durable outcomes per
+  `<intent>:<strategy>` key (atomic `archie_strategy_record`
+  increments). Selection bias is a Beta posterior,
+  evidence-gated at 5 outcomes and capped at ±2 points so
+  learning refines the honest cue system and can never
+  override it; the `logical` fallback for cue-less tasks is
+  preserved exactly. Null store = pure cue system — the
+  isolated app/visitor runtimes stay learning-free by design
+  (privacy control). `strategy_learning` leaderboard on
+  status. Native-engine suite 101/101 green with the surgery.
