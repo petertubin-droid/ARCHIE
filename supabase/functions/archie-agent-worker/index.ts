@@ -49,7 +49,7 @@ import { classifySecurityMessage } from "../_shared/archie-ai/security/verdict.t
 import { TaskCompletionEngine } from "../_shared/archie-ai/cognitive/task-completion.ts";
 import { SupabaseTaskStateStore } from "../_shared/archie-ai/cognitive/task-state.ts";
 import { decomposeClauses } from "../_shared/archie-ai/native-engine/nlu.ts";
-import { appendAgentEvent, type AgentEventType } from "./audit-events.ts";
+import { persistAgentReport } from "./persist-report.ts";
 
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
@@ -62,13 +62,19 @@ function json(status: number, body: Record<string, unknown>) {
   });
 }
 
-async function appendEvent(
-  agentId: string,
-  actorId: string,
-  event: AgentEventType,
-  detail: Record<string, unknown>,
-) {
-  await appendAgentEvent(service, { agentId, actorId, event, detail });
+async function persistStoppedRun(input: {
+  runId: string;
+  agentId: string;
+  actorId: string;
+  summary: string;
+  detail: Record<string, unknown>;
+  gates: Record<string, unknown>;
+}): Promise<string> {
+  return persistAgentReport(service, {
+    ...input,
+    engine: "archie-unified-cognitive/gate-stop",
+    event: "FAIL",
+  });
 }
 
 Deno.serve(async (req: Request) => {
@@ -104,6 +110,8 @@ Deno.serve(async (req: Request) => {
   if (!uuidPattern.test(agentId)) return json(400, { error: "agent_id must be a valid UUID." });
   if (body.run_id !== undefined && !uuidPattern.test(body.run_id)) return json(400, { error: "run_id must be a valid UUID." });
   if (body.task_id !== undefined && !uuidPattern.test(body.task_id)) return json(400, { error: "task_id must be a valid UUID." });
+  const runId = req.headers.get("X-Archie-Execution-Run-Id") ?? "";
+  if (!uuidPattern.test(runId)) return json(400, { error: "A valid execution run ID is required." });
 
   const { data: agent } = await service
     .from("frelux_archie_internal_agents")
@@ -112,36 +120,89 @@ Deno.serve(async (req: Request) => {
     .maybeSingle();
   if (!agent) return json(404, { error: "Agent not found." });
 
+  // Retries use the same immutable execution run ID. Return the already
+  // committed report instead of repeating task execution after a lost reply.
+  const { data: existingReport, error: existingReportError } = await service
+    .from("frelux_archie_agent_reports")
+    .select("id, summary, detail, gates, engine")
+    .eq("run_id", runId)
+    .maybeSingle();
+  if (existingReportError) {
+    return json(500, { ok: false, error: "Could not verify whether this execution run already has a report." });
+  }
+  if (existingReport) {
+    const detail = existingReport.detail as Record<string, unknown> | null;
+    const executed = detail?.executed === true;
+    try {
+      // A repeated delivery may arrive after the report commit but before
+      // the engine receives its response. Reconcile the event idempotently
+      // without rerunning work.
+      const reportId = await persistAgentReport(service, {
+        runId,
+        agentId: agent.id,
+        actorId: agent.created_by,
+        summary: String(existingReport.summary ?? ""),
+        detail: detail ?? {},
+        gates: (existingReport.gates as Record<string, unknown> | null) ?? {},
+        engine: String(existingReport.engine ?? "archie-unified-cognitive"),
+        event: executed ? "REPORT" : "FAIL",
+      });
+      return json(200, {
+        ok: executed,
+        executed,
+        report_id: reportId,
+        idempotent_replay: true,
+        note: "This execution run was already persisted; its terminal lifecycle event is present or has now been reconciled.",
+      });
+    } catch {
+      return json(500, { ok: false, executed, report_id: existingReport.id, error: "The existing report’s terminal lifecycle event could not be verified or reconciled." });
+    }
+  }
+
   const task = String(agent.task ?? "").trim();
   if (!task) {
     try {
-      await appendEvent(agent.id, agent.created_by, "FAIL", {
-        kind: "TASK_EMPTY",
+      const reportId = await persistStoppedRun({
+        runId,
+        agentId: agent.id,
+        actorId: agent.created_by,
+        summary: "Agent has no task text — nothing to execute honestly.",
+        detail: { role: agent.role, display_name: agent.display_name, executed: false, stop_reason: "TASK_EMPTY" },
+        gates: {
+          life_safety: { passed: false, checked: false },
+          security_verdict: { passed: false, checked: false },
+        },
+      });
+      return json(200, {
+        ok: false,
+        executed: false,
+        report_id: reportId,
         note: "Agent has no task text — nothing to execute honestly.",
       });
     } catch {
       return json(500, {
         ok: false,
         executed: false,
-        error: "The empty task was not executed, and its lifecycle event could not be persisted.",
+        error: "The empty task was not executed, and its report and lifecycle event could not be persisted atomically.",
       });
     }
-    return json(200, {
-      ok: true,
-      executed: false,
-      note: "Agent has no task text — nothing to execute honestly.",
-    });
   }
 
   // ---- GATE 1: life-safety (identical to chat entry) ----
   const lifeSafety = classifyLifeSafety(task);
   if (lifeSafety.blocked) {
+    let reportId: string;
     try {
-      await appendEvent(agent.id, agent.created_by, "FAIL", {
-        kind: "TASK_GATE_STOP",
-        gate: "LIFE_SAFETY",
-        reason: lifeSafety.reason,
-        hazard: lifeSafety.hazard ?? null,
+      reportId = await persistStoppedRun({
+        runId,
+        agentId: agent.id,
+        actorId: agent.created_by,
+        summary: `Task stopped by the life-safety gate: ${lifeSafety.reason}`,
+        detail: { role: agent.role, display_name: agent.display_name, executed: false, stop_reason: "TASK_GATE_STOP", gate: "LIFE_SAFETY", reason: lifeSafety.reason, hazard: lifeSafety.hazard ?? null },
+        gates: {
+          life_safety: { passed: false, checked: true, reason: lifeSafety.reason },
+          security_verdict: { passed: false, checked: false },
+        },
       });
     } catch {
       return json(500, {
@@ -149,7 +210,7 @@ Deno.serve(async (req: Request) => {
         executed: false,
         gate: "LIFE_SAFETY",
         reason: lifeSafety.reason,
-        error: "The task remains blocked, but the lifecycle event could not be persisted.",
+        error: "The task remains blocked, but its report and lifecycle event could not be persisted atomically.",
       });
     }
     try {
@@ -160,11 +221,12 @@ Deno.serve(async (req: Request) => {
         message: `[agent-worker] ${lifeSafety.reason}`,
       });
     } catch {
-      /* stop stands regardless */
+      /* authoritative agent report and event are already committed */
     }
     return json(200, {
-      ok: true,
+      ok: false,
       executed: false,
+      report_id: reportId,
       gate: "LIFE_SAFETY",
       reason: lifeSafety.reason,
       note: "Task stopped by the life-safety gate before execution. Agent work can never bypass it.",
@@ -178,10 +240,24 @@ Deno.serve(async (req: Request) => {
   });
   if (!verdict.allowed) {
     try {
-      await appendEvent(agent.id, agent.created_by, "FAIL", {
-        kind: "TASK_GATE_STOP",
+      const reportId = await persistStoppedRun({
+        runId,
+        agentId: agent.id,
+        actorId: agent.created_by,
+        summary: `Task stopped by the security verdict gate: ${verdict.reason}`,
+        detail: { role: agent.role, display_name: agent.display_name, executed: false, stop_reason: "TASK_GATE_STOP", gate: "SECURITY_VERDICT", reason: verdict.reason },
+        gates: {
+          life_safety: { passed: true, checked: true },
+          security_verdict: { passed: false, checked: true, reason: verdict.reason },
+        },
+      });
+      return json(200, {
+        ok: false,
+        executed: false,
+        report_id: reportId,
         gate: "SECURITY_VERDICT",
         reason: verdict.reason,
+        note: "Task stopped by the security verdict gate before execution. Agent work can never bypass it.",
       });
     } catch {
       return json(500, {
@@ -189,16 +265,9 @@ Deno.serve(async (req: Request) => {
         executed: false,
         gate: "SECURITY_VERDICT",
         reason: verdict.reason,
-        error: "The task remains blocked, but the lifecycle event could not be persisted.",
+        error: "The task remains blocked, but its report and lifecycle event could not be persisted atomically.",
       });
     }
-    return json(200, {
-      ok: true,
-      executed: false,
-      gate: "SECURITY_VERDICT",
-      reason: verdict.reason,
-      note: "Task stopped by the security verdict gate before execution. Agent work can never bypass it.",
-    });
   }
 
   // ---- EXECUTE: one unified cognitive kernel, two honest modes ----
@@ -288,12 +357,13 @@ Deno.serve(async (req: Request) => {
     trace = [];
   }
 
-  // ---- PERSIST the work product ----
-  const { data: report, error: repErr } = await service
-    .from("frelux_archie_agent_reports")
-    .insert({
-      agent_id: agent.id,
-      run_id: body.run_id ?? null,
+  // ---- ATOMICALLY PERSIST report + terminal lifecycle event ----
+  let reportId: string;
+  try {
+    reportId = await persistAgentReport(service, {
+      runId,
+      agentId: agent.id,
+      actorId: agent.created_by,
       summary: cycleOk ? summary : "[execution failed — no fabricated summary]",
       detail: {
         role: agent.role,
@@ -308,36 +378,20 @@ Deno.serve(async (req: Request) => {
         security_verdict: { passed: true, checked: true },
       },
       engine,
-    })
-    .select("id")
-    .single();
-
-  if (repErr || !report) {
-    return json(500, {
-      ok: false,
-      error: "Execution finished but the report could not be persisted.",
-    });
-  }
-
-  try {
-    await appendEvent(agent.id, agent.created_by, cycleOk ? "REPORT" : "FAIL", {
-      kind: cycleOk ? "TASK_EXECUTED" : "TASK_FAILED",
-      report_id: report.id,
-      engine,
+      event: cycleOk ? "REPORT" : "FAIL",
     });
   } catch {
     return json(500, {
       ok: false,
       executed: cycleOk,
-      report_id: report.id,
-      error: "The task report was stored, but the lifecycle event could not be persisted; this run is incomplete.",
+      error: "Execution finished but its report and lifecycle event could not be persisted atomically.",
     });
   }
 
   return json(200, {
-    ok: true,
+    ok: cycleOk,
     executed: cycleOk,
-    report_id: report.id,
+    report_id: reportId,
     engine,
     note: cycleOk
       ? "Task executed by the unified ARCHIE kernel. Report stored with full trace."

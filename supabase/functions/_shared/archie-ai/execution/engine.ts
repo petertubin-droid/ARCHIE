@@ -79,6 +79,24 @@ export interface ExecutionTarget {
   risk_class?: string | null;
 }
 
+/** Adds the immutable execution-run ID only for the internal agent worker target. */
+export function addExecutionRunHeader(
+  targetKey: string,
+  runId: string,
+  headers: Record<string, string>,
+): void {
+  if (targetKey === "archie-agent-task") {
+    headers["X-Archie-Execution-Run-Id"] = runId;
+  }
+}
+
+export function targetReportsApplicationFailure(targetKey: string, result: unknown): boolean {
+  if (targetKey !== "archie-agent-task" || !result || typeof result !== "object" || Array.isArray(result)) {
+    return false;
+  }
+  return (result as Record<string, unknown>).ok !== true;
+}
+
 export type RunStatus =
   | "PENDING"
   | "RUNNING"
@@ -419,6 +437,9 @@ export async function executeTarget(
       };
       if (target.kind === "EDGE_FUNCTION") {
         headers["Authorization"] = `Bearer ${deps.serviceRoleKey}`;
+        // The worker uses the immutable engine run UUID to make its report
+        // and terminal lifecycle event transactionally idempotent.
+        addExecutionRunHeader(target.key, run.id, headers);
       }
       for (const [h, envName] of Object.entries(target.secret_headers ?? {})) {
         const v = deps.getSecret(envName);
@@ -441,6 +462,13 @@ export async function executeTarget(
       } catch {
         lastBody = { raw: text.slice(0, 500) };
       }
+      if (res.ok && targetReportsApplicationFailure(target.key, lastBody)) {
+        const body = lastBody as Record<string, unknown>;
+        lastError = typeof body.error === "string"
+          ? `Target reported unsuccessful result: ${body.error.slice(0, 500)}`
+          : "Target reported unsuccessful result.";
+        break;
+      }
       if (res.ok) break;
       lastError = `HTTP ${res.status} from target`;
       if (!isRetriable(res.status)) break; // 4xx: logic error, no retry
@@ -462,7 +490,8 @@ export async function executeTarget(
 
   // --- TIMEOUT / FAILED terminal handling ---
   const succeeded =
-    lastStatus !== null && lastStatus >= 200 && lastStatus < 300;
+    lastStatus !== null && lastStatus >= 200 && lastStatus < 300 &&
+    !targetReportsApplicationFailure(target.key, lastBody);
   const timedOut = !succeeded && /timeout/.test(lastError);
 
   // --- RESULT VERIFY ---

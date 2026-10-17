@@ -35,6 +35,17 @@ describe("archie-agent-worker — internal-only boundary", () => {
     expect((await json(res)).error).toMatch(/valid UUID/);
   });
 
+  it("requires the audited execution run ID before agent lookup", async () => {
+    const res = await handler(req(
+      "POST",
+      "",
+      { agent_id: "11111111-1111-4111-8111-111111111111" },
+      { Authorization: "Bearer test-service-key" },
+    ));
+    expect(res.status).toBe(400);
+    expect((await json(res)).error).toMatch(/execution run ID/);
+  });
+
   it("rejects even the owner — internal execution target only", async () => {
     givenOwnerIsAdmin();
     const res = await handler(

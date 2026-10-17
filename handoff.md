@@ -2,7 +2,7 @@
 
 **Updated:** 2026-10-17
 **Repository:** [`petertubin-droid/ARCHIE`](https://github.com/petertubin-droid/ARCHIE)
-**Base reviewed:** `main` at `f8a6365182c6ffbb38078a753c9b33b4396fcbef`
+**Base reviewed:** `main` at `a5f4756a844ffa87b2e4ae98d9983043745b69bf`
 **Purpose:** Open work only. Completed source items have been removed from this handoff; this file is not a claim that production is deployed or fully operational.
 
 ## Current verified state
@@ -12,7 +12,8 @@
 - Chat's tool-resume loop and the native reasoning loop now use one shared eight-execution budget. Chat records and tells the caller when a further tool call remains pending rather than claiming it ran.
 - Validation on this checkout: focused tests passed (4 files, 52 tests); full suite passed (267 files, 3,147 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` passed.
 - `npm run lint` is blocked because the repository has no ESLint 9 flat config. `npm run build` is blocked because this checkout has no root `index.html` entry. The CI workflow does not run either command.
-- Production is **not verified**. The previously checked deploy run `39036236619` failed with Supabase CLI `401 Invalid access token`; no functions deployed and the health check was skipped. A source push to `main` is not deployment evidence.
+- The latest checked GitHub CI run `39037279856` passed for `a5f4756`; the deployment run `39037279902` failed with Supabase CLI `401 Invalid access token` while listing functions. No functions deployed and the health check was skipped. Production is **not verified**.
+- This update adds an atomic report-plus-terminal-event RPC and immutable execution-run identity to the agent-worker path. Source typecheck and the full suite passed (268 files; 3,154 passed, 2 expected-fail, 1 skipped). The SQL migration has not been applied to any database or integration-tested against production; source is not yet operational in a deployed environment.
 
 ## P0 — deployment and verifiable release
 
@@ -86,11 +87,11 @@
 
 ## P1 — repository and data-integrity operations
 
-### R-05. Lifecycle report and terminal audit event are not atomic
+### R-05. Atomic report/audit fix awaits database rollout and integration proof
 
-**Evidence:** The worker now returns explicit failure if the report or terminal event write fails, but those writes are separate. A crash between them can leave a report without the corresponding terminal event.
+**Evidence:** Source now calls one `SECURITY DEFINER` database RPC to persist the report and matching `REPORT`/`FAIL` event in one transaction. The immutable execution-run UUID is propagated from the execution engine; per-run advisory locking makes retries idempotent, validates the active `archie-agent-task` run and agent owner, and can reconcile a legacy report missing its event. The worker returns persisted prior results on replay rather than executing the same run twice. The execution engine now maps worker `{ok:false}` to a failed run rather than HTTP-success. Unit tests and full source suite pass.
 
-**Remaining work:** Add a transactional outbox or idempotent database RPC that persists the report and terminal event as one durable unit; test partial failure and retries. Keep non-authoritative telemetry distinct from consequential audit evidence.
+**Remaining work:** Apply migration `20261017135800_archie_atomic_agent_report_audit.sql` through the owner-authorized deployment process, then integration-test successful, failed, interrupted and retried runs against a disposable/approved database. Confirm report and event counts and run linkage; do not mark operational until the migration and live behavior are verified. No production database change has been made from this chat.
 
 ### R-06. Duplicate migration version requires database-ledger reconciliation
 

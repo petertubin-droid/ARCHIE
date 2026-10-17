@@ -14,6 +14,8 @@ import {
   computeBackoffMs,
   checkInitiatorPolicy,
   executeTarget,
+  addExecutionRunHeader,
+  targetReportsApplicationFailure,
   EngineDeps,
   ExecutionTarget,
 } from "@studio-shared/archie-ai/execution/engine.ts";
@@ -194,6 +196,47 @@ describe("checkInitiatorPolicy", () => {
 // ---------------------------------------------------------
 // Full pipeline
 // ---------------------------------------------------------
+describe("internal agent execution identity", () => {
+  it("treats a persisted negative task result as an execution failure", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ ok: false, error: "safety gate stopped task" }), { status: 200 })) as typeof fetch;
+    const { deps, runs } = makeDeps({
+      target: makeTarget({
+        key: "archie-agent-task",
+        allowed_initiators: ["ARCHIE_AGENTS"],
+        input_schema: { type: "object" },
+        result_schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } },
+      }),
+      fetchImpl,
+    });
+    const out = await executeTarget(deps, {
+      targetKey: "archie-agent-task",
+      input: { agent_id: "11111111-1111-4111-8111-111111111111" },
+      initiatorSystem: "ARCHIE_AGENTS",
+      caller: OWNER,
+    });
+    expect(out.ok).toBe(false);
+    expect(out.status).toBe("FAILED");
+    expect(out.error).toContain("safety gate stopped task");
+    expect(runs.find((run) => run.id === out.runId)?.status).toBe("FAILED");
+  });
+
+  it("classifies application failure only for the internal agent target", () => {
+    expect(targetReportsApplicationFailure("archie-agent-task", { ok: false })).toBe(true);
+    expect(targetReportsApplicationFailure("archie-agent-task", { ok: true })).toBe(false);
+    expect(targetReportsApplicationFailure("other-target", { ok: false })).toBe(false);
+  });
+
+  it("attaches the immutable run ID only to the registered agent worker", () => {
+    const headers: Record<string, string> = { Authorization: "Bearer service" };
+    addExecutionRunHeader("archie-agent-task", "run-123", headers);
+    expect(headers["X-Archie-Execution-Run-Id"]).toBe("run-123");
+
+    const unrelated: Record<string, string> = {};
+    addExecutionRunHeader("health-check", "run-456", unrelated);
+    expect(unrelated).toEqual({});
+  });
+});
+
 describe("executeTarget pipeline", () => {
   it("runs a healthy target end-to-end with SUCCESS audit", async () => {
     const { deps, runs } = makeDeps();
