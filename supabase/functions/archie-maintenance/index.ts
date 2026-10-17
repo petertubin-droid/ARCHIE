@@ -43,6 +43,7 @@ import {
 } from "../_shared/archie-ai/native-engine/engine.ts";
 import type { SupabaseLike } from "../_shared/archie-ai/native-engine/persistence.ts";
 import { runTuningCycle } from "../_shared/archie-ai/cognitive/self-tuning.ts";
+import { runObservabilityPass } from "../_shared/archie-ai/cognitive/observability.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -52,7 +53,7 @@ const REFLECTION_WATERMARK_KEY = "reflection_watermark";
 const WEAK_CONFIDENCE_FLOOR = 0.5;
 const REFLECT_BATCH_LIMIT = 100;
 
-type Mode = "consolidate" | "reflect" | "tune" | "all";
+type Mode = "consolidate" | "reflect" | "tune" | "observe" | "all";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
@@ -230,7 +231,7 @@ serveWithCors(async (req: Request) => {
     return json(400, { error: "Body must be JSON." });
   }
   const mode = (body.mode ?? "all") as Mode;
-  if (!["consolidate", "reflect", "tune", "all"].includes(mode)) {
+  if (!["consolidate", "reflect", "tune", "observe", "all"].includes(mode)) {
     return json(400, { error: `Unknown mode: ${mode}` });
   }
 
@@ -258,6 +259,17 @@ serveWithCors(async (req: Request) => {
         kept: tuning.filter((t) => t.decision === "kept").length,
         decisions: tuning,
       };
+    }
+    // Observability & alerting engine (gap F-2): aggregates
+    // the REAL operational signals, evaluates deterministic
+    // alert rules, snapshots the day's metrics, and maintains
+    // the alert lifecycle (active while the condition holds,
+    // auto-resolved when it clears). Failed reads contribute
+    // zeros honestly — nothing is fabricated.
+    if (mode === "observe" || mode === "all") {
+      result.observe = await runObservabilityPass(
+        service as unknown as Parameters<typeof runObservabilityPass>[0],
+      );
     }
   } catch (err) {
     ok = false;

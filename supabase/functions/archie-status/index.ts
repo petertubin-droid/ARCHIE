@@ -334,6 +334,40 @@ serveWithCors(async (req: Request) => {
       };
     }
 
+    // Observability & Alerting Engine (gap F-2): the active
+    // alert set from the deterministic rules + today's
+    // metrics snapshot. Honest UNAVAILABLE on error.
+    let observability: Record<string, unknown>;
+    try {
+      const { data: activeAlerts } = await service
+        .from("archie_alerts")
+        .select("alert_code, severity, message, last_seen_at")
+        .eq("resolved", false)
+        .order("last_seen_at", { ascending: false })
+        .limit(10);
+      const { data: todayMetrics } = await service
+        .from("archie_metrics_daily")
+        .select("metric_date, metrics")
+        .order("metric_date", { ascending: false })
+        .limit(1);
+      const alerts = activeAlerts ?? [];
+      observability = {
+        state: "OPERATIONAL",
+        active_alerts: alerts.length,
+        critical_alerts: alerts.filter((a: { severity: string }) => a.severity === "CRITICAL").length,
+        alerts,
+        latest_metrics: (todayMetrics ?? [])[0] ?? null,
+      };
+    } catch (obsErr) {
+      observability = {
+        state: "UNAVAILABLE",
+        note:
+          obsErr instanceof Error
+            ? obsErr.message
+            : "observability query failed",
+      };
+    }
+
     // Ears runs NATIVE (on-device speech recognition, no
     // provider, no key — OpenAI Separation Rule). It is
     // OPERATIONAL only once a REAL transcription exists in
@@ -395,6 +429,7 @@ serveWithCors(async (req: Request) => {
         reasoning_engine: reasoningEngine,
         uncertainty_engine: uncertaintyEngine,
         self_tuning: selfTuning,
+        observability,
         knowledge_repository: await knowledgeRepositoryPromise,
       },
     });
