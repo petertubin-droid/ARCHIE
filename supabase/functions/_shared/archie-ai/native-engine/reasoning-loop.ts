@@ -22,6 +22,8 @@ import {
   understand,
 } from "./nlu.ts";
 import { matchCodeRequest } from "./sandbox.ts";
+import { isToolHopWithinBudget, MAX_TOOL_HOPS } from "./tool-budget.ts";
+export { MAX_TOOL_HOPS } from "./tool-budget.ts";
 
 /** Budget: hard step cap per request. Owner upgrade
  * 2026-09-16 (gap 2 — shallow agentic loop): 6 clause passes
@@ -33,7 +35,7 @@ export const MAX_LOOP_STEPS = 24;
 /** Budget: hard native-tool-execution cap per request. 2 was
  *  too tight for a chain of read→compute→convert hops; 8 lets
  *  a loop USE its tools without the budget becoming fiction. */
-export const MAX_TOOL_HOPS = 8;
+
 
 export interface LoopStep {
   index: number;
@@ -233,7 +235,7 @@ export async function runReasoningLoop(
       });
       continue;
     }
-    if (usedSteps >= maxSteps || usedToolHops >= maxToolHops) {
+    if (usedSteps >= maxSteps || !isToolHopWithinBudget(usedToolHops, maxToolHops)) {
       budgetExhausted = true;
       pushStep({
         index,

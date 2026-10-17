@@ -1,414 +1,145 @@
-# ARCHIE Engineering Handoff: Production Gaps and Full-Agent Readiness
+# ARCHIE Engineering Handoff: Remaining Production and Agent-Readiness Work
 
-**Audit date:** 2026-10-17  
-**Repository:** [`petertubin-droid/ARCHIE`](https://github.com/petertubin-droid/ARCHIE)  
-**Branch audited:** `main`  
-**Audited HEAD:** `a0f161c80578754bc33b41938fb97bd745825702`  
-**Purpose:** Give the next engineer a prioritized, evidence-based worklist for making ARCHIE reliable and more capable without overstating what it can do.
+**Updated:** 2026-10-17
+**Repository:** [`petertubin-droid/ARCHIE`](https://github.com/petertubin-droid/ARCHIE)
+**Base reviewed:** `main` at `f8a6365182c6ffbb38078a753c9b33b4396fcbef`
+**Purpose:** Open work only. Completed source items have been removed from this handoff; this file is not a claim that production is deployed or fully operational.
 
-## Executive summary
+## Current verified state
 
-ARCHIE has substantial deterministic reasoning, tools, memory, verification, security gates, and an extensive test suite. It is not yet a generally capable, continuously operating AI agent. The most immediate release blockers are observable on the audited HEAD: CI reports four failing tests, and the latest edge-function deployment attempted 26 deployments and failed all 26 because GitHub Actions supplied an invalid Supabase access token. The server-side ARCHIE model runtime explicitly reports itself non-operational. The maintenance scheduler is described as paused in a newer operations note, despite an older audit describing it as active.
+- The current source includes request-body limits for `archie-chat` and `archie-agent-worker`; chat validates its request shape, and the worker validates UUID identifiers before database lookup.
+- The native page fetcher validates redirect destinations and streams response bodies with byte limits. This update adds hard deadlines for response acquisition and body reads, with cancellation on stalled/oversized bodies.
+- Chat's tool-resume loop and the native reasoning loop now use one shared eight-execution budget. Chat records and tells the caller when a further tool call remains pending rather than claiming it ran.
+- Validation on this checkout: focused tests passed (4 files, 52 tests); full suite passed (267 files, 3,147 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` passed.
+- `npm run lint` is blocked because the repository has no ESLint 9 flat config. `npm run build` is blocked because this checkout has no root `index.html` entry. The CI workflow does not run either command.
+- Production is **not verified**. The previously checked deploy run `39036236619` failed with Supabase CLI `401 Invalid access token`; no functions deployed and the health check was skipped. A source push to `main` is not deployment evidence.
 
-Treat capability and operational claims as separate: a code path or passing unit test is not proof that the deployed system, external credentials, scheduled jobs, or production data are live and healthy.
+## P0 — deployment and verifiable release
 
-## Audit scope and confidence
+### R-02. Supabase deployment credential is invalid
 
-Reviewed the public GitHub repository tree and current source on `main`, including README, CI/deploy workflows, the September 16 gap audit, October 10 scheduler pause note, capability/performance documents, native runtime selection, agent worker, core runtime modules, and the latest GitHub Actions logs. Queried current repository metadata, recent workflow runs, security-alert endpoints, and main-branch protection status.
+**Evidence:** GitHub Actions run [39036236619](https://github.com/petertubin-droid/ARCHIE/actions/runs/39036236619) failed while listing Supabase functions with `401 Invalid access token`; zero functions deployed and post-deploy health checks were skipped.
 
-This was a remote source/repository audit, not a local clean-room install or a production Supabase/edge-function/database inspection. No production query, migration, deployment, secret change, or runtime request was made. Findings below are marked **verified in source/GitHub** or **requires live verification** accordingly.
+**Remaining work:** A project owner must rotate the token in Supabase and replace the GitHub Actions secret through secure settings. Then authorize and run the workflow, verify the intended target list, and check post-deploy health. Never place the credential in code, issues, this file, or chat. Until the owner action and a successful authenticated run, production remains stale/unverified.
 
-## P0 — unblock release and trustworthy verification
+### R-08. Deployment targets and health-check targets disagree
 
-### 1. Latest CI is red: four tests fail on audited HEAD
+**Evidence:** `.github/workflows/archie-deploy.yml` configures `ARCHIE_PROJECT_REFS` with `hqhvlkunkdrxyuvziorm`, while health checks also reference `pjvtqkshewerpvggtgqx`; comments disagree about whether one or both are live.
 
-**Evidence:** GitHub Actions CI run [38958794745](https://github.com/petertubin-droid/ARCHIE/actions/runs/38958794745), commit `a0f161c`. Type-check passed; Vitest finished with **4 failed, 3,105 passed, 2 expected-fail, 1 skipped** across 262 files.
+**Remaining work:** Owner confirms the intended Supabase projects and production routing. Align deployment refs, health checks, comments, and docs, then verify each intended environment after an authorized deploy.
 
-- `supabase/functions/_shared/archie-ai/native-engine/__tests__/calculation-trace.test.ts`: three failures. The statistics query returns no recorded computation; arithmetic and unit-conversion cases cannot find the expected trace records. The commit message says these calculation traces were ported, but the new tests show the trace integration is not working for those paths.
-- `supabase/functions/archie-escrow/index.test.ts`: “accepts by window lapse only when it has truly lapsed” expected HTTP 409 for a premature acceptance but received 200. This is a potentially consequential escrow acceptance-window behavior, not just a cosmetic test failure.
+### R-12. Live operational status and documentation counts need reconciliation
 
-**Next work:** Reproduce each failure on a clean checkout; fix the implementation or correct a demonstrably invalid test without weakening the intended safety behavior; add focused regression tests; rerun the full suite and type-check. For escrow, test timestamps at just-before, exactly-at, and after the acceptance boundary, including timezone and clock control. Do not merge while CI is red.
+**Evidence:** Existing README/audit notes disagree on deployed function and migration counts and scheduler state. Deployment authentication currently prevents source-to-production verification.
 
-**Done when:** full CI passes on a fresh commit; escrow cannot be accepted before its defined window; real calculations create trace records with inputs, operation, result, and honest verdict; traces do not change the computed answer when persistence fails.
+**Remaining work:** After access and target issues are resolved, record commit SHA, per-environment deployed function revisions, migration ledger, scheduler state, and reproducible counts. Do not label source features “live” without direct evidence.
 
-### 2. Edge deploy is blocked by an invalid Supabase Actions credential
+## P1 — security, reliability, and agent behavior
 
-**Evidence:** Latest deploy run [38958794950](https://github.com/petertubin-droid/ARCHIE/actions/runs/38958794950) attempted **26** function deployments to project ref `hqhvlkunkdrxyuvziorm`; all 26 failed with Supabase CLI `401: Invalid access token`. Zero functions were deployed; post-deploy health checks were skipped.
+### C-03. Public URL fetching still lacks controlled egress and DNS-rebinding protection
 
-**Next work:** A project/workspace owner must rotate or replace the expired/revoked Supabase access token through Supabase and GitHub Actions secret settings. Keep it in GitHub Secrets only, never in code, issue comments, or commit history. Then rerun the deploy workflow and verify deployment and health checks. Do not infer that the code is live from a successful GitHub commit.
+**Evidence:** Native `PageFetcher` and chat inspect redirects manually and revalidate each URL, but hostname checks do not pin the resolved address used by the connection. DNS rebinding and controlled egress are not implemented or live-tested.
 
-**Done when:** deploy workflow succeeds with the intended target list and the authenticated post-deploy checks pass for each intended live project.
+**Remaining work:** Add a supported controlled-egress/proxy layer that validates the connected IP, or another runtime-supported DNS pinning control. Cover private/reserved IPv4 and IPv6, alternate encodings, redirect chains, and rebinding. Do not claim the current hostname checks close the DNS/egress risk.
 
-## P1 — resolve capability and operations gaps
+### C-04. Audit and bound every outbound response path
 
-### 3. ARCHIE’s own generative model is explicitly unavailable
+**Evidence:** Native research page and robots responses are now byte-bounded and deadline-limited in source; tests cover oversized/stalled bodies. A repository search still shows other outbound paths using `Response.text()`, `Response.json()` or `arrayBuffer()` (including market research, web research, AI provider errors, and WhatsApp media). Each has different trust, payload and size expectations.
 
-**Evidence:** `supabase/functions/_shared/archie-ai/runtime.ts`, `ArchieModelRuntime.isOperational()` returns `false`, `capabilities()` returns an empty list, and `generate()` throws `ArchieRuntimeNotImplementedError("inference")`. `resolveArchieCapabilityEngine()` prefers operational cognitive/native engines, but the native runtime is structured inference/tool reasoning, not proof of a generally generative language model. The September 16 gap audit also labels open-ended generative language as the defining gap.
+**Remaining work:** Inventory ARCHIE-owned outbound fetches, add endpoint-specific byte/time limits and cancellation before parse/buffer, and test missing/false length headers, slow streams, malformed payloads and error bodies. Exclude trusted small fixed provider APIs only with documented provider limits and explicit caps.
 
-**Next work:** Make and document an owner-level product/architecture decision: define the intended boundary of “full AI agent” and whether open-ended generation is intentionally out of scope or a future, separately evaluated capability. If pursuing generation, specify model provenance, serving, latency/cost limits, privacy, safety, evaluation, versioning, rollback, and explicit authority boundaries before implementation. Preserve honest runtime labels and refusal behavior; do not register aspirational capabilities as operational.
+### C-06. Public anonymous rate limiting is not global or identity-bound
 
-**Done when:** product claims match tested behavior; capability registry and user-facing status clearly distinguish deterministic native reasoning from open-ended generation; any added model has independent, reproducible evaluations and safe failure behavior.
+**Evidence:** `archie-chat` uses an isolate-local limiter. Authenticated visitors are keyed by user ID, but anonymous client IDs are caller-controlled, and counters do not coordinate across isolates. The shared in-memory limiter is not a dependable spend-control boundary.
 
-### 4. Maintenance scheduler status is contradictory and likely paused
+**Remaining work:** Select and configure a shared atomic limiter or supported gateway-level policy keyed by trusted edge identity plus authenticated user when available. Do not use caller-supplied `clientId` or unverified forwarding headers as identity. Add multi-instance and rotation/load tests, concurrency/time limits, and abuse monitoring. Required provider configuration/credentials are not present in source.
 
-**Evidence:** `docs/ARCHIE_SCHEDULER_PAUSED_2026-10-10.md` states the hourly maintenance job was paused on October 10 to conserve Gemini quota. `docs/ARCHIE_GAP_AUDIT_2026-09-16.md` still describes the scheduler as active/live and marks F-1/C-2/C-3 resolved. The older document also ranks the scheduler as a future gap in its closing priority list. No live `cron.job` or recent `archie_scheduler_runs` query was available during this audit.
+### C-07. Prove the shared chat tool budget and pending-result contract end to end
 
-**Next work:** Query the intended production Supabase project’s scheduler state and recent run records using an authorized secure channel. Update the stale audit and operational note to one current, timestamped status. Keep scheduled work disabled unless the owner approves its cost/quota envelope; if re-enabled, use a bounded cadence, idempotency, run limits, failure alerts, and a documented pause/recovery procedure.
+**Evidence:** Chat and native reasoning now share an eight-execution budget. A common helper has boundary tests; existing chat code records a pending call after the budget. The endpoint-level tool-call/resume path has no test proving exact execution counts, final pending status, and honest response across the 0/1/8/9-call boundaries.
 
-**Done when:** one evidence-backed operational status is documented, scheduled calls are confirmed against live run records, quota/cost caps and alerting are defined, and owner approval is recorded before reactivation.
+**Remaining work:** Add deterministic HTTP/chat runner tests using a fake inference runtime and fake tools. Prove no more than eight handlers execute, every failure is distinguished from success, and a ninth or unresolved call is returned as pending/incomplete. Keep the helper's shared limit as the only production source of truth.
 
-### 5. Escrow audit/event writes can fail silently in the agent worker
+### C-08. The advertised agent loop is not observation-driven
 
-**Evidence:** `supabase/functions/archie-agent-worker/index.ts`, `appendEvent()` catches insert exceptions and ignores them (`/* audit events never break the worker */`, around lines 63–77). This conflicts with the worker’s own header comments describing an append-only agent report/lifecycle event and can make work appear successful without a durable audit record.
+**Evidence:** `native-engine/reasoning-loop.ts` decomposes compound requests into independent clause passes and composes their answers; it does not reliably plan the next action from prior tool observations or replan on tool failure.
 
-**Next work:** Decide which event classes are mandatory evidence. For consequential actions/results, fail closed or persist an outbox/retryable audit record before returning success; surface audit degradation explicitly. Retain best-effort behavior only for non-authoritative telemetry and label it as such. Add fault-injection tests for insert failures and partial completion.
+**Remaining work:** Either narrow capability language to deterministic request decomposition or design and test a genuine bounded plan/action/observe/replan state machine with typed observations, evidence links, per-step authorization, idempotency, cancellation, failure recovery and completion criteria. Do not describe the present loop as general autonomous planning.
 
-**Done when:** every consequential task result has a durable, correlated audit/report record or returns an explicit incomplete/error state; retries are idempotent; telemetry failures cannot silently impersonate a complete audit trail.
+### C-10. User-facing completeness is not checked against task-specific requirements
 
-### 6. Migration version collision can make fresh/replayed database histories ambiguous
+**Evidence:** `cognitive/kernel.ts` calls the verifier with `requiredAspects: []`. The verifier honestly marks completeness as not evaluated, but does not check omissions from the actual user request.
 
-**Evidence:** `supabase/migrations/` contains **304 SQL migration files** and two files share version prefix `20260918140000`: `20260918140000_archie_code_finding_rule_types.sql` and `20260918140000_reconcile_out_of_band_tables.sql`. Supabase migration tracking keys migrations by version; identical versions risk one migration being treated as duplicate/skipped or chain behavior differing between clean installs and databases that already applied both out-of-band.
+**Remaining work:** Define explicit contracts for supported structured workflows (for example calculations and research), validate required inputs/outputs against those contracts, and show “not evaluated” for unconstrained free-form replies. Add omission and unknown-value tests; do not infer reliable completeness from free-form extraction alone.
 
-**Next work:** Inspect migration history for every intended Supabase project and the Supabase CLI’s current handling before changing migration files. Produce a safe reconciliation plan for already-applied databases and clean installs. Do not casually rename or rewrite a migration that has been applied in production; create a forward-only reconciliation where appropriate and obtain owner approval before applying it.
+### C-11. ARCHIE chat remains coupled to FRELUX host data and tools
 
-**Done when:** a clean database can replay the chain deterministically, each tracked migration version is unique, and existing production ledgers reconcile without re-running destructive or non-idempotent work.
+**Evidence:** `archie-chat/index.ts` directly uses FRELUX tables, product flows, execution targets and credentials. There is no complete host-adapter boundary replacing those dependencies.
 
-### 7. CI does not run the build or lint that README says CI guarantees
+**Remaining work:** Define a typed host adapter, move FRELUX tools into a separate integration package, document required scopes/tables, and provide a no-host mode with fake-adapter contract tests. Do this if standalone ARCHIE deployment remains a product requirement.
 
-**Evidence:** `.github/workflows/ci.yml` runs `npm ci`, TypeScript, and `npx vitest run` only. `README.md` says CI proceeds through `npm run build`, but no build step exists in this workflow; lint is also not in CI. Build generates/prerenders assets and service worker files, so type-check/test success alone does not guarantee a releasable PWA.
+### C-12. User-facing capability claims need an evidence-backed matrix
 
-**Next work:** Add `npm run build` and `npm run lint` (or explicitly revise the documented guarantee if intentionally excluded). Ensure generated files are deterministic and do not leave uncommitted build artifacts. Consider separate, clearly reported jobs for unit tests, build/lint, E2E/browser smoke, and security/dependency checks.
+**Evidence:** Native reasoning and deterministic tools are operational in source, but open-ended generation is intentionally unavailable without an external model. Image/audio, broad perception, open-ended coding, and autonomous multi-tool planning have narrower support than a general AI-agent claim implies.
 
-**Done when:** workflow checks match README; build, lint, typecheck, and tests are required checks on pull requests and main; failure prevents merge.
+**Remaining work:** Publish a capability matrix containing exact supported input/output, tested limit, provenance/dependency, operational status, and refusal behavior. Keep model-free/native capabilities separate from absent generative-model capability. Expand only against owner-approved use cases and held-out evaluations.
 
-### 8. Deployment configuration and health-check target list disagree
+## P1 — repository and data-integrity operations
 
-**Evidence:** `.github/workflows/archie-deploy.yml` sets `ARCHIE_PROJECT_REFS` to only `hqhvlkunkdrxyuvziorm`, but its post-deploy check targets both `pjvtqkshewerpvggtgqx` and `hqhvlkunkdrxyuvziorm`. Workflow comments alternately describe Freluxtools-only and claim both projects are deployed. The current deploy is blocked before health checks, so this audit cannot tell whether both URLs should be current or whether one is a stale/disconnected target.
+### R-05. Lifecycle report and terminal audit event are not atomic
 
-**Next work:** Confirm with the owner which Supabase projects serve ARCHIE today, where FRELUX routes production traffic, and which mirror is intentionally disconnected. Align deploy targets, trigger comments, health-check URLs, and README. A stale target must not be represented as a production check; an intended live target must not be omitted from deploy.
+**Evidence:** The worker now returns explicit failure if the report or terminal event write fails, but those writes are separate. A crash between them can leave a report without the corresponding terminal event.
 
-**Done when:** a single authoritative target inventory exists; deployment and health checks cover exactly the intended environments; no workflow claims dual deployment if only one ref is configured.
+**Remaining work:** Add a transactional outbox or idempotent database RPC that persists the report and terminal event as one durable unit; test partial failure and retries. Keep non-authoritative telemetry distinct from consequential audit evidence.
 
-### 9. Public repository has no main-branch protection; dependency alerts are disabled
+### R-06. Duplicate migration version requires database-ledger reconciliation
 
-**Evidence:** GitHub API reports `main` is not protected (404 “Branch not protected”); Dependabot alerts return 403 because disabled; secret-scanning alerts currently return zero open alerts. Zero open alerts does not prove absence of historical exposures.
+**Evidence:** `supabase/migrations/` contains two files with version prefix `20260918140000`; Supabase migration history keys versions, creating ambiguity for clean replay versus already-updated databases.
 
-**Next work:** Repository owner should enable a pull-request rule for `main`, require passing CI and at least one review as appropriate, block force-push/deletion, enable Dependabot security updates/alerts and secret scanning/push protection where plan supports them, and review/remediate any existing findings. Keep credential rotation separate from code commits.
+**Remaining work:** Inspect ledgers for every intended project and confirm current CLI behavior. Prepare a forward-only reconciliation for both clean installs and existing ledgers. Do not rename/rewrite an applied migration or apply a reconciliation without owner approval.
 
-**Done when:** required checks cannot be bypassed through routine pushes; dependency and secret alerts are active; documented exceptions have an owner and expiry.
+### R-07. CI does not run documented build/lint checks
 
-## P2 — expand capability and harden the product honestly
+**Evidence:** `.github/workflows/ci.yml` runs install, typecheck and tests but not build or lint. The current `npm run lint` fails because there is no ESLint 9 flat config; `npm run build` fails because root `index.html` is absent. This appears to be an engine-oriented checkout, so do not invent a placeholder app entry.
 
-### 10. Perception and communication remain materially bounded
+**Remaining work:** Decide whether this repo is meant to be a web app or engine package. If engine-only, update scripts/docs and provide relevant package/build checks. If a full web app, restore the real app entry and configure ESLint. Make CI and README agree and require passing checks before merge.
 
-**Evidence:** `docs/ARCHIE_GAP_AUDIT_2026-09-16.md` records no OCR/scene understanding, no video perception, audio limited to transcripts, English-only NLU/code-switching, and no broad proactive email/Telegram/iMessage channels. The capability matrix notes PNG pixel analysis but structural-only JPEG/GIF and explicitly no object recognition. These are documented gaps; this audit did not implement or independently benchmark them.
+### R-09. Main branch protection and security alert configuration need owner action
 
-**Next work:** Maintain a capability matrix with one row per modality/language/channel: supported inputs, tested limit, provenance, privacy boundary, operational status, and refusal copy. Prioritize only user-approved use cases; add bounded OCR/scene/video/language support behind explicit consent and adversarial tests. Do not describe the existing PNG statistics or transcript input as general vision/audio understanding.
+**Evidence:** The earlier GitHub audit reported `main` unprotected and Dependabot alerts unavailable/disabled. These settings were not rechecked during this update.
 
-### 11. Web research, coding, and calibrated uncertainty need outcome-grade evaluation
+**Remaining work:** Recheck repository settings; owner enables required reviews/checks, force-push/deletion protection, dependency alerts/updates and supported secret scanning. Record actual settings, not assumed status.
 
-**Evidence:** The September 16 gap audit labels open-ended code authoring as scaffold-only, web research as DuckDuckGo-Lite adapter-bounded, and probabilistic/causal reasoning as thin or uncalibrated. The capability matrix reports 52/52 benchmark cases, but a small authored benchmark is not by itself broad real-world accuracy evidence.
+### R-04. Scheduler state and quota policy need live verification
 
-**Next work:** Expand held-out, adversarial, and task-success evaluations using documented datasets and independently reviewed expected outcomes. Measure source quality/citation correctness and refusal calibration for research; keep code-generation in propose/test/owner-approve/apply stages; evaluate confidence calibration and contradiction handling across unseen tasks. Report sample sizes, false-positive/false-negative rates, and supported domain boundaries rather than a single “full score.”
+**Evidence:** Repository notes conflict about whether the maintenance scheduler is paused or active; no live scheduler/job-run query was performed during this update.
 
-### 12. Repository documentation and status counts are stale
+**Remaining work:** Confirm live jobs and recent run records through an authorized Supabase channel. Keep paused until an owner approves quota/cost limits, idempotency, run bounds, alerts and recovery steps. Update docs to one timestamped state.
 
-**Evidence:** `README.md` says 25 deployed edge functions and a 302-migration chain; current source tree contains 304 SQL migrations, while the latest deploy workflow iterates 26 `archie-*` function directories. The capability matrix is labeled final 2026-09-11; the gap audit was last updated 2026-09-16, predates the October 10 scheduler pause, and contains contradictory priority/status statements. Current production deployment count is not verifiable because deployment authentication fails.
+## P2 — broader capability and architecture decisions
 
-**Next work:** After repairing CI/deploy and confirming live state, update the README and audit docs with reproducible generated counts, commit SHA, date, exact test/build outputs, current scheduler state, and per-environment deployment evidence. Avoid “deployed/live” labels without direct health/DB evidence.
+### R-03. Native deterministic reasoning is not open-ended generation
 
-## Recommended execution order
+**Evidence:** The ARCHIE-owned model runtime reports non-operational. The native/cognitive stack is model-free deterministic reasoning, routing, stored facts, templates and bounded tools. No external model is added or assumed by this handoff.
 
-1. Repair the three calculation-trace failures and escrow acceptance-window test/behavior; get CI green.
-2. Replace the invalid GitHub Actions Supabase token through secure settings; rerun deployment and verify intended targets.
-3. Reconcile the two same-version migrations against all live ledgers before any migration changes or application.
-4. Verify and document scheduler state; keep paused until owner-approved quota/cost safeguards are set.
-5. Harden mandatory audit persistence and align deploy/health-check target inventory.
-6. Add build/lint and required GitHub branch protections/security alerts.
-7. Update capability claims and prioritize the owner-approved generative/perception/research gaps with measurable evaluations.
+**Remaining work:** Keep user-facing claims aligned with tested behavior. An owner/product decision is needed on whether model-free limits are intentional or a future capability gap; no external model or new inference provider should be introduced without explicit direction and separate privacy/safety/evaluation design.
 
-## Guardrails for the next engineer
+### R-10. Modality and channel coverage remains limited
 
-- No secrets, access tokens, service-role keys, or database URLs in this file, source, commits, or chat.
-- Do not apply migrations, change production secrets, re-enable scheduled jobs, or deploy functions without the project owner’s explicit approval and a verified target.
-- Preserve owner authorization, life-safety, security-verdict, consent, and honest-refusal gates. Learning or agent tasks must never grant new execution authority.
-- Do not mark a capability “operational” because a module exists, a test passes, or an endpoint returned once. Record the evidence and limit.
-- Use one ARCHIE intelligence core; do not create sub-agent minds or silent external-model substitution.
+**Evidence:** Existing capability notes describe narrow image/audio support and limited languages/channels; these are not equivalent to general vision, speech understanding or multilingual autonomy.
 
-## Source-code audit addendum — deep agent-readiness review
+**Remaining work:** Reconcile the capability matrix with tested behavior. Prioritize only approved use cases, with consent, privacy controls, bounded inputs and adversarial tests.
 
-**Audit date:** 2026-10-17  
-**Source snapshot:** `main` at `cdc22fa648110c760f580b4e8d3977139244aa29`  
-**Scope:** Targeted source review of the native runtime, cognitive kernel, reasoning loop, verifier, `archie-chat` request/tool boundary, fetchers, persistence configuration, and related tests. This is a code review of the checked-out GitHub snapshot, not a clean install, full test run, database audit, or live exploit test. Findings below distinguish directly visible code behavior from risks requiring concurrency/runtime reproduction. The previous repository/workflow findings above are retained; their CI/deployment observations were not re-run as part of this source review.
+### R-11. Research and calibrated uncertainty need outcome-grade evaluation
 
-### Source-review verdict
+**Evidence:** Existing benchmarks are small authored suites; passing them alone does not establish broad real-world source quality, citation correctness, or confidence calibration.
 
-ARCHIE contains substantial deterministic logic, but the checked-in code does not implement a general-purpose language model or a fully autonomous agent. The native stack is largely hand-coded NLU, pattern routing, deterministic templates/tools, and bounded clause processing. A future model runtime is explicitly disabled. More importantly, several control-plane claims are stronger than the enforcement: the verifier can return `PASS` while key checks fail, request-level privacy is implemented by mutating process-wide engine singletons, and the public website-fetch path follows redirects after validating only the initial host. These are production-trust/security issues, not cosmetic capability gaps.
+**Remaining work:** Add held-out/adversarial task-success evaluations and independently reviewed expected outcomes. Report samples, error rates, citation correctness and supported domain boundaries.
 
-## P0 — resolve before claiming production-safe agent operation
+## Guardrails
 
-### C-01. Request-level memory consent is applied by mutating a process-wide singleton
-
-**Severity:** P0 privacy/isolation risk; source-confirmed design flaw, concurrent impact requires runtime reproduction.  
-**Evidence:** `supabase/functions/archie-chat/index.ts:2320-2335` reads the current request's `personalization_memory` consent and calls `configureCognitiveEnginePersistence(revoked ? null : db)`. That function in `supabase/functions/_shared/archie-ai/cognitive/kernel.ts:74-87` mutates module-global `configuredDb`, clears a module-global `kernelSingleton`, and also changes the native engine's module-global persistence configuration. The native engine repeats this pattern in `native-engine/engine.ts:4044-4063, 4105-4115`. These are shared isolate variables, not request-scoped dependencies.
-
-**Impact:** Concurrent requests can interleave between the consent lookup/configuration and `getCognitiveEngine()`/cycle startup. A request whose consent is revoked can therefore resolve a kernel created after another request re-enabled DB persistence, or a granted request can replace a singleton while another request is being initialized. The code comment promises a per-request privacy gate, but the implementation configures shared process state. No concurrency test or live reproduction was run, so the exact race window and deployment frequency remain to be measured.
-
-**Required work:** Pass persistence/consent as immutable per-request engine dependencies or use isolated engine instances for consent-sensitive requests. Never reset a shared singleton to implement one user's consent. Add deterministic concurrent tests that interleave granted/revoked requests around resolution and prove revoked requests make zero persistent reads/writes, while another request cannot change their configuration.
-
-**Acceptance:** The privacy test suite demonstrates zero persistence access for revoked requests under forced concurrency; no request can alter another request's persistence configuration.
-
-### C-02. The formal verifier can issue `PASS` when completeness, source quality, and uncertainty checks fail
-
-**Severity:** P0 trust/assurance defect.  
-**Evidence:** `supabase/functions/_shared/archie-ai/cognitive/verification.ts:140-150` records missing required aspects as a failed completeness check; `:175-191` records source-quality failure for all-web-cited outputs; `:207-219` records low-confidence facts as an uncertainty failure. But `:221-235` computes a hard failure from correctness, consistency, or security only, and returns `PASS` whenever there is at least one cited fact and no hard failure. `kernel.ts:790-812` invokes the verifier with `requiredAspects: []`, making completeness vacuous for the actual response path; the result is not used to block or qualify the response unless verdict is `FAIL` and the route is strict (`kernel.ts` around the verification-result handling after line 850).
-
-**Impact:** The prominent formal verdict is not an overall verification result. It can say `PASS` with a recorded failed check, and the production call currently supplies no completeness requirements. Web-sourced claims can pass without cross-checking, and low-confidence citations can pass. This undermines the stated verification-before-presentation gate.
-
-**Required work:** Define an explicit policy mapping each check to `FAIL`, `UNVERIFIED`, warning, or pass; never label the aggregate `PASS` when required checks fail or are not run. Supply task-specific required aspects for supported workflows. Re-verify tool/calculation outputs against the exact final output, not merely `invocation.ok`; add tests for each combination and assert both verdict and user-visible behavior.
-
-**Acceptance:** No output receives `PASS` if a mandatory check fails or is skipped; absence of evidence becomes `UNVERIFIED`; critical tasks fail closed or receive an unmistakable limitation.
-
-## P1 — security, correctness, and operational reliability gaps
-
-### C-03. Website inspection allows redirects after checking only the original hostname
-
-**Severity:** P1 SSRF risk.  
-**Evidence:** `supabase/functions/archie-chat/index.ts:1320-1344` checks the user-supplied hostname for private/local patterns. The subsequent helper at `:1392-1412` sets `redirect: "follow"`; the `web_intelligence` path at `:760-790` fetches the original URL and consumes the final response without validating `res.url` against the blocked-host rules. A public URL can therefore redirect to a private/reserved destination without a per-hop host check. The separate research `PageFetcher` has a first-hop hostname/IP guard but also uses `redirect: "follow"` (`supabase/functions/_shared/archie-ai/native-engine/page-fetch.ts:306-349`), with DNS resolution explicitly out of scope at `:313-315`.
-
-**Impact:** Server-side fetches may reach internal or metadata endpoints through redirects (and potentially DNS rebinding depending on runtime resolver behavior). This is a code-path risk identified by inspection, not a live exploit demonstration.
-
-**Required work:** Use manual redirect handling with a strict hop cap; resolve and validate each destination before following; reject private/reserved IPv4/IPv6 and non-public DNS answers; defend against rebinding at connection time or use a controlled egress proxy. Apply the same policy to both website inspection and research fetches. Test public-to-loopback, public-to-link-local, redirect chains, IPv6, encoded/alternate IP forms, and DNS changes.
-
-**Acceptance:** Every network connection destination is validated, redirects are bounded, and adversarial redirect/DNS tests prove private destinations are never contacted.
-
-### C-04. Fetch response size is checked after full body buffering in the research fetcher
-
-**Severity:** P1 resource-exhaustion risk.  
-**Evidence:** `native-engine/page-fetch.ts:385-414` checks `Content-Length`, then calls `await res.text()` at `:398`, and only afterwards checks `html.length > maxBytes` at `:408`. Missing, false, or compressed `Content-Length` therefore does not bound memory consumed before rejection. The comment says the body is never buffered when oversized, but this implementation buffers it first.
-
-**Impact:** A large or endless response can consume edge-function memory before the cap is enforced. The separate `archie-chat` inspection path streams and cancels after 500,000 characters (`index.ts:777-789`), showing the bounded-stream pattern is available but not shared with this fetcher.
-
-**Required work:** Read the response stream incrementally, count actual bytes, cancel immediately at the configured byte cap, and enforce an overall deadline on both headers and body. Test missing/incorrect length headers, compressed responses, multibyte content, and stalled streams.
-
-**Acceptance:** Memory use is bounded by a small fixed buffer plus configured maximum, regardless of server-supplied headers.
-
-### C-05. Tool execution results are reported as successful even when the tool returns an error object
-
-**Severity:** P1 observability and trust defect.  
-**Evidence:** In `supabase/functions/archie-chat/index.ts:2459-2468`, tool output is awaited and every returned value is appended to `toolRuns` with `ok: true`; several tools return `{ error: ... }` or `{ persisted_to_learning: false, ... }` instead of throwing (for example `market_intelligence` around `:890-905`, `web_intelligence` around `:802-819`, and database-backed tool handlers). The caller does not normalize the tool's result into a failure status before recording it.
-
-**Impact:** API consumers and operators can see `toolRuns[].ok === true` for failed queries, denied operations, or failed persistence. This corrupts run telemetry and may cause downstream logic or users to treat failure payloads as successful work.
-
-**Required work:** Standardize a discriminated tool-result contract (`ok`, `data`, `error`, provenance) for every tool. Catch thrown failures and normalize returned errors; preserve partial results separately. Add tests for returned errors, thrown errors, partial persistence, and successful empty results.
-
-**Acceptance:** `ok` is true only when the tool contract reports success; a successful empty result is distinct from query failure, and all outcomes are auditable.
-
-### C-06. Public visitor rate limiting is keyed by a caller-controlled client ID and stored per isolate
-
-**Severity:** P1 abuse/cost-control weakness.  
-**Evidence:** `archie-chat/index.ts:2102-2107` derives the visitor rate-limit key from request-body `clientId` (default `anon`) and calls the in-memory `checkRateLimit`. The shared limiter in `supabase/functions/_shared/rate-limit.ts` documents that buckets are per Deno isolate. A caller can choose new client IDs and requests can be distributed across isolates, avoiding a dependable per-user/IP global limit.
-
-**Impact:** The 12-requests-per-minute check is not an effective public abuse or spend-control boundary. Anonymous traffic can evade it by rotating IDs and/or reaching multiple isolates. This is not proof of a current abuse incident.
-
-**Required work:** Apply a distributed edge/API-gateway rate limit keyed by trusted network identity and, when available, authenticated user; treat client ID only as a conversation identifier. Add global concurrency and request-size/time budgets, abuse monitoring, and load tests across multiple instances. Do not trust an unvalidated `x-forwarded-for` value unless the platform guarantees it.
-
-**Acceptance:** Limits hold across isolates and client-ID rotation, with measured request ceilings and a documented abuse response.
-
-### C-07. The production tool-resume loop is capped at three hops and does not report remaining pending work
-
-**Severity:** P1 agent capability/contract gap.  
-**Evidence:** `archie-chat/index.ts:2436-2476` executes at most three tool-call/resume iterations. After the third result, a subsequent tool call is not executed, but the handler proceeds to assemble text from `result.parts` at `:2481-2505` without an explicit “tool budget exhausted / pending tool not run” status. The cognitive reasoning loop advertises a separate budget of eight tool hops (`native-engine/reasoning-loop.ts` constants near the top), so the production caller and loop have different budgets.
-
-**Impact:** Multi-tool requests can stop mid-task or return an incomplete/ambiguous response while the tool budget in the reasoning layer suggests more work was allowed. Tool calls are not guaranteed to be completed or explicitly marked pending.
-
-**Required work:** Unify the caller and kernel tool budgets; track executed, failed, and pending calls; return an explicit incomplete/budget-exhausted result and do not phrase it as completed. Add tests for 0, 1, 3, and >3 calls and for a tool call emitted on the final allowed hop.
-
-**Acceptance:** Every requested action ends in completed, failed, blocked, or explicitly pending state; no tool call is silently dropped.
-
-### C-08. The advertised “reason → act → observe → continue” loop is primarily independent clause passes, not an observation-driven agent loop
-
-**Severity:** P1 capability-claim/code gap.  
-**Evidence:** `native-engine/reasoning-loop.ts:178-206` runs a single clause once. For compound requests, `:251-275` calls `engine.converse(clause.text, history, ...)` separately for each clause; it does not add earlier step outputs/tool results to the next step's history or create a plan from observed results. `:277-322` concatenates the per-clause answers. The kernel comments at `cognitive/kernel.ts:628-647` describe a reason-act-observe-continue loop, but this controller is sentence/intent decomposition with bounded passes.
-
-**Impact:** It does not reliably plan from intermediate findings, adapt when a tool fails, or use one step's result as the next step's evidence. Multi-part conversation is not equivalent to an autonomous agent loop.
-
-**Required work:** Either accurately describe this as deterministic compound-request decomposition, or implement an explicit plan/action/observation/replan state machine with typed observations, evidence linkage, per-step authorization, bounded retries, idempotency, cancellation, and completion criteria. Never invent progress between steps. Evaluate on held-out multi-tool tasks with injected failures.
-
-**Acceptance:** Tests demonstrate that later actions are selected from actual earlier results, failures trigger safe replanning/refusal, and completion claims correspond to recorded evidence.
-
-### C-09. Tool parameter schemas were advertised without complete runtime enforcement
-
-**Status: ✅ Closed in source and regression coverage (bounded ARCHIE schema dialect; not a claim of full JSON Schema conformance).**
-
-**Evidence before remediation:** Native tool dispatch validated only required-key presence. Chat validation covered a partial schema subset, silently ignored unsupported keywords, and production contracts omitted nested shapes and several cross-field requirements.
-
-**Remediation:** A shared bounded schema validator now validates both schema declarations and arguments, rejects unknown/malformed keywords and unsafe regular-expression features, enforces nested object/array structure, exact types, enums/constants, required/optional fields, unknown-property policies, cross-field dependencies, composition (`anyOf`/`oneOf`/`allOf`/`not`), string formats/bounds, numeric bounds, and request size/depth/key/item limits. Native contracts support recursive object/array parameter schemas and route every tool invocation through the same validator; malformed calls never reach handlers. The chat boundary validates provider calls and repeats validation immediately before dispatch. The separately registered execution engine uses the same validator for configured target inputs and results.
-
-**Production tool coverage:** All registered `archie-chat` tools now have explicit bounded root object contracts with unknown top-level properties rejected. `code_intelligence` requires `code` or `repo_path`; `property_intelligence.building` validates only declared bounded facts; execution-history limits are integers within the actual query range; execution payloads remain recursively bounded. Tests enumerate every registered production tool schema and exercise nested contracts, invalid declarations/keywords, boundary cases, prototype-shaped inputs, composition, and no-dispatch behavior on invalid native calls.
-
-**Scope:** This is a deliberately bounded, dependency-free JSON Schema dialect. It is not advertised as draft-2020-12 compliance; unsupported features such as references and arbitrary formats fail closed. Source and automated tests establish implementation behavior, not live deployment, database target-schema quality, or production traffic verification.
-
-### C-10. The actual user-facing verifier currently has no completeness criteria
-
-**Severity:** P1 quality gap, separate from the aggregate-verdict defect C-02.  
-**Evidence:** The production kernel call in `cognitive/kernel.ts:790-812` always passes `requiredAspects: []`. The verifier's completeness implementation (`verification.ts:117-150`) therefore has no required items to check on this path.
-
-**Impact:** Despite the completeness subsystem existing and being listed in diagnostics, the live response path cannot catch omitted user-requested requirements through this check.
-
-**Required work:** Derive explicit required aspects from supported structured task schemas and user requests, or report completeness as not evaluated. Do not pretend free-form extraction is reliable; use workflow-specific contracts for calculators, research, code review, and execution.
-
-**Acceptance:** Each supported task class has tests proving requested outputs/constraints are captured and checked, with “not evaluated” represented honestly.
-
-## P2 — product separation, maturity labeling, and maintenance debt
-
-### C-11. The chat execution path is FRELUX-bound, not an independently deployable ARCHIE product boundary
-
-**Evidence:** `supabase/functions/archie-chat/index.ts` hard-wires FRELUX tables and product flows throughout the tool registry (for example `frelux_archie_ingestions`, `material_prices`, `profiles`, `client_estimates`, FRELUX execution targets, and FRELUX market observations). The `archie-chat` module creates a service-role client and queries those tables directly. The file itself describes API-credential support as “extraction-ready,” but there is no separate ARCHIE data/service abstraction replacing these FRELUX dependencies.
-
-**Impact:** Removing ARCHIE from FRELUX or deploying it as a standalone agent requires a compatibility schema and host integration, not merely moving this function. FRELUX data models and the agent core are coupled.
-
-**Required work:** Separate the agent core from host tools using a typed host-adapter interface; keep FRELUX-specific tool implementations in an explicit integration package. Document required tables/scopes and provide a no-host mode. Add contract tests with a fake host adapter and integration tests for FRELUX.
-
-### C-12. “Operational” capability status is not equivalent to general agent capability
-
-**Evidence:** `runtime.ts:167-185` explicitly reports the future model runtime as non-operational, with no capabilities and an inference error. The active native/cognitive runtimes register inference and reasoning capabilities (`runtime.ts:208-224`), but those engines are deterministic code, keyword/intent routing, stored facts, templates, and bounded tools rather than a general language model. The cognitive manifest in `cognitive/kernel.ts` also documents open-ended generation and multimodal image/audio as unimplemented (see `capabilities()`/manifest near lines 180-225). Owner-local generation is a separate optional path in `native-engine/engine.ts:2685-2703` and is not the ARCHIE-owned model runtime.
-
-**Impact:** “Inference” or “operational cognitive engine” can be read as general-purpose language intelligence when the underlying behavior is substantially narrower. The correct distinction is between a working deterministic agent substrate and absent/optional open-ended model generation.
-
-**Required work:** Publish a capability matrix that maps each user-visible ability to actual implementation, dependencies, test evidence, supported domain, and refusal behavior. Label generation, image/audio, web research, code authoring, and multi-step tool autonomy separately. Decide whether FRELUX requires a hosted model or a genuinely ARCHIE-owned model; do not imply the latter exists today.
-
-### C-13. Consent-read errors default to persistent memory enabled
-
-**Severity:** P1 privacy policy fallback risk; independent of the concurrency defect.  
-**Evidence:** `archie-chat/index.ts:2321-2335` reads consent; when the query throws, the catch calls `configureCognitiveEnginePersistence(db)`, enabling persistence. Missing consent rows also default to not revoked (`:2328-2330`).
-
-**Impact:** If the consent store is unavailable or unreadable, the code fails open for personalization rather than disabling it or clearly requiring a policy-backed default. Whether this violates product policy depends on the intended consent model; the code comments claim revoked consent is honored but do not define what absence/error means.
-
-**Required work:** Obtain and document the product/legal default for no consent and consent-service failure. For an opt-in consent model, fail closed to no personalized persistence on unknown/error; distinguish “unset,” “granted,” “revoked,” and “lookup failed.” Test each state.
-
-### C-14. Full source-level validation remains outstanding
-
-**Evidence:** This review used a GitHub tarball snapshot and targeted source reads. It did not run `npm ci`, the complete test suite, lint, typecheck, build, migration replay, Supabase function tests, or live runtime/security probes on the audited snapshot.
-
-**Required work:** After addressing priority findings, run a clean reproducible install and all repository checks on a fresh checkout; add focused regression tests for C-01 through C-10; record exact command results and commit SHA. Separately verify deployed function revision, database migration ledger, consent behavior, and egress controls in the authorized production environment. Do not claim the code is fixed/live from this handoff alone.
-
-## Priority sequence for the next engineer
-
-1. Fix request-scoped persistence/consent isolation (C-01) and define fail-closed consent semantics (C-13).
-2. Correct verifier verdict policy and wire real completeness requirements (C-02, C-10).
-3. Close redirect and streaming-body SSRF/resource gaps (C-03, C-04).
-4. Correct tool outcome reporting, shared rate limiting, tool-hop completion, and strict schema validation (C-05 through C-07, C-09).
-5. Decide whether to implement a genuine observation-driven agent loop or narrow the claims (C-08); publish capability labels (C-12).
-6. Separate FRELUX-specific adapters from the agent core if ARCHIE must power other products or operate independently (C-11).
-7. Run clean full validation and obtain live operational evidence (C-14).
-
-## Audit discipline
-
-- “Verified in source” means the cited code path is present in the audited commit; it does not mean a live exploit or production incident was demonstrated.
-- Concurrency and SSRF findings need regression tests and safe test harnesses, not assumptions about a particular edge runtime.
-- Keep the previous repository/workflow findings above until each is individually rechecked and completed. This addendum does not mark any old work done.
-- Do not apply migrations, rotate secrets, deploy, or change production behavior without the owner’s explicit authorization and a verified target.
-
-
-## Remediation status update — 2026-10-17
-
-This status update supersedes the earlier “Required work” only for the finding IDs explicitly marked below. It records source changes and tests on the remediation branch; it does **not** claim deployment, production configuration, a successful full CI run, or closure of findings marked partial/open.
-
-### Addressed in this branch
-
-- **✅ C-01 — request-scoped consent/persistence isolation:** owner chat now creates a fresh cognitive kernel/native engine for the request and fixes its persistence adapter at construction. The request-specific world timeline is attached to that engine, rather than reconfiguring the shared native singleton. Focused isolation and consent tests pass.
-- **✅ C-02 — aggregate verifier verdict:** every applicable failed check now produces `FAIL`; absent recheck/completeness evidence is represented as `UNVERIFIED`, not a pass. Strict routes withhold unverified output. Regression coverage was added.
-- **✅ C-05 — tool outcome reporting:** operational tool results now record explicit failures and thrown errors as failed tool runs rather than unconditional success. Contradictory result objects containing both a success flag and an explicit failure are treated as failures.
-- **✅ C-13 — consent-read fallback:** memory persistence is opt-in for owner chat. Missing rows, revoked/malformed records, and consent query errors leave request persistence disabled; vocabulary capture is also gated on affirmative consent.
-
-### Partially addressed; remaining work is still required
-
-- **⚠️ C-03 — public URL/redirect safety:** native page fetching validates every redirect destination, limits redirect hops, and rejects IPv6 literals it cannot verify. Chat URL inspection also validates redirects. DNS resolution pinning/rebinding and controlled egress are still not implemented or live-tested.
-- **⚠️ C-04 — response-size bounds:** native page and chat site inspection now stream and cap page/robots bodies before parsing; the later bounded web-inspection update supersedes earlier wording that chat used `Response.text()`. Re-audit any other outbound fetch paths separately; DNS pinning/controlled egress remain open.
-- **⚠️ C-06 — rate limiting:** authenticated non-owner requests now key the isolate-local quota by account ID rather than caller-controlled conversation ID. Anonymous callers can still rotate IDs, and all isolate-local counters remain bypassable across instances; trusted edge identity and a shared limiter are outstanding.
-- **⚠️ C-07 — tool-hop completion:** the final unexecuted tool call is now recorded as pending and the reply says the action was not run. The chat and reasoning-loop budgets are not unified, and broader state-machine tests for all boundary counts remain outstanding.
-- **✅ C-09 — runtime schemas:** closed in source and automated coverage using ARCHIE's documented bounded schema dialect. Chat and native tools enforce complete declared contracts, execution targets share the validator, production tool schemas are enumerated in tests, and invalid calls are rejected before handler side effects. This does not claim full JSON Schema draft compliance or production deployment verification.
-- **⚠️ C-10 — completeness:** a missing task-specific contract is now explicitly `UNVERIFIED` and cannot pass strict verification. The production path still supplies no derived per-task required aspects, so completeness is not yet evaluated against the user's actual request.
-- **⚠️ C-14 — validation:** typecheck and focused regression coverage pass (details below), but the full suite is red and lint/build cannot currently complete in this checkout. Live deployment, database/migration, consent-service, and egress verification have not been performed.
-
-### Still open
-
-- **C-08:** no observation-driven plan/action/replan state machine was implemented; narrow claims or build and evaluate that capability.
-- **C-11:** FRELUX host coupling remains; no host-adapter separation was implemented.
-- **C-12:** a tested user-facing capability matrix and revised capability labels remain outstanding.
-- The earlier repository/release finding **#1** remains open: the current full run still has three calculation-provenance test failures and one escrow acceptance-window failure. No production release should be claimed until those are resolved and CI passes.
-- Other repository-level findings (#2–#12) above were not re-audited or changed in this remediation.
-
-### Validation evidence on the remediation checkout
-
-- `npm run typecheck` — **passed**.
-- Focused tests for memory integration, cognitive engine/verifier/tool validation, page fetch, and PWA source checks — **4 files passed; 112 tests passed; 1 skipped**.
-- `git diff --check` — **passed** before the handoff update; rerun before commit.
-- Full `npm test -- --reporter=dot` — **failed**: 260/262 test files passed; 3,111 tests passed, 4 failed, 2 expected failures, 1 skipped. Failures: three existing calculation-trace assertions and one escrow acceptance-window assertion. These failures were not addressed by this remediation; full green CI remains an open release gate.
-- `npm run lint` — **blocked**: repository has no `eslint.config.js`/`.mjs`/`.cjs` for the installed ESLint 9; this is a repository configuration gap, not a passing lint result.
-- `npm run build` — **blocked**: the checked-out repository tree has no root `index.html`, so Vite cannot resolve its entry module. No successful production build is claimed.
-- No function was deployed, no migration was applied, and no production runtime was queried.
-
-## Remediation status update — 2026-10-17 (follow-up on `main` 4266a8c)
-
-This follow-up supersedes the earlier status for repository finding **#1** only. Changes are prepared on a non-production branch; they have not been deployed. No production token, migration, or runtime configuration was changed.
-
-### Repository finding #1 — calculation provenance and escrow test stability
-
-- **✅ Calculation provenance:** `ArchieNativeEngine` now accepts an optional typed calculation trace sink and emits provenance for actual deterministic statistics, arithmetic, and unit-conversion invocations. Records include the calculator, inputs/operation, valid/failed status, and computed result or error. Sink exceptions are isolated and cannot change the calculation answer. Invalid arithmetic that is never invoked produces no fabricated success record.
-- **✅ Escrow timing test stability:** the test's old/recent delivery fixtures are now calculated relative to the test's real clock, rather than fixed September 2026 dates that silently became stale. The production acceptance-window calculation and threshold were not loosened or changed.
-- **Validation:** focused calculation-trace and escrow tests pass (**2 files, 17 tests**); full `npm test -- --reporter=dot` passes (**262 files, 3,115 passed, 2 expected-fail, 1 skipped**); `npm run typecheck` passes; `git diff --check` passes.
-
-### Remaining release gates (not addressed by this follow-up)
-
-- `npm run build` remains blocked because this repository snapshot has no root `index.html` or app entry. This appears to be an engine repository rather than a complete Vite web-app checkout; no placeholder app was fabricated.
-- `npm run lint` remains blocked because the repository has no ESLint 9 flat configuration. Lint has not been represented as passing.
-- The previously documented Supabase Actions credential failure and live deployment/runtime status remain unverified. This change has **not** been deployed; the handoff's production authorization rule remains in effect.
-- Broader agent-readiness items and other repository findings remain open; this update does not imply the whole handoff is complete.
-
-
-## Remediation status update — 2026-10-17 (agent-worker audit persistence)
-
-This update addresses the silent lifecycle-event failure portion of repository finding **#5** on `main` at `be0a2f9`; it does not claim the full finding is closed or the worker is deployed.
-
-- **✅ Schema-valid lifecycle events:** the worker now uses the database's constrained event vocabulary (`REPORT` / `FAIL` for terminal outcomes) and the agent owner's UUID as `actor`. It no longer writes unsupported event labels such as `TASK_EXECUTED` or a non-UUID actor string.
-- **✅ Storage failures are explicit:** the event helper validates UUIDs and event names, and checks Supabase's returned `{ error }` as well as thrown errors. Empty-task/gate outcomes report an explicit 500 if their lifecycle event cannot be recorded. After task execution, a report is persisted first; if the terminal lifecycle event fails, the worker returns an explicit incomplete/error response rather than success. Cycle errors are retained in the report detail instead of disappearing in swallowed event writes.
-- **Validation:** focused worker/audit-event tests pass (**2 files, 7 tests**); `npm run typecheck` passes; `git diff --check` passes. Full `npm test -- --reporter=dot` passes (**263 files, 3,120 passed, 2 expected-fail, 1 skipped**).
-- **Still open for finding #5:** report/event writes are separate operations, so a failure between them can leave a report without its terminal event. Durable outbox/transactional coupling, retry idempotency, and fault-injection coverage of the full HTTP handler remain future work. Non-authoritative security-event/telemetry handling is not changed here.
-- **Deployment:** no deployment, migration, production database query, or credential change was performed. The deploy credential issue in finding #2 remains separate and unverified.
-
-## Remediation status update — 2026-10-17 (bounded chat web inspection)
-
-This update addresses the remaining response-buffering exposure in C-04 for the `archie-chat` `web_intelligence` tool. It does not close DNS rebinding/controlled-egress items in C-03 or constitute live runtime verification.
-
-- **✅ Bounded page and robots bodies:** added a shared streaming text reader that counts raw bytes, cancels once the limit is exceeded, and safely decodes split UTF-8 chunks. `web_intelligence` now caps HTML at 500,000 bytes and robots.txt at 64,000 bytes before parsing or persisting. Oversized page content returns an explicit error and is not partially ingested.
-- **✅ Regression coverage:** covers exact-limit multi-byte UTF-8, cancellation on over-limit input, bodyless responses, and invalid limits.
-- **Validation:** focused bounded-reader tests pass (4/4); full `npm test -- --reporter=dot` passes (264 files, 3,124 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` pass. The implementation is committed on `main`; see repository history for the exact SHA.
-- **Still open:** C-04 response bounding in any other fetch paths must be re-audited; DNS resolution pinning and controlled egress remain outside this change.
-
-## Agent-readiness follow-up — complete bounded runtime tool contracts (2026-10-17)
-
-This update closes **C-09** in source and automated regression coverage using a deliberately bounded JSON Schema dialect. It is model-free and adds no external-model dependency; it does not close C-08, C-10, C-11, or C-12.
-
-- **✅ Shared validator:** schema declarations now fail closed for unsupported keywords, malformed types, invalid ranges, unsafe patterns, and malformed nested declarations. Argument validation covers recursive objects/arrays, enums/constants, bounds, exact integer checks, cross-field requirements, composition, formats, and global size/depth/item/key limits.
-- **✅ Native and chat dispatch:** native tool parameter types now support recursive objects and arrays and every call is checked by the shared validator before the handler. Chat provider calls are checked on receipt and rechecked immediately before side effects. The authorized execution engine also applies the same validator to configured target inputs and result payloads.
-- **✅ Production contracts:** all registered chat tools now have bounded root schemas and reject undeclared root fields. `code_intelligence` enforces code-or-repository-path; property building facts are explicitly typed/ranged; history limits are integer-bounded; execution input is recursively bounded.
-- **✅ Regression coverage:** added schema-dialect tests for malformed/unsupported schema declarations, nested values, boundary constraints, formats, composition, resource limits and prototype-shaped inputs; added a registered-tool contract sweep and native no-handler-on-invalid tests. Existing execution-schema tests now assert the shared error vocabulary.
-- **Scope limitation:** this is not full draft-2020-12 JSON Schema; unsupported references and formats fail closed. Tests prove source behavior only. Live deployment, persisted target schema data quality, and production traffic have not been verified.
-- **Validation:** focused runtime/native/execution/chat contract tests pass (4 files, 66 tests); full `npm test -- --reporter=dot` passes (265 files, 3,135 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` pass. These checks prove source behavior only. No external model, migration, or production configuration change is intended.
-
-## Security and reliability update — bounded inbound request bodies (2026-10-17)
-
-This update addresses a resource-exhaustion gap at the ARCHIE chat and internal agent-worker HTTP boundaries. It does not claim distributed rate limiting, deployment verification, or remediation of every security item in this handoff.
-
-- **✅ Bounded streaming JSON reader:** added a shared request parser that enforces declared and actual byte limits before assembling/parsing JSON, cancels oversized streams without waiting on client-controlled cancellation, rejects invalid UTF-8/JSON, and applies a hard upload-read deadline.
-- **✅ Chat boundary:** requests are limited to 128 KiB and a 10-second body-read deadline. Messages, conversation history, and attachment descriptor shapes/counts are explicitly checked before tool or cognitive work; malformed JSON shapes return controlled 400 responses, oversize bodies return 413, and stalled bodies return 408.
-- **✅ Internal agent-worker boundary:** authenticated task requests are limited to 8 KiB and the same deadline before agent/database lookup; request object shape and agent/run/task UUID identifiers are validated before database access.
-- **✅ Regression coverage:** tests cover exact-limit parsing, declared and streamed oversize bodies, cancellation, stalled streams, invalid JSON/UTF-8, and endpoint-level 400/408/413 behavior.
-- **Validation on this checkout:** focused request-boundary/chat/worker tests pass (3 files, 22 tests); full `npm test -- --reporter=dot` passes (266 files, 3,144 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` pass.
-- **Still open:** this does not close C-06's cross-isolate anonymous rate-limiting gap or C-03 DNS rebinding/controlled-egress risk. It does not change secrets, migrations, or production configuration and does not verify a live deployment.
-
-### Handoff correction
-
-The earlier C-04 remediation note said the chat site-inspection path still buffered with `Response.text()`. That statement is superseded by the later bounded chat web-inspection change recorded above: current `archie-chat` page and robots bodies use `readBoundedText` with 500,000-byte and 64,000-byte caps. Other outbound fetch paths and DNS/egress behavior still require separate audit; this correction is not a claim that every HTTP body in the repository is bounded.
+- No credentials, service-role keys, database URLs or secrets in source, commits, handoff, or chat.
+- Do not apply migrations, change production secrets, re-enable scheduled jobs, or manually deploy functions without explicit owner authorization and a verified target.
+- A push to `main` may trigger the configured deployment workflow; inspect its result, report it truthfully, and do not retry a failed deployment unless asked.
+- Passing source tests does not establish deployment, production-data quality, live credentials, scheduler operation, or external service health.
+- Preserve consent, owner authorization, life-safety, security-verdict and honest-refusal gates. Do not create sub-agent minds or silently substitute an external model.

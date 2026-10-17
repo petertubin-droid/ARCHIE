@@ -35,6 +35,7 @@ import {
   type ArchieToolSpec,
 } from "../_shared/archie-ai/runtime.ts";
 import { checkRateLimit } from "../_shared/rate-limit.ts";
+import { isToolHopWithinBudget } from "../_shared/archie-ai/native-engine/tool-budget.ts";
 import { readBoundedJsonRequest } from "../_shared/http/bounded-json.ts";
 import { validateToolCall } from "../_shared/archie-ai/native-engine/runtime-schema.ts";
 import { createSupabaseCredentialStore } from "../_shared/archie-ai/security/api-credential-store.ts";
@@ -2583,8 +2584,8 @@ async function executeChat(
       result = await runtime.generate(request);
     }
 
-    // Tool loop (max 3 hops)
-    for (let hop = 0; hop < 3; hop++) {
+    // Tool loop shares the native reasoning hop ceiling.
+    for (let hop = 0; isToolHopWithinBudget(hop); hop++) {
       const call = result.parts.find((p) => p.toolCall)?.toolCall;
       if (!call) break;
 

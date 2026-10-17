@@ -266,11 +266,6 @@ export class PageFetcher {
     return rules;
   }
 
-  private abortSignal(ms: number): AbortSignal {
-    const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), ms);
-    return ctrl.signal;
-  }
 
   /** Validate each redirect URL before making the next request. DNS
    * resolution/rebinding still requires a controlled egress layer. */
@@ -285,14 +280,30 @@ export class PageFetcher {
       }
       const blocked = ssrfRefusalReason(current);
       if (blocked) throw new Error(`${blocked} — refused`);
-      const response = await this.fetchFn(current.href, {
-        headers: {
-          "user-agent": UA,
-          accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
-        },
-        signal: this.abortSignal(this.timeoutMs),
-        redirect: "manual",
+      const controller = new AbortController();
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`fetch timeout after ${this.timeoutMs}ms`));
+        }, this.timeoutMs);
       });
+      let response: Response;
+      try {
+        response = await Promise.race([
+          this.fetchFn(current.href, {
+            headers: {
+              "user-agent": UA,
+              accept: "text/html,application/xhtml+xml,text/plain;q=0.8,*/*;q=0.5",
+            },
+            signal: controller.signal,
+            redirect: "manual",
+          }),
+          deadline,
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       const location = response.headers?.get?.("location");
       if (!location) return response;
@@ -315,30 +326,39 @@ export class PageFetcher {
     response: Response,
     byteLimit = this.maxBytes,
   ): Promise<string> {
-    const reader = response.body?.getReader();
-    if (!reader) {
-      const text = await response.text();
-      if (new TextEncoder().encode(text).byteLength > byteLimit) {
-        throw new Error(`body exceeded ${byteLimit} byte limit`);
-      }
-      return text;
+    if (!Number.isSafeInteger(byteLimit) || byteLimit < 1) {
+      throw new RangeError("byte limit must be a positive safe integer");
     }
+    const reader = response.body?.getReader();
+    if (!reader) return "";
     const decoder = new TextDecoder();
     let bytes = 0;
     let text = "";
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const deadline = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`body read timeout after ${this.timeoutMs}ms`));
+      }, this.timeoutMs);
+    });
     try {
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await Promise.race([reader.read(), deadline]);
         if (done) break;
         bytes += value.byteLength;
         if (bytes > byteLimit) {
-          await reader.cancel("response size limit exceeded");
+          void reader.cancel("response size limit exceeded").catch(() => {});
           throw new Error(`body exceeded ${byteLimit} byte limit`);
         }
         text += decoder.decode(value, { stream: true });
       }
       return text + decoder.decode();
+    } catch (error) {
+      void reader.cancel(timedOut ? "response body read timed out" : "response body read failed").catch(() => {});
+      throw error;
     } finally {
+      if (timeout) clearTimeout(timeout);
       try {
         reader.releaseLock();
       } catch {
@@ -412,7 +432,7 @@ export class PageFetcher {
       res = await this.fetchPublicUrl(url);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const timedOut = /abort/i.test(msg);
+      const timedOut = /abort|timeout/i.test(msg);
       return {
         url,
         ok: false,

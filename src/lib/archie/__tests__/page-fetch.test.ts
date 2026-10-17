@@ -137,6 +137,34 @@ describe("PageFetcher", () => {
     expect(result.content).toBe("");
   });
 
+  it("cancels a stalled response body when the body-read deadline expires", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        // The first pull intentionally never enqueues or closes.
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fn = (async (input: unknown) => {
+      if (String(input).endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nDisallow:\n", { status: 200 });
+      }
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    }) as unknown as typeof fetch;
+    const result = await new PageFetcher({ timeoutMs: 20, fetchFn: fn }).fetch(
+      "https://stalled.example/page",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.note).toMatch(/body read refused: body read timeout after 20ms/);
+    expect(result.content).toBe("");
+    expect(cancelled).toBe(true);
+  });
+
   it("declines an oversized response before reading it", async () => {
     const fetcher = new PageFetcher({
       maxBytes: 1000,
