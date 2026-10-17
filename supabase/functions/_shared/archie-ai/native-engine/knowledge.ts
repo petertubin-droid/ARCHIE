@@ -62,6 +62,7 @@ export class FactRankIndex {
     {
       fact: Fact;
       tokens: string[];
+      surface: string;
       tf: Map<string, number>;
       /** Cached ||fv|| under the CURRENT idf state. */
       norm: number;
@@ -70,6 +71,11 @@ export class FactRankIndex {
     }
   >();
   private postings = new Map<string, Set<string>>();
+  /** Deterministic hashed-embedding recall (engine 8, gap 13):
+   *  consulted ONLY when the exact-token candidate set is
+   *  empty — zero-displacement fusion, existing rankings are
+   *  bit-for-bit unchanged. */
+  private semantic = new SemanticIndex();
   /** Bumped on ANY corpus mutation — idf depends on docs/df,
    *  so every cached norm is wholesale suspect after a write.
    *  Norms are recomputed lazily, per doc, only for docs that
@@ -95,9 +101,12 @@ export class FactRankIndex {
   add(fact: Fact): void {
     if (this.entries.has(fact.id)) this.remove(fact.id);
     const tokens = FactRankIndex.surfaceTokens(fact);
+    const surface = `${fact.subject} ${fact.predicate} ${JSON.stringify(fact.object)}`;
+    this.semantic.add(fact.id, surface);
     this.entries.set(fact.id, {
       fact,
       tokens,
+      surface,
       tf: FactRankIndex.tfOf(tokens),
       norm: NaN,
       normGen: -1,
@@ -120,6 +129,7 @@ export class FactRankIndex {
     if (!entry) return;
     this.docs = Math.max(0, this.docs - 1);
     this.gen += 1;
+    this.semantic.remove(factId);
     for (const term of new Set(entry.tokens)) {
       const df = this.docFreq.get(term);
       if (df !== undefined) {
@@ -199,7 +209,21 @@ export class FactRankIndex {
       const bucket = this.postings.get(t);
       if (bucket) for (const id of bucket) candidateIds.add(id);
     }
-    if (candidateIds.size === 0) return [];
+    if (candidateIds.size === 0) {
+      // SEMANTIC VECTOR MEMORY (engine 8, gap 13): exact-token
+      // recall found NOTHING. Consult deterministic hashed-
+      // embedding recall (char-trigram + word features, dual
+      // gate: cosine floor + 2 anchor tokens) instead of a
+      // flat refusal. Items carry their HONEST cosine as the
+      // score — callers' relevance floors still gate.
+      const { items } = this.semantic.recall(query, k);
+      const recalled: { fact: Fact; score: number }[] = [];
+      for (const it of items) {
+        const entry = this.entries.get(it.id);
+        if (entry) recalled.push({ fact: entry.fact, score: it.score });
+      }
+      return recalled;
+    }
 
     // Per-query idf memo — Math.log per DISTINCT term, not per
     // (candidate × term) pair.
@@ -290,6 +314,7 @@ const CONSOLIDATION_HOLDER: string =
 const CONSOLIDATION_SCOPE = "fact-store-consolidation";
 
 import { NATIVE_CONFIG } from "./config.ts";
+import { SemanticIndex } from "../cognitive/vector-memory.ts";
 
 /** Relevance floor for a ranked fact to count as an
  *  answer (measured 2026-09-16: token-prior noise <= ~0.097,
