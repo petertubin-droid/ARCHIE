@@ -157,3 +157,51 @@ Real, native, bounded — measured by `vision.test.ts` (12 cases):
   summary joins the caption as the text payload, and the
   normal pipeline (secrets, commands, reasoning) runs on it
   unchanged. Audio remains honestly unsupported.
+
+## Engine build-out pass (full-agent audit 2026-10-17, 2026-10-18)
+
+Five engines wired live from the audit gap list, one commit each,
+all deterministic, all fresh-database-safe migrations, all green:
+
+- **Fifth reasoning layer (20260920140000)** — the reasoning engine
+  now runs live inside archie-core on every applicable turn: mapping
+  the four lower layers' ground truth into the turn input, honest
+  degradation without the FRELUX calculator adapter, problems/runs
+  persisted, `reasoning_engine` health block on archie-status.
+- **Uncertainty & Causal Inference (A-2, 20261018010000)** — Beta-Bayes
+  calibration over REAL outcome history (calibrated confidence is
+  always quoted with its basis), causal-graph propagation with
+  strongest-path products and because-explanations, honest cycle
+  termination, noisy-OR combination, contradiction capping. Wired into
+  the reasoning layer (records real outcomes per category, annotates
+  the block) and `uncertainty_engine` on status. Atomic
+  `archie_calibration_record` increments.
+- **Bounded Self-Tuning (C-1, 20261018020000)** — tunes the REAL
+  ReasoningLimits budgets inside owner-approved envelopes: adjustment
+  direction from each parameter's own calibration history, automatic
+  rollback on regression, every decision audited in
+  `archie_tuning_events`, unknown/unapproved parameters refused.
+  The reasoning layer consumes the tuned limits every turn; the
+  heartbeat runs one bounded cycle hourly; `self_tuning` on status.
+- **Observability & Alerting (F-2, 20261018030000)** — aggregates the
+  REAL operational signals (scheduler runs, critical security events,
+  reasoning validation outcomes, task states, calibration keys,
+  tuning decisions) into five deterministic alert rules (A1 heartbeat,
+  A2 security, A3 reasoning quality with a 20-run sample gate, A4 task
+  failure rate, A5 per-key calibration health), alert lifecycle with
+  auto-resolve when a condition clears, daily metrics snapshot.
+  Runs hourly via maintenance `observe`; `observability` on status.
+- **Proactive Briefing (E-1, 20261018040000)** — a daily deterministic
+  briefing composed natively from the real record (alerts, tuning
+  changes with reasons, reasoning/task outcomes, security events);
+  empty days are honestly "nothing to report"; once-per-day
+  idempotent so the hourly heartbeat can carry it. Surfaces as
+  `briefing` on archie-status.
+
+Also verified this pass: the durable task continuity engine (D-2)
+was already fully built (SupabaseTaskStateStore, per-step checkpoints,
+resume hydration in the agent worker, migration 20260919100000) — no
+rebuild needed. The scheduler migration self-schedules the heartbeat
+cron on any fresh database, and the entire archie-* surface remains
+100% external-AI-free (zero Gemini/OpenAI/Claude consumers; the
+isolated `nlu.ts` hit is a comment about truthful denial, not a call).
