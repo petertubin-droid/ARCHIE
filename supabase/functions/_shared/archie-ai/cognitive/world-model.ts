@@ -298,7 +298,16 @@ export class WorldModel {
     for (let hop = 0; hop < depth; hop += 1) {
       const next: string[] = [];
       for (const node of frontier) {
+        // Defensive honesty (found via D-1 e2e probe): a term
+        // extracted upstream can be undefined/empty when NLU
+        // parsing found no node — a query must never crash the
+        // cycle on it. Skipped, not guessed.
+        if (!node || typeof node !== "string") continue;
         for (const rel of this.relations.values()) {
+          // Robustness: a malformed relation row (dirty persisted
+          // data) must never crash a live cycle. Skipped.
+          if (typeof rel.subject !== "string" || typeof rel.object !== "string")
+            continue;
           if (
             rel.subject.toLowerCase() === node.toLowerCase() ||
             rel.object.toLowerCase() === node.toLowerCase()

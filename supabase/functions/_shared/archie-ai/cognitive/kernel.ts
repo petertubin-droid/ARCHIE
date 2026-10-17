@@ -58,6 +58,11 @@ import { SecurityIntegrityEngine } from "./security-integrity.ts";
 import { orchestrate } from "./orchestrator.ts";
 import { WorldModel } from "./world-model.ts";
 import { getOwnerModel } from "./user-model.ts";
+import {
+  hydrateKernelCounters,
+  persistKernelCounters,
+  type KernelCounters,
+} from "./kernel-state.ts";
 import { CognitivePersistence } from "./persistence.ts";
 import { LOOP_PHASES } from "./types.ts";
 import type {
@@ -252,6 +257,16 @@ export class CognitiveKernel implements ArchieRuntime {
   // supersession history, inferred counters labeled as such.
   private ownerModel = getOwnerModel();
   private tracePersistence: CognitivePersistence;
+  // D-1 (audit 2026-10-17): the db handle for kernel counter
+  // continuity. Null in unwired deployments → honest cold
+  // start, counters per-isolate as before.
+  private stateDb: SupabaseLike | null;
+  /** True when this isolate's counters came from (or went
+   *  to) the cross-isolate table — reported in diagnostics so
+   *  per-isolate noise is never mistaken for system totals. */
+  private countersShared = false;
+  /** True once hydration has run; never re-run per isolate. */
+  private countersHydrated = false;
   private bootedAt = Date.now();
   private booted = false;
   private cycles = 0;
@@ -320,6 +335,7 @@ export class CognitiveKernel implements ArchieRuntime {
     }
     this.security = new SecurityIntegrityEngine(db ?? undefined);
     this.tracePersistence = new CognitivePersistence(db ?? undefined);
+    this.stateDb = db ?? null;
   }
 
   async boot(): Promise<{
@@ -335,6 +351,26 @@ export class CognitiveKernel implements ArchieRuntime {
       };
     }
     this.booted = true;
+    // D-1 (audit 2026-10-17): hydrate the kernel counters
+    // from the cross-isolate table so cycles, the IMPROVE
+    // windows (unknown topics, verification fails) and the
+    // diagnostics survive cold starts. Best-effort: no db →
+    // honest per-isolate counting, unchanged behavior.
+    try {
+      const persisted = await hydrateKernelCounters(this.stateDb);
+      if (!this.countersHydrated) {
+        this.cycles += persisted.cycles;
+        this.unknownTopicHits += persisted.unknownTopicHits;
+        this.verificationFails += persisted.verificationFails;
+        this.countersHydrated = true;
+        this.countersShared = persisted.cycles > 0 ||
+          persisted.unknownTopicHits > 0 ||
+          persisted.verificationFails > 0;
+      }
+    } catch {
+      // Hydration is best-effort: unavailable table → this
+      // isolate counts from zero, honestly.
+    }
     await this.substrate.boot();
     const audit = await this.security.hydrate();
     const worldRelations = await this.world.hydrate();
@@ -1128,6 +1164,21 @@ ${worldCtx.block}`
       (a, b) => LOOP_PHASES.indexOf(a.phase) - LOOP_PHASES.indexOf(b.phase),
     );
 
+    // D-1 (audit 2026-10-17): persist the kernel counters at
+    // cycle close so the next isolate (or a cold restart)
+    // resumes from system-wide numbers, including the IMPROVE
+    // windows AFTER any threshold reset above. Best-effort —
+    // a failed write never breaks the cycle. Post-REMEMBER,
+    // pre-return: the durable write of the cycle itself has
+    // already happened; counters are the last state change.
+    if (this.stateDb) {
+      void persistKernelCounters(this.stateDb, {
+        cycles: this.cycles,
+        unknownTopicHits: this.unknownTopicHits,
+        verificationFails: this.verificationFails,
+      });
+    }
+
     return {
       responseText,
       epistemic,
@@ -1152,6 +1203,10 @@ ${worldCtx.block}`
       engineId: this.id,
       uptimeMs: Date.now() - this.bootedAt,
       cycles: this.cycles,
+      // D-1: TRUE = counters are cross-isolate (hydrated from
+      // and persisted to the shared table); FALSE = per-
+      // isolate cold start (no db), never mistaken for totals.
+      countersSharedAcrossIsolates: this.countersShared,
       systems: cognitiveCapabilityManifest(),
       perception: this.perception.stats(),
       metacognition: this.metacognition.stats(),
