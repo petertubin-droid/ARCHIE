@@ -1,0 +1,206 @@
+diff --git a/supabase/functions/_shared/archie-ai/native-engine/engine.ts b/supabase/functions/_shared/archie-ai/native-engine/engine.ts
+index 00a36af1..d20ac8a7 100644
+--- a/supabase/functions/_shared/archie-ai/native-engine/engine.ts
++++ b/supabase/functions/_shared/archie-ai/native-engine/engine.ts
+@@ -66,6 +66,12 @@ import {
+ } from "./strategies.ts";
+ import { DEFAULT_OPERATORS, PLANNING_OPERATORS, Planner } from "./planning.ts";
+ import { DomainSkillRegistry, type DomainSkill } from "./domains/registry.ts";
++import {
++  cryptoSkill,
++  cryptoAnswerAsync,
++  newCryptoSkillState,
++  type CryptoSkillState,
++} from "./domains/crypto.ts";
+ import {
+   constructionSkill,
+   constructionEstimate,
+@@ -244,6 +250,11 @@ export class ArchieNativeEngine implements ArchieRuntime {
+   private research: ResearchPipeline;
+   /** Pluggable domain skills (audit fix 2026-09-11). */
+   private domains: DomainSkillRegistry;
++  /** Crypto & Blockchain Intelligence state: the paper ledger,
++   *  the authorized-wallet registry and the gate's calibration
++   *  record. Per-engine-instance; the edge wrapper persists
++   *  the prediction record externally. */
++  private crypto: CryptoSkillState;
+   private adapter: ResearchAdapter;
+   private marketPriceLookup: MarketPriceLookup | null;
+   private systemAdapters: SystemAdapters;
+@@ -322,6 +333,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
+     // operator sets, so shipped behavior is unchanged.
+     this.domains = new DomainSkillRegistry();
+     registerBuiltInDomainSkills(this.domains);
++    this.crypto = newCryptoSkillState();
+     // Domain-general reasoning substrate first, domain rules
+     // after (owner directive 2026-09-10 §16): domain knowledge
+     // is additive, never structural.
+@@ -1886,6 +1898,29 @@ export class ArchieNativeEngine implements ArchieRuntime {
+         );
+       }
+ 
++      case "market_query":
++      case "trade_request":
++      case "wallet_query":
++      case "blockchain_query": {
++        // Crypto & Blockchain Intelligence (2026-09-11): the
++        // real async loop — fetch → analyze → cross-check →
++        // probability → HARD GATE → paper execution. A skill
++        // that is not registered would be answered honestly;
++        // this one always answers with real data or honest
++        // refusal.
++        const answer = await cryptoAnswerAsync(
++          nlu.intent,
++          input,
++          this.crypto,
++        );
++        return this.compose(
++          answer ??
++            "The crypto intelligence skill declined this request — I will not fabricate market data.",
++          nlu.confidence,
++          [],
++        );
++      }
++
+       case "construction_calc": {
+         // Domain skills are pluggable (audit fix 2026-09-11):
+         // an unregistered skill is answered honestly, never
+@@ -2519,6 +2554,13 @@ function retrieveFromSystemInstruction(
+  *  without touching the engine core. */
+ function registerBuiltInDomainSkills(registry: DomainSkillRegistry): void {
+   registry.register(constructionSkill);
++  // Crypto & Blockchain Intelligence (owner directive
++  // 2026-09-11): market analysis, the HARD TRADE GATE, paper
++  // trading, authorized-wallet reads and passphrase checks —
++  // all real, all honest about what is unavailable. The async
++  // answers run through cryptoAnswerAsync below; the sync
++  // handler contract declines (network work is async).
++  void cryptoSkill;
+ }
+ 
+ // ---------------------------------------------------------
+diff --git a/supabase/functions/_shared/archie-ai/native-engine/nlu.ts b/supabase/functions/_shared/archie-ai/native-engine/nlu.ts
+index ab97fd21..ed1b078e 100644
+--- a/supabase/functions/_shared/archie-ai/native-engine/nlu.ts
++++ b/supabase/functions/_shared/archie-ai/native-engine/nlu.ts
+@@ -217,6 +217,10 @@ export const INTENTS = [
+   "math_question",
+   "teaching",
+   "correction",
++  "market_query",
++  "trade_request",
++  "wallet_query",
++  "blockchain_query",
+ ] as const;
+ 
+ export type Intent = (typeof INTENTS)[number];
+@@ -227,6 +231,68 @@ export type Intent = (typeof INTENTS)[number];
+ // verbatim in the training corpus — memorization is not
+ // generalization.
+ export const CORPUS: Array<[Intent, string[]]> = [
++  // Crypto & Blockchain Intelligence corpus (2026-09-11).
++  // Balanced with the rest of the corpus so crypto never
++  // becomes a bias — the per-intent share caps in
++  // nlu-domain-generality.test.ts still hold.
++  [
++    "market_query",
++    [
++      "analyze bitcoin for me",
++      "how is ethereum doing",
++      "give me a market analysis of solana",
++      "what is the rsi on btc",
++      "show me the volatility of eth",
++      "bitcoin market trend analysis",
++      "is cardano in an uptrend",
++      "what is the momentum on doge",
++      "check the chart on litecoin",
++      "how volatile is xrp right now",
++      "tell me about the crypto market structure",
++      "what regime is btc in",
++    ],
++  ],
++  [
++    "trade_request",
++    [
++      "should i buy bitcoin now",
++      "should i sell my ethereum",
++      "is this a good time to trade btc",
++      "evaluate a long position on solana",
++      "run a trade analysis on eth",
++      "do you have a trade signal for bitcoin",
++      "paper trade ethereum for me",
++      "would you invest in cardano",
++      "open a paper trade on btc",
++      "analyze whether to short doge",
++    ],
++  ],
++  [
++    "wallet_query",
++    [
++      "check my crypto wallet balance",
++      "what is in my bitcoin wallet",
++      "show my wallet holdings",
++      "read my eth wallet activity",
++      "monitor my wallet for flows",
++      "what is the status of my wallet",
++      "show positions in my crypto wallet",
++      "check the balance of my authorized wallet",
++    ],
++  ],
++  [
++    "blockchain_query",
++    [
++      "inspect this blockchain transaction",
++      "look up tx on the bitcoin chain",
++      "verify this passphrase for me",
++      "is this a valid mnemonic",
++      "check if these recovery words are intact",
++      "validate this seed phrase structure",
++      "inspect the on-chain activity for that hash",
++      "check this transaction hash on chain",
++    ],
++  ],
+   [
+     "greeting",
+     [
+@@ -914,6 +980,40 @@ const RULE_CASCADE: Array<{
+       /^(?:please\s+)?(?:research|search|google|look\s+up|find\s+information)\b/i,
+     confidence: 0.85,
+   },
++  {
++    // Crypto market analysis (Crypto & Blockchain Intelligence,
++    // 2026-09-11). ANCHORED on crypto assets so a FRELUX
++    // product price question ("how much is a bag of cement")
++    // can never land here — and generic "how is the market"
++    // without a crypto anchor is left to Bayes, not hijacked.
++    intent: "market_query",
++    pattern:
++      /\b(?:btc|bitcoin|eth|ethereum|bnb|sol|solana|xrp|ripple|ada|cardano|doge|dogecoin|link|chainlink|matic|polygon|dot|polkadot|ltc|litecoin)\b[^.?!]*\b(?:analy(?:s[ei]|z[ei])|market|price|chart|trend|momentum|volatility|volume|rsi|regime|doing|performance)\b|\b(?:analy(?:s[ei]|z[ei])|how is|what about)\b[^.?!]*\b(?:btc|bitcoin|eth|ethereum|sol|solana|crypto|doge|xrp|bnb|cardano)\b/i,
++    confidence: 0.9,
++  },
++  {
++    // Trade requests — routed to the HARD TRADE GATE, never
++    // to a fabricated "yes".
++    intent: "trade_request",
++    pattern:
++      /\b(?:btc|bitcoin|eth|ethereum|sol|solana|crypto|dogecoin|doge|xrp|bnb|cardano|litecoin|ltc)\b[^.?!]*\b(?:should i (?:buy|sell|trade)|buy|sell|trade|invest|long|short)\b|\b(?:should i (?:buy|sell|trade)|trade (?:signal|proposal)|paper trade|open a (?:trade|position))\b[^.?!]*\b(?:btc|bitcoin|eth|ethereum|sol|crypto)\b/i,
++    confidence: 0.9,
++  },
++  {
++    // Wallet queries — authorization-gated reads.
++    intent: "wallet_query",
++    pattern:
++      /\b(?:my |the )?(?:crypto |bitcoin |eth )?wallet\b[^.?!]*\b(?:balance|status|holdings|positions|activity|flows?)\b|\b(?:check|read|monitor|show)\b[^.?!]*\bwallet\b/i,
++    confidence: 0.88,
++  },
++  {
++    // Blockchain queries — tx inspection / passphrase checks.
++    // Anchored on tx/passphrase/chain specifics.
++    intent: "blockchain_query",
++    pattern:
++      /\b(?:inspect|look up|check)\b[^.?!]*\b(?:transaction|tx\b|on-?chain)\b|\b(?:verify|validate|check|is this)\b[^.?!]*\b(?:passphrase|mnemonic|seed phrase|recovery words?)\b|\bblockchain\b[^.?!]*\b(?:activity|transaction|tx)\b/i,
++    confidence: 0.88,
++  },
+   {
+     // Interrogative price questions about materials route to the
+     // market intelligence lookup ("how much is a bag of cement",
