@@ -35,6 +35,7 @@ import {
   type ArchieToolSpec,
 } from "../_shared/archie-ai/runtime.ts";
 import { checkRateLimit } from "../_shared/rate-limit.ts";
+import { readBoundedJsonRequest } from "../_shared/http/bounded-json.ts";
 import { validateToolCall } from "../_shared/archie-ai/native-engine/runtime-schema.ts";
 import { createSupabaseCredentialStore } from "../_shared/archie-ai/security/api-credential-store.ts";
 import {
@@ -2051,17 +2052,36 @@ async function executeChat(
   const ownerUserId = isOwner && user ? user.id : null;
 
   // 2. Parse + validate request
-  let body: ChatRequest;
-  try {
-    body = await req.json();
-  } catch {
-    return respond(400, { error: "Invalid JSON body" });
+  const parsedBody = await readBoundedJsonRequest(req, 128 * 1024);
+  if (!parsedBody.ok) {
+    if (parsedBody.reason === "too_large") {
+      return respond(413, { error: "Request body exceeds the 128 KiB limit." });
+    }
+    if (parsedBody.reason === "timeout") return respond(408, { error: "Request body read timed out." });
+    return respond(400, { error: parsedBody.reason === "invalid_json" ? "Invalid JSON body" : "Request body could not be read." });
   }
-  const message = sanitize(String(body.message ?? "").slice(0, 8000)).trim();
+  if (!parsedBody.value || typeof parsedBody.value !== "object" || Array.isArray(parsedBody.value)) {
+    return respond(400, { error: "JSON body must be an object." });
+  }
+  const body = parsedBody.value as ChatRequest;
+  if (typeof body.message !== "string" || body.message.length > 8_000) {
+    return respond(400, { error: "message must be a string of at most 8,000 characters." });
+  }
+  if (body.history !== undefined && (!Array.isArray(body.history) || body.history.length > 100 || body.history.some((turn) =>
+    !turn || typeof turn !== "object" || (turn.role !== "owner" && turn.role !== "archie") || typeof turn.content !== "string"
+  ))) {
+    return respond(400, { error: "history must contain at most 100 valid conversation turns." });
+  }
+  if (body.attachments !== undefined && (!Array.isArray(body.attachments) || body.attachments.length > 10 || body.attachments.some((file) =>
+    !file || typeof file !== "object" || typeof file.name !== "string" || file.name.length > 200 || typeof file.type !== "string" || file.type.length > 120
+  ))) {
+    return respond(400, { error: "attachments must contain at most 10 valid file descriptors." });
+  }
+  const message = sanitize(body.message).trim();
   if (!message) return respond(400, { error: "Message is required" });
   const history = (body.history ?? []).slice(-20).map((t) => ({
     role: t.role,
-    content: sanitize(String(t.content ?? "").slice(0, 4000)),
+    content: sanitize(t.content.slice(0, 4000)),
   }));
   // C-1 (audit fix 2026-09-11): the client's conversation id
   // scopes the engine session — working memory, episodic

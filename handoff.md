@@ -325,7 +325,7 @@ This status update supersedes the earlier “Required work” only for the findi
 ### Partially addressed; remaining work is still required
 
 - **⚠️ C-03 — public URL/redirect safety:** native page fetching validates every redirect destination, limits redirect hops, and rejects IPv6 literals it cannot verify. Chat URL inspection also validates redirects. DNS resolution pinning/rebinding and controlled egress are still not implemented or live-tested.
-- **⚠️ C-04 — response-size bounds:** the native page fetcher streams response bodies and cancels when the byte limit is exceeded; `robots.txt` is bounded too. The separate chat site-inspection path still calls `Response.text()` before checking its character limit, so it is not protected by a streaming byte cap yet.
+- **⚠️ C-04 — response-size bounds:** native page and chat site inspection now stream and cap page/robots bodies before parsing; the later bounded web-inspection update supersedes earlier wording that chat used `Response.text()`. Re-audit any other outbound fetch paths separately; DNS pinning/controlled egress remain open.
 - **⚠️ C-06 — rate limiting:** authenticated non-owner requests now key the isolate-local quota by account ID rather than caller-controlled conversation ID. Anonymous callers can still rotate IDs, and all isolate-local counters remain bypassable across instances; trusted edge identity and a shared limiter are outstanding.
 - **⚠️ C-07 — tool-hop completion:** the final unexecuted tool call is now recorded as pending and the reply says the action was not run. The chat and reasoning-loop budgets are not unified, and broader state-machine tests for all boundary counts remain outstanding.
 - **✅ C-09 — runtime schemas:** closed in source and automated coverage using ARCHIE's documented bounded schema dialect. Chat and native tools enforce complete declared contracts, execution targets share the validator, production tool schemas are enumerated in tests, and invalid calls are rejected before handler side effects. This does not claim full JSON Schema draft compliance or production deployment verification.
@@ -397,3 +397,18 @@ This update closes **C-09** in source and automated regression coverage using a 
 - **✅ Regression coverage:** added schema-dialect tests for malformed/unsupported schema declarations, nested values, boundary constraints, formats, composition, resource limits and prototype-shaped inputs; added a registered-tool contract sweep and native no-handler-on-invalid tests. Existing execution-schema tests now assert the shared error vocabulary.
 - **Scope limitation:** this is not full draft-2020-12 JSON Schema; unsupported references and formats fail closed. Tests prove source behavior only. Live deployment, persisted target schema data quality, and production traffic have not been verified.
 - **Validation:** focused runtime/native/execution/chat contract tests pass (4 files, 66 tests); full `npm test -- --reporter=dot` passes (265 files, 3,135 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` pass. These checks prove source behavior only. No external model, migration, or production configuration change is intended.
+
+## Security and reliability update — bounded inbound request bodies (2026-10-17)
+
+This update addresses a resource-exhaustion gap at the ARCHIE chat and internal agent-worker HTTP boundaries. It does not claim distributed rate limiting, deployment verification, or remediation of every security item in this handoff.
+
+- **✅ Bounded streaming JSON reader:** added a shared request parser that enforces declared and actual byte limits before assembling/parsing JSON, cancels oversized streams without waiting on client-controlled cancellation, rejects invalid UTF-8/JSON, and applies a hard upload-read deadline.
+- **✅ Chat boundary:** requests are limited to 128 KiB and a 10-second body-read deadline. Messages, conversation history, and attachment descriptor shapes/counts are explicitly checked before tool or cognitive work; malformed JSON shapes return controlled 400 responses, oversize bodies return 413, and stalled bodies return 408.
+- **✅ Internal agent-worker boundary:** authenticated task requests are limited to 8 KiB and the same deadline before agent/database lookup; request object shape and agent/run/task UUID identifiers are validated before database access.
+- **✅ Regression coverage:** tests cover exact-limit parsing, declared and streamed oversize bodies, cancellation, stalled streams, invalid JSON/UTF-8, and endpoint-level 400/408/413 behavior.
+- **Validation on this checkout:** focused request-boundary/chat/worker tests pass (3 files, 22 tests); full `npm test -- --reporter=dot` passes (266 files, 3,144 passed, 2 expected-fail, 1 skipped); `npm run typecheck` and `git diff --check` pass.
+- **Still open:** this does not close C-06's cross-isolate anonymous rate-limiting gap or C-03 DNS rebinding/controlled-egress risk. It does not change secrets, migrations, or production configuration and does not verify a live deployment.
+
+### Handoff correction
+
+The earlier C-04 remediation note said the chat site-inspection path still buffered with `Response.text()`. That statement is superseded by the later bounded chat web-inspection change recorded above: current `archie-chat` page and robots bodies use `readBoundedText` with 500,000-byte and 64,000-byte caps. Other outbound fetch paths and DNS/egress behavior still require separate audit; this correction is not a claim that every HTTP body in the repository is bounded.

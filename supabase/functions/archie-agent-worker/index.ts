@@ -23,6 +23,7 @@
 // =========================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { readBoundedJsonRequest } from "../_shared/http/bounded-json.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -88,14 +89,21 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  let body: { agent_id?: string; run_id?: string; task_id?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return json(400, { error: "Body must be JSON." });
+  const parsedBody = await readBoundedJsonRequest(req, 8 * 1024);
+  if (!parsedBody.ok) {
+    if (parsedBody.reason === "too_large") return json(413, { error: "Request body exceeds the 8 KiB limit." });
+    if (parsedBody.reason === "timeout") return json(408, { error: "Request body read timed out." });
+    return json(400, { error: "Body must be readable JSON." });
   }
+  if (!parsedBody.value || typeof parsedBody.value !== "object" || Array.isArray(parsedBody.value)) {
+    return json(400, { error: "Body must be a JSON object." });
+  }
+  const body = parsedBody.value as { agent_id?: string; run_id?: string; task_id?: string };
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const agentId = String(body.agent_id ?? "");
-  if (!agentId) return json(400, { error: "agent_id is required." });
+  if (!uuidPattern.test(agentId)) return json(400, { error: "agent_id must be a valid UUID." });
+  if (body.run_id !== undefined && !uuidPattern.test(body.run_id)) return json(400, { error: "run_id must be a valid UUID." });
+  if (body.task_id !== undefined && !uuidPattern.test(body.task_id)) return json(400, { error: "task_id must be a valid UUID." });
 
   const { data: agent } = await service
     .from("frelux_archie_internal_agents")

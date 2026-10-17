@@ -29,6 +29,23 @@ describe("archie-chat — request validation", () => {
     expect((await json(res)).error).toMatch(/Invalid JSON/);
   });
 
+  it("rejects oversized streamed request bodies with 413", async () => {
+    const request = new Request("https://test-project.supabase.co/functions/v1/fn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": "140000" },
+      body: JSON.stringify({ message: "x".repeat(140_000) }),
+    });
+    const res = await handler(request);
+    expect(res.status).toBe(413);
+  });
+
+  it("rejects malformed history and attachment shapes with 400", async () => {
+    const history = await handler(req("POST", "", { message: "hello", history: {} }));
+    expect(history.status).toBe(400);
+    const attachments = await handler(req("POST", "", { message: "hello", attachments: [null] }));
+    expect(attachments.status).toBe(400);
+  });
+
   it("rejects an empty message with 400", async () => {
     const res = await handler(req("POST", "", { message: "" }));
     expect(res.status).toBe(400);
