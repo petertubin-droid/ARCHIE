@@ -125,6 +125,15 @@ import {
 } from "./coding-project.ts";
 import { SelfEvaluator } from "./selfeval.ts";
 import { OutcomeLearner, consolidateIfDue } from "./learning.ts";
+import {
+  StrategyStatsCache,
+  SupabaseStrategyStatsStore,
+  chosenFromScores,
+} from "../cognitive/strategy-learning.ts";
+import type {
+  StrategyStatsStore,
+  SupabaseLikeClient,
+} from "../cognitive/strategy-learning.ts";
 import { SupabasePersistence, type SupabaseLike } from "./persistence.ts";
 import { parseStateChangeClaim } from "../cognitive/world-model.ts";
 import {
@@ -411,6 +420,16 @@ export class ArchieNativeEngine implements ArchieRuntime {
   private episodicStore: EpisodicPersistence | null = null;
   /** P7 — cross-isolate counter store. */
   private counterStore: CounterPersistence | null = null;
+  // STRATEGY LEARNING (gap C-4): evidence-gated learned bias
+  // over the strategy selector, fed ONLY by explicit owner
+  // confirmations/corrections. Null store = pure cue system.
+  private strategyCache: StrategyStatsCache | null = null;
+  // The strategies (with their turn's intent) that composed
+  // the CURRENT/LATEST answer — consumed by the next owner
+  // verdict (explicit confirmation or correction). Nothing
+  // stashed = nothing to attribute, honestly.
+  private lastTurnStrategies: { intent: string; kinds: string[] } | null =
+    null;
   /** REMEDIATION batch 5 (fix 13): contradiction-detected
    *  fact ids already counted as verification failures by
    *  this isolate (dedupe across reasoning passes). */
@@ -432,6 +451,12 @@ export class ArchieNativeEngine implements ArchieRuntime {
     /** null/undefined = run in-memory only (the REAL
      *  personalization privacy control). */
     persistence?: SupabaseLike | null;
+    /** STRATEGY LEARNING (gap C-4): durable store for real
+     *  owner-verdict outcomes per "<intent>:<strategy>" key.
+     *  null/undefined = in-memory mode: the honest cue system
+     *  runs unchanged and nothing is recorded (privacy
+     *  control, same semantics as persistence). */
+    strategyStore?: StrategyStatsStore | null;
     researchAdapter?: ResearchAdapter;
     marketPriceLookup?: MarketPriceLookup;
     lessonLookup?: LessonLookup;
@@ -497,6 +522,14 @@ export class ArchieNativeEngine implements ArchieRuntime {
     this.counterStore = options?.persistence
       ? new CounterPersistence(options.persistence)
       : null;
+    // STRATEGY LEARNING (gap C-4): hydrate the real stats once;
+    // a failed load starts empty (no bias, cue system intact).
+    this.strategyCache = options?.strategyStore
+      ? new StrategyStatsCache(options.strategyStore)
+      : null;
+    if (this.strategyCache) {
+      void this.strategyCache.hydrate();
+    }
     // OWNER UPGRADE 2026-09-16 (gap 2): ONE robots-checked,
     // timeout-guarded page fetcher serves BOTH the research
     // deepening pass AND the read_page tool — a single honest
@@ -1126,6 +1159,14 @@ export class ArchieNativeEngine implements ArchieRuntime {
       contributing: outcome.citedFactIds,
     });
 
+    // STRATEGY LEARNING (gap C-4): an explicit same-turn
+    // confirmation attributes REAL positive outcomes to the
+    // strategies that served the answer. Acknowledged/cited
+    // are engagement, not verification — no attribution.
+    if (explicitlyConfirmed) {
+      await this.attributeStrategyOutcome(true);
+    }
+
     // P7 batch 2 — persist system-wide counters after the
     // turn. Read-modify-write upsert: under concurrent
     // isolates the LAST write wins; these are diagnostics,
@@ -1152,14 +1193,76 @@ export class ArchieNativeEngine implements ArchieRuntime {
    *  hypothesis, NEVER fact); conflicting-evidence questions
    *  receive an explicit conflict band. Both cite real store
    *  evidence or state plainly that none exists. */
+  /** STRATEGY LEARNING (gap C-4): bias the selector's cue
+   *  scores with REAL owner-verdict outcomes per
+   *  "<intent>:<strategy>" — evidence-gated (>= 5 outcomes)
+   *  and capped at ±2 so learning refines the honest cue
+   *  system, never overrides it. The "logical" fallback for
+   *  cue-less tasks is preserved exactly. No cache or no
+   *  qualified key → the original selection, unchanged. */
+  private applyStrategyLearning(
+    sel: ReturnType<typeof selectStrategies>,
+    intent: string,
+  ): ReturnType<typeof selectStrategies> {
+    if (!this.strategyCache) return sel;
+    const scores = this.strategyCache.biasedScores(sel.scores, intent);
+    const width = Math.max(1, sel.chosen.length);
+    const kinds = chosenFromScores(scores, width) as ReturnType<
+      typeof selectStrategies
+    >["chosen"];
+    const chosen =
+      kinds.length > 0
+        ? kinds
+        : (["logical"] as ReturnType<typeof selectStrategies>["chosen"]);
+    return { chosen, rationale: sel.rationale, scores };
+  }
+
+  /** STRATEGY LEARNING (gap C-4): attribute the stashed turn
+   *  strategies to a REAL owner verdict — explicit
+   *  confirmation (positive) or correction (negative), the
+   *  only verification evidence the learning system accepts
+   *  (audit C3: engagement and citations never reinforce).
+   *  Consumed once; absent stash = nothing to attribute. */
+  private async attributeStrategyOutcome(
+    positive: boolean,
+  ): Promise<void> {
+    if (!this.strategyCache || !this.lastTurnStrategies) return;
+    const { intent, kinds } = this.lastTurnStrategies;
+    this.lastTurnStrategies = null;
+    for (const kind of kinds) {
+      await this.strategyCache.recordOutcome(`${intent}:${kind}`, positive);
+    }
+  }
+
   /** Strategy-backed answers (plan P5 Batch C): comparative,
    *  constraint and temporal questions answered from real
    *  stored evidence with honest refusals otherwise. Returns
    *  null to fall through to normal knowledge handling. */
+  /** STRATEGY LEARNING (gap C-4) wrapper: the stash is only
+   *  kept when a strategy actually composed the response. */
   private async strategyAnswer(
     input: string,
     ranked: Fact[],
     confidence: number,
+    intent: string,
+  ): Promise<ConverseResult | null> {
+    const result = await this.strategyAnswerInner(
+      input,
+      ranked,
+      confidence,
+      intent,
+    );
+    if (result === null) {
+      this.lastTurnStrategies = null;
+    }
+    return result;
+  }
+
+  private async strategyAnswerInner(
+    input: string,
+    ranked: Fact[],
+    confidence: number,
+    intent: string,
   ): Promise<ConverseResult | null> {
     const task = {
       text: input,
@@ -1168,7 +1271,11 @@ export class ArchieNativeEngine implements ArchieRuntime {
       reasoning: this.reasoning,
       rules: this.reasoning.getRules(),
     };
-    const sel = selectStrategies(task);
+    const sel = this.applyStrategyLearning(
+      selectStrategies(task),
+      intent,
+    );
+    this.lastTurnStrategies = { intent, kinds: [...sel.chosen] };
 
     // ── comparative ──
     if (sel.chosen.includes("comparative")) {
@@ -1290,10 +1397,31 @@ export class ArchieNativeEngine implements ArchieRuntime {
     return null;
   }
 
+  /** STRATEGY LEARNING wrapper — same honest semantics as
+   *  strategyAnswer: stash only when it served the answer. */
   private async speculativeAnswer(
     input: string,
     ranked: Fact[],
     confidence: number,
+    intent: string,
+  ): Promise<ConverseResult | null> {
+    const result = await this.speculativeAnswerInner(
+      input,
+      ranked,
+      confidence,
+      intent,
+    );
+    if (result === null) {
+      this.lastTurnStrategies = null;
+    }
+    return result;
+  }
+
+  private async speculativeAnswerInner(
+    input: string,
+    ranked: Fact[],
+    confidence: number,
+    intent: string,
   ): Promise<ConverseResult | null> {
     const subject = ranked[0]?.subject;
     const strategyTask = {
@@ -1303,7 +1431,11 @@ export class ArchieNativeEngine implements ArchieRuntime {
       reasoning: this.reasoning,
       rules: this.reasoning.getRules(),
     };
-    const sel = selectStrategies(strategyTask);
+    const sel = this.applyStrategyLearning(
+      selectStrategies(strategyTask),
+      intent,
+    );
+    this.lastTurnStrategies = { intent, kinds: [...sel.chosen] };
     const wantsSpeculation =
       sel.chosen.includes("hypothesis") ||
       sel.chosen.includes("abductive") ||
@@ -1804,7 +1936,12 @@ export class ArchieNativeEngine implements ArchieRuntime {
         "price_query",
       ].includes(nlu.intent)
     ) {
-      const strat = await this.strategyAnswer(input, ranked, nlu.confidence);
+      const strat = await this.strategyAnswer(
+        input,
+        ranked,
+        nlu.confidence,
+        nlu.intent,
+      );
       if (strat) return strat;
     }
 
@@ -2667,6 +2804,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
             input,
             answerable,
             nlu.confidence,
+            nlu.intent,
           );
           if (strategic) return strategic;
           // REMEDIATION batch 2 (2026-09-12): a message with
@@ -3056,6 +3194,10 @@ export class ArchieNativeEngine implements ArchieRuntime {
               task: `owner confirmation: ${input.slice(0, 80)}`,
               contributing: confirmed.map((f) => f.id),
             });
+            // STRATEGY LEARNING (gap C-4): the owner verified
+            // the previous answer — real positive outcome for
+            // the strategies that composed it.
+            await this.attributeStrategyOutcome(true);
             return this.compose(
               `Confirmed — thank you. ${confirmed.length} related fact(s) strengthened and stamped as owner-confirmed evidence. ${this.statusLine()}`,
               nlu.confidence,
@@ -3100,6 +3242,10 @@ export class ArchieNativeEngine implements ArchieRuntime {
           task: `correction on: ${input.slice(0, 80)}`,
           contributing: [...targeted.keys()],
         });
+        // STRATEGY LEARNING (gap C-4): the owner corrected the
+        // previous answer — real negative outcome for the
+        // strategies that composed it.
+        await this.attributeStrategyOutcome(false);
         if (triple) {
           const correctionStamp = `owner-correction:${Date.now()}`;
           const { fact } = await this.facts.assert({
@@ -4112,6 +4258,24 @@ let singleton: ArchieNativeEngine | undefined;
  *  without loading or storing persistent memory for that
  *  request. No personalization, no memory reads, no
  *  memory writes. */
+let configuredStrategyStore: StrategyStatsStore | null = null;
+
+/** STRATEGY LEARNING (gap C-4): wire the durable
+ *  "<intent>:<strategy>" outcome store. Call with the SAME
+ *  database client as the persistence wiring. */
+export function configureNativeEngineStrategyStore(
+  store: StrategyStatsStore | null,
+): void {
+  configuredStrategyStore = store;
+}
+
+/** Convenience: build the standard Supabase-backed store. */
+export function createSupabaseStrategyStore(
+  client: SupabaseLikeClient,
+): StrategyStatsStore {
+  return new SupabaseStrategyStatsStore(client);
+}
+
 export function configureNativeEnginePersistence(
   db: SupabaseLike | null,
 ): void {
@@ -4170,6 +4334,7 @@ export function createConfiguredNativeEngine(
     systemAdapters?: SystemAdapters;
     worldTimeline?: WorldTimelinePort;
     conversationId?: string;
+    strategyStore?: StrategyStatsStore | null;
   } = {},
 ): ArchieNativeEngine {
   return new ArchieNativeEngine({
@@ -4177,6 +4342,10 @@ export function createConfiguredNativeEngine(
       "persistence" in overrides
         ? overrides.persistence
         : configuredPersistence,
+    strategyStore:
+      "strategyStore" in overrides
+        ? overrides.strategyStore
+        : configuredStrategyStore,
     marketPriceLookup: overrides.marketPriceLookup ?? configuredMarketLookup,
     lessonLookup: overrides.lessonLookup ?? configuredLessonLookup,
     systemAdapters: overrides.systemAdapters ?? configuredSystemAdapters,
@@ -4193,6 +4362,7 @@ export function getNativeEngine(): ArchieNativeEngine {
       worldTimeline: configuredWorldTimeline,
       lessonLookup: configuredLessonLookup,
       systemAdapters: configuredSystemAdapters,
+      strategyStore: configuredStrategyStore,
     });
   }
   return singleton;

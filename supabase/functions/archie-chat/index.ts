@@ -110,6 +110,8 @@ const chatApiCredentialStore = createSupabaseCredentialStore(
 // registry resolves. Zero external AI APIs.
 import {
   configureNativeEnginePersistence,
+  configureNativeEngineStrategyStore,
+  createSupabaseStrategyStore,
   configureNativeEngineMarketLookup,
   configureNativeEngineLessonLookup,
   type MarketPriceResult,
@@ -121,6 +123,16 @@ import {
 import type { RecordedLesson } from "../_shared/archie-ai/native-engine/lessons.ts";
 configureNativeEnginePersistence(
   db as unknown as import("../_shared/archie-ai/native-engine/persistence.ts").SupabaseLike,
+);
+// STRATEGY LEARNING (gap C-4): durable real-outcome store for
+// the strategy selector, same database client as the
+// persistence wiring. Null-cache semantics elsewhere keep the
+// isolated app/visitor runtimes (constructed WITHOUT this
+// store) learning-free by design — privacy control.
+configureNativeEngineStrategyStore(
+  createSupabaseStrategyStore(
+    db as unknown as import("../_shared/archie-ai/cognitive/strategy-learning.ts").SupabaseLikeClient,
+  ),
 );
 
 // ---------------------------------------------------------

@@ -394,6 +394,37 @@ serveWithCors(async (req: Request) => {
       };
     }
 
+    // Strategy Learning Engine (gap C-4): real owner-verdict
+    // outcomes per "<intent>:<strategy>" key. The leaderboard
+    // of exercised keys (posterior + outcome counts). READY
+    // when wired but unexercised; honest UNAVAILABLE on error.
+    let strategyLearning: Record<string, unknown>;
+    try {
+      const { data: strategyRows } = await service
+        .from("archie_strategy_stats")
+        .select("strategy_key, positives, negatives")
+        .order("updated_at", { ascending: false })
+        .limit(10);
+      const rows = strategyRows ?? [];
+      strategyLearning = {
+        state: rows.length > 0 ? "OPERATIONAL" : "READY",
+        tracked_keys: rows.length,
+        leaderboard: rows.map((r: { strategy_key: string; positives: number; negatives: number }) => ({
+          key: r.strategy_key,
+          positives: r.positives,
+          negatives: r.negatives,
+        })),
+      };
+    } catch (stratErr) {
+      strategyLearning = {
+        state: "UNAVAILABLE",
+        note:
+          stratErr instanceof Error
+            ? stratErr.message
+            : "strategy stats query failed",
+      };
+    }
+
     // Ears runs NATIVE (on-device speech recognition, no
     // provider, no key — OpenAI Separation Rule). It is
     // OPERATIONAL only once a REAL transcription exists in
@@ -457,6 +488,7 @@ serveWithCors(async (req: Request) => {
         self_tuning: selfTuning,
         observability,
         briefing: briefingStatus,
+        strategy_learning: strategyLearning,
         knowledge_repository: await knowledgeRepositoryPromise,
       },
     });
