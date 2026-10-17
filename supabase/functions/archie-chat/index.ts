@@ -36,6 +36,13 @@ import {
 } from "../_shared/archie-ai/runtime.ts";
 import { checkRateLimit } from "../_shared/rate-limit.ts";
 import { isToolHopWithinBudget } from "../_shared/archie-ai/native-engine/tool-budget.ts";
+import {
+  SupabaseGoalStore,
+  decomposeHonest,
+  describeProgress,
+  parseGoalDeclaration,
+  progressFor,
+} from "../_shared/archie-ai/cognitive/goal-engine.ts";
 import { readBoundedJsonRequest } from "../_shared/http/bounded-json.ts";
 import { validateToolCall } from "../_shared/archie-ai/native-engine/runtime-schema.ts";
 import { createSupabaseCredentialStore } from "../_shared/archie-ai/security/api-credential-store.ts";
@@ -1219,6 +1226,183 @@ const TOOLS: ToolDef[] = [
         analysis_ready: gaps.length === 0,
         persisted_to_learning: insErr ? false : true,
       };
+    },
+  },
+  // ---- GOAL ENGINE (audit gap 18 / engine 7): long-horizon
+  // owner-declared goals with honest decomposition (structure
+  // only — never invented steps), explicit progress, and a
+  // full audit event trail. While ARCHIE is temporarily
+  // disconnected from its database these surface the store
+  // error honestly — never a fake success ----
+  {
+    name: "goal_declare",
+    description:
+      "Declare a long-horizon goal for the Owner and persist it. Use whenever the Owner states a goal, objective, or long-term intention (\"my goal is...\", \"I want to achieve X by March\"). Extracts the title and any explicit target date from the Owner's own words; if the declaration already enumerates steps (first... then...), those steps are added verbatim. NEVER invents steps that are not in the Owner's words.",
+    parameters: {
+      type: "object",
+      properties: {
+        declaration: { type: "string", minLength: 3, maxLength: 500 },
+      },
+      required: ["declaration"],
+      additionalProperties: false,
+    },
+    operational: true,
+    execute: async (input) => {
+      const goalStore = new SupabaseGoalStore(
+        db as unknown as import("../_shared/archie-ai/cognitive/goal-engine.ts").SupabaseLikeClient,
+      );
+      const parsed = parseGoalDeclaration(String(input.declaration ?? ""));
+      if (!parsed) {
+        return { error: "declaration too short or too long (3-500 chars)" };
+      }
+      const goal = await goalStore.createGoal(parsed.title, parsed.targetDate);
+      const steps = decomposeHonest(parsed.title);
+      const added: string[] = [];
+      for (const st of steps) {
+        await goalStore.addStep(goal.id, st);
+        added.push(st);
+      }
+      return {
+        goal,
+        steps_added_from_declaration: added,
+        steps_total: added.length,
+        note:
+          added.length === 0
+            ? "No steps were in the declaration's own structure. Steps are only ever added from the Owner's explicit words — ask the Owner to define the first step."
+            : "Steps were extracted verbatim from the declaration's enumeration.",
+        report: describeProgress(progressFor(goal, [], new Date())),
+      };
+    },
+  },
+  {
+    name: "goal_add_step",
+    description:
+      "Add one step to an existing goal. Use when the Owner defines a next step or task for a goal they already declared (\"add a step to my goal: ...\"). Steps are the Owner's words, recorded verbatim.",
+    parameters: {
+      type: "object",
+      properties: {
+        goal_id: { type: "string", minLength: 1, maxLength: 80 },
+        description: { type: "string", minLength: 3, maxLength: 200 },
+      },
+      required: ["goal_id", "description"],
+      additionalProperties: false,
+    },
+    operational: true,
+    execute: async (input) => {
+      const goalStore = new SupabaseGoalStore(
+        db as unknown as import("../_shared/archie-ai/cognitive/goal-engine.ts").SupabaseLikeClient,
+      );
+      const goals = await goalStore.listGoals(true);
+      const goal = goals.find((g) => g.id === String(input.goal_id ?? ""));
+      if (!goal) return { error: `unknown goal id: ${input.goal_id}` };
+      const step = await goalStore.addStep(
+        goal.id,
+        String(input.description ?? "").trim(),
+      );
+      return { step, goal };
+    },
+  },
+  {
+    name: "goal_complete_step",
+    description:
+      "Mark a goal step complete, by its position number. Use when the Owner reports progress on a goal step (\"step 2 is done\"). Completion is explicit-only, never inferred.",
+    parameters: {
+      type: "object",
+      properties: {
+        goal_id: { type: "string", minLength: 1, maxLength: 80 },
+        position: { type: "integer", minimum: 1, maximum: 1000 },
+      },
+      required: ["goal_id", "position"],
+      additionalProperties: false,
+    },
+    operational: true,
+    execute: async (input) => {
+      const goalStore = new SupabaseGoalStore(
+        db as unknown as import("../_shared/archie-ai/cognitive/goal-engine.ts").SupabaseLikeClient,
+      );
+      const result = await goalStore.completeStep(
+        String(input.goal_id ?? ""),
+        Number(input.position ?? 0),
+      );
+      const goals = await goalStore.listGoals(true);
+      const withSteps = goals.find((g) => g.id === result.goal.id);
+      const report = withSteps
+        ? describeProgress(progressFor(withSteps, withSteps.steps, new Date()))
+        : null;
+      const allDone =
+        withSteps !== undefined &&
+        withSteps.steps.length > 0 &&
+        withSteps.steps.every((st) => st.done);
+      return {
+        ...result,
+        report,
+        all_steps_done: allDone,
+        note: allDone
+          ? "All steps are complete. The goal stays active until the Owner explicitly marks it completed or paused."
+          : undefined,
+      };
+    },
+  },
+  {
+    name: "goal_status",
+    description:
+      "Honest status report of the Owner's long-horizon goals: per-goal step progress, next pending step, target-date distance, staleness. Use when the Owner asks about their goals, progress, or what is next. Empty days are reported plainly.",
+    parameters: {
+      type: "object",
+      properties: {
+        include_completed: { type: "boolean" },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    operational: true,
+    execute: async (input) => {
+      const goalStore = new SupabaseGoalStore(
+        db as unknown as import("../_shared/archie-ai/cognitive/goal-engine.ts").SupabaseLikeClient,
+      );
+      const goals = await goalStore.listGoals(
+        Boolean(input.include_completed),
+      );
+      const lines = goals.map((g) =>
+        describeProgress(progressFor(g, g.steps, new Date())),
+      );
+      return {
+        goals_total: goals.length,
+        report:
+          lines.length > 0 ? lines.join("\n") : "No goals on record.",
+      };
+    },
+  },
+  {
+    name: "goal_update_status",
+    description:
+      "Change a goal's status: paused, completed, or abandoned. Use ONLY on the Owner's explicit instruction (\"I'm done with that goal\", \"pause that goal\"). Never changes a goal's status on its own.",
+    parameters: {
+      type: "object",
+      properties: {
+        goal_id: { type: "string", minLength: 1, maxLength: 80 },
+        status: {
+          type: "string",
+          enum: ["paused", "completed", "abandoned", "active"],
+        },
+      },
+      required: ["goal_id", "status"],
+      additionalProperties: false,
+    },
+    operational: true,
+    execute: async (input) => {
+      const goalStore = new SupabaseGoalStore(
+        db as unknown as import("../_shared/archie-ai/cognitive/goal-engine.ts").SupabaseLikeClient,
+      );
+      const status = String(input.status ?? "");
+      if (!["paused", "completed", "abandoned", "active"].includes(status)) {
+        return { error: `invalid status: ${status}` };
+      }
+      const goal = await goalStore.updateStatus(
+        String(input.goal_id ?? ""),
+        status as "paused" | "completed" | "abandoned" | "active",
+      );
+      return { goal };
     },
   },
 ];

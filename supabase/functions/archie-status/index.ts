@@ -394,6 +394,50 @@ serveWithCors(async (req: Request) => {
       };
     }
 
+    // Goal Engine (gap 18 / engine 7): long-horizon owner
+    // goals with honest step progress. While ARCHIE is
+    // temporarily disconnected from its database this
+    // reports UNAVAILABLE honestly rather than pretending.
+    let goalEngine: Record<string, unknown>;
+    try {
+      const { data: goalRows } = await service
+        .from("archie_goals")
+        .select("id,title,status,target_date,last_progress_at")
+        .eq("status", "active")
+        .order("created_at", { ascending: true })
+        .limit(20);
+      const goals = goalRows ?? [];
+      const { data: stepRows } = await service
+        .from("archie_goal_steps")
+        .select("goal_id,done,position,description");
+      const steps = stepRows ?? [];
+      goalEngine = {
+        state: goals.length > 0 ? "OPERATIONAL" : "READY",
+        active_goals: goals.length,
+        goals: goals.map((g: { id: string; title: string; status: string; target_date: string | null; last_progress_at: string | null }) => {
+          const gs = steps.filter((st: { goal_id: string }) => st.goal_id === g.id);
+          const done = gs.filter((st: { done: boolean }) => st.done).length;
+          return {
+            id: g.id,
+            title: g.title,
+            status: g.status,
+            target_date: g.target_date,
+            steps_done: done,
+            steps_total: gs.length,
+            last_progress_at: g.last_progress_at,
+          };
+        }),
+      };
+    } catch (goalErr) {
+      goalEngine = {
+        state: "UNAVAILABLE",
+        note:
+          goalErr instanceof Error
+            ? goalErr.message
+            : "goal store query failed",
+      };
+    }
+
     // Strategy Learning Engine (gap C-4): real owner-verdict
     // outcomes per "<intent>:<strategy>" key. The leaderboard
     // of exercised keys (posterior + outcome counts). READY
@@ -489,6 +533,7 @@ serveWithCors(async (req: Request) => {
         observability,
         briefing: briefingStatus,
         strategy_learning: strategyLearning,
+        goal_engine: goalEngine,
         knowledge_repository: await knowledgeRepositoryPromise,
       },
     });
