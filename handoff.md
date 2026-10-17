@@ -344,7 +344,7 @@ This status update supersedes the earlier “Required work” only for the findi
 - `npm run typecheck` — **passed**.
 - Focused tests for memory integration, cognitive engine/verifier/tool validation, page fetch, and PWA source checks — **4 files passed; 112 tests passed; 1 skipped**.
 - `git diff --check` — **passed** before the handoff update; rerun before commit.
-- Full `npm test -- --reporter=dot` — **failed**: 260/262 test files passed; 3,111 tests passed, 4 failed, 2 expected failures, 1 skipped. Failures: three existing calculation-trace assertions and one escrow acceptance-window assertion. These paths were not modified by this remediation.
+- Full `npm test -- --reporter=dot` — **failed**: 260/262 test files passed; 3,111 tests passed, 4 failed, 2 expected failures, 1 skipped. Failures: three existing calculation-trace assertions and one escrow acceptance-window assertion. These failures were not addressed by this remediation; full green CI remains an open release gate.
 - `npm run lint` — **blocked**: repository has no `eslint.config.js`/`.mjs`/`.cjs` for the installed ESLint 9; this is a repository configuration gap, not a passing lint result.
 - `npm run build` — **blocked**: the checked-out repository tree has no root `index.html`, so Vite cannot resolve its entry module. No successful production build is claimed.
 - No function was deployed, no migration was applied, and no production runtime was queried.
