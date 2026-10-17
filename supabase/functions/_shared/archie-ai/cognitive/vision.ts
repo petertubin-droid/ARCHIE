@@ -377,6 +377,7 @@ function parseGif(bytes: Uint8Array): { width: number; height: number } {
 
 // ---------- native JPEG/GIF pixel decode (gap 4, 2026-09-16) ----------
 import { decodeJpeg } from "./jpeg-decode.ts";
+import { extractText, type OcrResult } from "./ocr.ts";
 import { decodeGif } from "./gif-decode.ts";
 
 // ---------- deterministic analysis ----------
@@ -442,6 +443,20 @@ export interface ImageAnalysis {
   contentConfidence: number | null;
   notes: string[];
   analyzedAt: string;
+  /** NATIVE OCR (engine 9, audit B-1): honest template-match
+   *  text extraction — clean machine-rendered text, charset
+   *  0-9 A-Z . , : -, refuses below calibration. Present only
+   *  on the full-pixel path. */
+  text?: OcrResult;
+  /** Bounded deterministic scene heuristics (NOT semantic
+   *  object recognition — feature scores only, honestly
+   *  labeled). Present only on the full-pixel path. */
+  sceneHeuristics?: {
+    document: number;
+    chart: number;
+    photograph: number;
+    illustration: number;
+  };
 }
 
 const MAX_PIXELS = 4_000_000; // 4MP — refuse larger, honestly
@@ -607,6 +622,8 @@ function analyzeRgba(
 ): Omit<ImageAnalysis, "format" | "notes"> {
   const { width, height, rgba } = img;
   const n = width * height;
+  // Luma plane reused by OCR (engine 9) — one allocation.
+  const lumaBuf = new Uint8Array(n);
 
   // Luma stats + histogram (16 bins).
   let lumaSum = 0;
@@ -622,6 +639,7 @@ function analyzeRgba(
       g = rgba[i + 1],
       b = rgba[i + 2];
     const l = luma(r, g, b);
+    lumaBuf[p] = l;
     lumaSum += l;
     histogram[Math.min(15, (l / 16) | 0)]++;
     const key = ((r >> 6) << 8) | ((g >> 6) << 4) | (b >> 6);
@@ -715,12 +733,51 @@ function analyzeRgba(
     contentConfidence = Math.min(0.85, 0.4 + usedBins / 128 + edgeDensity);
   }
 
+  // NATIVE OCR (engine 9, audit B-1): real template-match
+  // text extraction on the decoded pixels. Deterministic;
+  // refused honestly below calibration.
+  const text = extractText(lumaBuf, width, height);
+
+  // Bounded scene heuristics — feature SCORES derived from
+  // real measured statistics, never semantic claims.
+  const strongColors = dominantColors.filter((c) => c.coverage >= 4).length;
+  const textFound = text.ok;
+  const textConf = text.ok
+    ? text.lines.reduce((a, l) => a + l.confidence, 0) / text.lines.length
+    : 0;
+  const sceneHeuristics = {
+    document: textFound
+      ? Math.min(0.9, 0.45 + 0.5 * textConf)
+      : contentClass === "graphics-like"
+        ? 0.1
+        : 0,
+    chart:
+      contentClass !== "photo-like" && strongColors <= 6 && edgeDensity >= 0.08
+        ? Math.min(0.8, 0.3 + edgeDensity + (textFound ? 0.25 : 0))
+        : 0.1,
+    photograph: contentClass === "photo-like" ? contentConfidence : 0.1,
+    illustration:
+      contentClass !== "photo-like" && strongColors <= 4 && edgeDensity < 0.08
+        ? 0.7
+        : 0.1,
+  };
+
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const sceneHeuristicsRounded = {
+    document: round2(sceneHeuristics.document),
+    chart: round2(sceneHeuristics.chart),
+    photograph: round2(sceneHeuristics.photograph),
+    illustration: round2(sceneHeuristics.illustration),
+  };
+
   return {
     width,
     height,
     orientation: orientationOf(width, height),
     aspectRatio: Math.round((width / height) * 1000) / 1000,
     depth: "full-pixel",
+    text,
+    sceneHeuristics: sceneHeuristicsRounded,
     meanLuma: Math.round(meanLuma * 10) / 10,
     brightnessHistogram: histogram,
     dominantColors,
@@ -748,10 +805,24 @@ export function summarizeAnalysis(a: ImageAnalysis): string {
       : (a.meanLuma ?? 0) > 85
         ? "medium"
         : "dark";
+  const ocr = a.text
+    ? a.text.ok
+      ? ` Text read (native OCR, template match): ${a.text.lines
+          .map((l) => `"${l.text}"`)
+          .join(" / ")}. Charset 0-9 A-Z . , : - — clean rendered text only.`
+      : ` Text: none read (${a.text.note}).`
+    : "";
+  const scene = a.sceneHeuristics
+    ? ` Scene feature scores (heuristic, NOT object recognition): document ` +
+      `${a.sceneHeuristics.document}, chart ${a.sceneHeuristics.chart}, ` +
+      `photograph ${a.sceneHeuristics.photograph}, illustration ${a.sceneHeuristics.illustration}.`
+    : "";
   return (
     `${base}. Colors: ${colors}. Brightness: ${light} (mean luma ` +
     `${a.meanLuma}/255). Structure: ${a.contentClass} (heuristic, ` +
-    `confidence ${a.contentConfidence}; edge density ${a.edgeDensity}). ` +
-    `Bounds: composition/color statistics only — NO object recognition exists, natively or otherwise.`
+    `confidence ${a.contentConfidence}; edge density ${a.edgeDensity}).` +
+    ocr +
+    scene +
+    ` Bounds: statistics + template-match OCR only — NO object recognition exists, natively or otherwise.`
   );
 }

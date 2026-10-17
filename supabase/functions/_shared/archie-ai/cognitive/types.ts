@@ -46,7 +46,7 @@ export type PerceptionModality =
  *  analysis (colors/brightness/structure), JPEG/GIF structure
  *  only. No object recognition exists — and none is claimed. */
 export const IMAGE_CAPABILITY_BOUNDS =
-  "native vision: PNG, baseline-JPEG and GIF first-frame pixels analyzed (colors/brightness/composition statistics only); progressive JPEG dimensions only; no OCR, no object recognition exists — never claimed";
+  "native vision: PNG, baseline-JPEG and GIF first-frame pixels analyzed (colors/brightness/composition statistics + bounded scene feature scores); native template-match OCR reads clean machine-rendered text (charset 0-9 A-Z . , : -, calibrated refusals); progressive JPEG dimensions only; NO object recognition exists — never claimed";
 
 export const UNSUPPORTED_MODALITIES: ReadonlyArray<{
   modality: string;
