@@ -44,6 +44,7 @@ import {
 import type { SupabaseLike } from "../_shared/archie-ai/native-engine/persistence.ts";
 import { runTuningCycle } from "../_shared/archie-ai/cognitive/self-tuning.ts";
 import { runObservabilityPass } from "../_shared/archie-ai/cognitive/observability.ts";
+import { runBriefingPass } from "../_shared/archie-ai/cognitive/briefing.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -53,7 +54,7 @@ const REFLECTION_WATERMARK_KEY = "reflection_watermark";
 const WEAK_CONFIDENCE_FLOOR = 0.5;
 const REFLECT_BATCH_LIMIT = 100;
 
-type Mode = "consolidate" | "reflect" | "tune" | "observe" | "all";
+type Mode = "consolidate" | "reflect" | "tune" | "observe" | "brief" | "all";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
@@ -231,7 +232,7 @@ serveWithCors(async (req: Request) => {
     return json(400, { error: "Body must be JSON." });
   }
   const mode = (body.mode ?? "all") as Mode;
-  if (!["consolidate", "reflect", "tune", "observe", "all"].includes(mode)) {
+  if (!["consolidate", "reflect", "tune", "observe", "brief", "all"].includes(mode)) {
     return json(400, { error: `Unknown mode: ${mode}` });
   }
 
@@ -270,6 +271,16 @@ serveWithCors(async (req: Request) => {
       result.observe = await runObservabilityPass(
         service as unknown as Parameters<typeof runObservabilityPass>[0],
       );
+    }
+    // Proactive briefing engine (gap E-1): composes the daily
+    // deterministic briefing from the REAL record once per
+    // day (idempotent — later heartbeats return the stored
+    // one). Surfaces to the owner via archie-status.
+    if (mode === "brief" || mode === "all") {
+      const { briefing, fresh } = await runBriefingPass(
+        service as unknown as Parameters<typeof runBriefingPass>[0],
+      );
+      result.brief = { fresh, brief_date: briefing.brief_date, text: briefing.text };
     }
   } catch (err) {
     ok = false;

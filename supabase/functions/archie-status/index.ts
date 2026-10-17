@@ -368,6 +368,32 @@ serveWithCors(async (req: Request) => {
       };
     }
 
+    // Proactive Briefing Engine (gap E-1): today's stored
+    // deterministic briefing (or yesterday's latest) so the
+    // owner sees ARCHIE's own account of the day on status.
+    let briefingStatus: Record<string, unknown>;
+    try {
+      const { data: briefings } = await service
+        .from("archie_briefings")
+        .select("brief_date, text, created_at")
+        .order("brief_date", { ascending: false })
+        .limit(1);
+      const latest = (briefings ?? [])[0] ?? null;
+      briefingStatus = {
+        state: latest ? "OPERATIONAL" : "READY",
+        latest_brief_date: latest?.brief_date ?? null,
+        text: latest?.text ?? "no briefing generated yet",
+      };
+    } catch (briefErr) {
+      briefingStatus = {
+        state: "UNAVAILABLE",
+        note:
+          briefErr instanceof Error
+            ? briefErr.message
+            : "briefing query failed",
+      };
+    }
+
     // Ears runs NATIVE (on-device speech recognition, no
     // provider, no key — OpenAI Separation Rule). It is
     // OPERATIONAL only once a REAL transcription exists in
@@ -430,6 +456,7 @@ serveWithCors(async (req: Request) => {
         uncertainty_engine: uncertaintyEngine,
         self_tuning: selfTuning,
         observability,
+        briefing: briefingStatus,
         knowledge_repository: await knowledgeRepositoryPromise,
       },
     });
