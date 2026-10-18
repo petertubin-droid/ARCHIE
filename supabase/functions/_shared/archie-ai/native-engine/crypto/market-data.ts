@@ -30,6 +30,72 @@ export type Fetcher = (
   init?: { method?: string; headers?: Record<string, string> },
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
 
+// ---- EA-04 (audit 2026-10-17): every outbound market-data
+// request is time-bounded and every response is byte-bounded
+// BEFORE parsing. A slow upstream can no longer hold
+// execution, and a huge or bomb-sized body can no longer
+// buffer before JSON.parse. ----
+
+/** Hard deadline for any venue request. */
+export const FETCH_TIMEOUT_MS = 10_000;
+/** Hard cap on a venue response body before parsing. */
+export const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+async function boundedJson(response: Response): Promise<unknown> {
+  const declared = Number(response.headers?.get?.("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    throw new Error(
+      `response content-length ${declared} exceeds the ${MAX_RESPONSE_BYTES}-byte cap — refused`,
+    );
+  }
+  const body = response.body;
+  if (body == null) {
+    const text = await response.text();
+    if (text.length > MAX_RESPONSE_BYTES) {
+      throw new Error("response body exceeds the byte cap — refused");
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error("malformed JSON in venue response");
+    }
+  }
+  // streamed read: the cap is enforced DURING transfer, not
+  // after — a lying/absent Content-Length cannot smuggle a
+  // bomb through
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error(
+        `response body exceeded the ${MAX_RESPONSE_BYTES}-byte cap mid-stream — refused`,
+      );
+    }
+    chunks.push(value);
+  }
+  const text = new TextDecoder().decode(
+    (() => {
+      const all = new Uint8Array(total);
+      let pos = 0;
+      for (const c of chunks) {
+        all.set(c, pos);
+        pos += c.byteLength;
+      }
+      return all;
+    })(),
+  );
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("malformed JSON in venue response");
+  }
+}
+
 export const defaultFetcher: Fetcher = (url, init) => {
   const impl =
     (globalThis as { fetch?: typeof fetch }).fetch ??
@@ -42,10 +108,13 @@ export const defaultFetcher: Fetcher = (url, init) => {
       Accept: "application/json",
       ...(init?.headers ?? {}),
     },
+    // endpoint-appropriate abort deadline: no venue call may
+    // outlive FETCH_TIMEOUT_MS
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   }).then(async (r) => ({
     ok: r.ok,
     status: r.status,
-    json: () => r.json(),
+    json: () => boundedJson(r),
   }));
 };
 
@@ -269,16 +338,77 @@ function num(x: unknown): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
-async function getJson(
+// ---- EA-04: numeric-field validation before any ok
+// snapshot. A NaN price/qty/candle must never masquerade
+// as real market data. ----
+
+/** Parse a venue level [price, qty] — both must be positive
+ *  finite numbers, else null. */
+function parseLevel(x: unknown): [number, number] | null {
+  if (!Array.isArray(x)) return null;
+  const price = num(x[0]);
+  const qty = num(x[1]);
+  if (price === null || qty === null || price <= 0 || qty <= 0) return null;
+  return [price, qty];
+}
+
+/** Validate EVERY level in a book side; any invalid row makes
+ *  the whole side null → the snapshot is unavailable. */
+function parseLevels(rows: unknown): Array<[number, number]> | null {
+  if (!Array.isArray(rows)) return null;
+  const out: Array<[number, number]> = [];
+  for (const r of rows) {
+    const level = parseLevel(r);
+    if (level === null) return null;
+    out.push(level);
+  }
+  return out;
+}
+
+/** Validate a candle array: every numeric field finite, else
+ *  the snapshot is unavailable — never NaN candles in ok. */
+function candlesAreValid(
+  candles: Array<{
+    ts: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volumeBase: number;
+  }>,
+): boolean {
+  return candles.every((c) =>
+    [c.ts, c.open, c.high, c.low, c.close, c.volumeBase].every((n) =>
+      Number.isFinite(n),
+    ),
+  );
+}
+
+/** Bound any error text that flows into a `reason` — an
+ *  upstream error page must not become a payload. */
+function boundedReason(message: string, maxLen = 300): string {
+  const flat = message.replace(/\s+/g, " ").trim();
+  return flat.length <= maxLen ? flat : `${flat.slice(0, maxLen)}…`;
+}
+
+/** Exported for tests: the shared bounded request path. */
+export async function getJson(
   fetcher: Fetcher,
   url: string,
+  timeoutMs = FETCH_TIMEOUT_MS,
 ): Promise<
   { ok: true; body: unknown } | { ok: false; status: number; reason: string }
 > {
-  const started = Date.now();
-  void started;
+  // deadline race: even an injected/edge fetcher that hangs
+  // is cut off and reported unavailable — never a stall
+  const deadline = new Promise<never>((_, reject) => {
+    setTimeout(
+      () => reject(new Error("venue request timed out — unavailable")),
+      timeoutMs,
+    );
+  });
   try {
-    const res = await fetcher(url);
+    const res = await Promise.race([fetcher(url), deadline]);
     if (!res.ok) {
       return { ok: false, status: res.status, reason: `HTTP ${res.status}` };
     }
@@ -287,7 +417,9 @@ async function getJson(
     return {
       ok: false,
       status: 0,
-      reason: e instanceof Error ? e.message : "network failure",
+      reason: boundedReason(
+        e instanceof Error ? e.message : "network failure",
+      ),
     };
   }
 }
@@ -617,6 +749,12 @@ export async function fetchCandles(
           volumeBase: row[5],
         }))
         .sort((a, b) => a.ts - b.ts);
+      if (!candlesAreValid(candles)) {
+        return {
+          kind: "unavailable",
+          reason: "invalid numeric fields in candle payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
@@ -660,6 +798,12 @@ export async function fetchCandles(
         close: Number(row[4]),
         volumeBase: Number(row[6]),
       }));
+      if (!candlesAreValid(candles)) {
+        return {
+          kind: "unavailable",
+          reason: "invalid numeric fields in candle payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
@@ -707,6 +851,12 @@ export async function fetchCandles(
         }))
         .sort((a, b2) => a.ts - b2.ts)
         .slice(-limit);
+      if (!candlesAreValid(candles)) {
+        return {
+          kind: "unavailable",
+          reason: "invalid numeric fields in candle payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
@@ -750,6 +900,12 @@ export async function fetchCandles(
         }))
         .sort((a, b2) => a.ts - b2.ts)
         .slice(-limit);
+      if (!candlesAreValid(candles)) {
+        return {
+          kind: "unavailable",
+          reason: "invalid numeric fields in candle payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
@@ -790,6 +946,12 @@ export async function fetchCandles(
         close: Number(row[4]),
         volumeBase: Number(row[5]),
       }));
+      if (!candlesAreValid(candles)) {
+        return {
+          kind: "unavailable",
+          reason: "invalid numeric fields in candle payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
@@ -841,6 +1003,12 @@ export async function fetchCandles(
         }))
         .sort((a, b2) => a.ts - b2.ts)
         .slice(-limit);
+      if (!candlesAreValid(candles)) {
+        return {
+          kind: "unavailable",
+          reason: "invalid numeric fields in candle payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
@@ -876,6 +1044,12 @@ export async function fetchCandles(
         close: p[1],
         volumeBase: 0,
       }));
+      if (!candlesAreValid(candles)) {
+        return {
+          kind: "unavailable",
+          reason: "invalid numeric fields in candle payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
@@ -920,17 +1094,21 @@ export async function fetchOrderBook(
       if (b.code !== "0" || !d?.bids || !d?.asks) {
         return { kind: "unavailable", reason: `okx code ${b.code ?? "?"}` };
       }
+      const asksL = parseLevels(d.asks);
+      const bidsL = parseLevels(d.bids);
+      if (!asksL || !bidsL) {
+        return {
+          kind: "unavailable",
+          reason: "invalid levels in order book payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
           venue,
           symbol,
-          asks: d.asks.map(
-            (x) => [Number(x[0]), Number(x[1])] as [number, number],
-          ),
-          bids: d.bids.map(
-            (x) => [Number(x[0]), Number(x[1])] as [number, number],
-          ),
+          asks: asksL,
+          bids: bidsL,
           fetchedAt: nowIso(),
           latencyMs: Date.now() - t0,
         },
@@ -958,17 +1136,21 @@ export async function fetchOrderBook(
       const d = key ? b.result?.[key] : undefined;
       if (!d?.asks || !d?.bids)
         return { kind: "unavailable", reason: "bad payload" };
+      const asksL = parseLevels(d.asks);
+      const bidsL = parseLevels(d.bids);
+      if (!asksL || !bidsL) {
+        return {
+          kind: "unavailable",
+          reason: "invalid levels in order book payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
           venue,
           symbol,
-          asks: d.asks.map(
-            (x) => [Number(x[0]), Number(x[1])] as [number, number],
-          ),
-          bids: d.bids.map(
-            (x) => [Number(x[0]), Number(x[1])] as [number, number],
-          ),
+          asks: asksL,
+          bids: bidsL,
           fetchedAt: nowIso(),
           latencyMs: Date.now() - t0,
         },
@@ -990,17 +1172,21 @@ export async function fetchOrderBook(
       if (b.code !== "200000" || !b.data?.asks || !b.data?.bids) {
         return { kind: "unavailable", reason: `kucoin code ${b.code ?? "?"}` };
       }
+      const asksL = parseLevels(b.data.asks.slice(0, depth));
+      const bidsL = parseLevels(b.data.bids.slice(0, depth));
+      if (!asksL || !bidsL) {
+        return {
+          kind: "unavailable",
+          reason: "invalid levels in order book payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
           venue,
           symbol,
-          asks: b.data.asks.map(
-            (x) => [Number(x[0]), Number(x[1])] as [number, number],
-          ),
-          bids: b.data.bids.map(
-            (x) => [Number(x[0]), Number(x[1])] as [number, number],
-          ),
+          asks: asksL,
+          bids: bidsL,
           fetchedAt: nowIso(),
           latencyMs: Date.now() - t0,
         },
@@ -1021,17 +1207,21 @@ export async function fetchOrderBook(
       };
       if (!b.bids || !b.asks)
         return { kind: "unavailable", reason: "bad payload" };
+      const asksL = parseLevels(b.asks);
+      const bidsL = parseLevels(b.bids);
+      if (!asksL || !bidsL) {
+        return {
+          kind: "unavailable",
+          reason: "invalid levels in order book payload",
+        };
+      }
       return {
         kind: "ok",
         data: {
           venue,
           symbol,
-          asks: b.asks
-            .slice(0, depth)
-            .map((x) => [Number(x[0]), Number(x[1])] as [number, number]),
-          bids: b.bids
-            .slice(0, depth)
-            .map((x) => [Number(x[0]), Number(x[1])] as [number, number]),
+          asks: asksL,
+          bids: bidsL,
           fetchedAt: nowIso(),
           latencyMs: Date.now() - t0,
         },

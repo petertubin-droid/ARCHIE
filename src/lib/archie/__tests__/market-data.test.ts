@@ -12,12 +12,17 @@
 import { describe, expect, it } from "vitest";
 import {
   crossCheckTicker,
+  defaultFetcher,
   fetchCandles,
   fetchFunding,
+  fetchOrderBook,
   fetchOpenInterest,
   fetchTicker,
+  getJson,
   mapSymbol,
   venueSupportsInterval,
+  FETCH_TIMEOUT_MS,
+  MAX_RESPONSE_BYTES,
   type Fetcher,
 } from "@studio-shared/archie-ai/native-engine/crypto/market-data.ts";
 import {
@@ -307,6 +312,129 @@ describe("venue adapters (captured live response shapes)", () => {
     expect(mapSymbol("binance", "BTC-USDT")).toBe("BTCUSDT");
     expect(mapSymbol("coinbase", "BTC-USDT")).toBe("BTC-USD");
     expect(mapSymbol("okx", "BTC-USDT")).toBe("BTC-USDT");
+  });
+});
+
+// ---------------------------------------------------------
+// EA-04 — outbound requests are time-bounded and response
+// bodies are byte-bounded BEFORE parsing. Venue failures
+// stay `unavailable`; nothing becomes stale or fabricated,
+// and NaN never masquerades as market data.
+// ---------------------------------------------------------
+
+describe("EA-04 — timeouts, byte caps, malformed/invalid responses", () => {
+  it("a stalled fetch is cut by the deadline and reported unavailable — never a hang", async () => {
+    const stalled: Fetcher = () => new Promise(() => {}); // never settles
+    const started = Date.now();
+    const r = await getJson(stalled, "https://venue.test/ticker", 50);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("timed out");
+  });
+
+  it("oversized declared Content-Length refused BEFORE reading the body", async () => {
+    const impl = async () =>
+      new Response("{}", {
+        headers: { "content-length": String(MAX_RESPONSE_BYTES + 1) },
+      });
+    (globalThis as { fetch?: typeof fetch }).fetch = impl as typeof fetch;
+    try {
+      await expect(
+        defaultFetcher("https://venue.test/ticker").then((r) => r.json()),
+      ).rejects.toThrow(/exceeds the .*-byte cap/);
+    } finally {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  });
+
+  it("absent Content-Length: a body over the cap is cut mid-stream", async () => {
+    const huge = "x".repeat(MAX_RESPONSE_BYTES + 4096);
+    const impl = async () => new Response(huge, { headers: {} });
+    (globalThis as { fetch?: typeof fetch }).fetch = impl as typeof fetch;
+    try {
+      await expect(
+        defaultFetcher("https://venue.test/ticker").then((r) => r.json()),
+      ).rejects.toThrow(/byte cap/);
+    } finally {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  });
+
+  it("malformed JSON reported unavailable, never a fabricated snapshot", async () => {
+    const impl = async () => new Response("<html>gateway error</html>");
+    (globalThis as { fetch?: typeof fetch }).fetch = impl as typeof fetch;
+    try {
+      const res = await fetchTicker("coinbase", "BTC-USDT", defaultFetcher);
+      expect(res.kind).toBe("unavailable");
+      if (res.kind === "unavailable") {
+        expect(res.reason).toContain("malformed JSON");
+      }
+    } finally {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  });
+
+  it("invalid numeric ticker fields → unavailable, never a NaN price", async () => {
+    const badNums: Fetcher = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ price: "not-a-number", bid: "also bad" }),
+    });
+    const res = await fetchTicker("coinbase", "BTC-USDT", badNums);
+    expect(res.kind).toBe("unavailable");
+  });
+
+  it("invalid order-book levels (non-numeric price/qty) → unavailable", async () => {
+    const badBook: Fetcher = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        code: "0",
+        data: [
+          {
+            bids: [["garbage", "0.1"], ["100", "garbage"]],
+            asks: [["200", "0.2"]],
+          },
+        ],
+      }),
+    });
+    const res = await fetchOrderBook("okx", "BTC-USDT", 10, badBook);
+    expect(res.kind).toBe("unavailable");
+    if (res.kind === "unavailable") {
+      expect(res.reason).toContain("invalid levels");
+    }
+  });
+
+  it("NaN candle fields → unavailable, never ok with fabricated OHLC", async () => {
+    const badCandles: Fetcher = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        retCode: 0,
+        result: {
+          list: [["1700000000000", "garbage", "2", "1", "1.5", "10"]],
+        },
+      }),
+    });
+    const res = await fetchCandles("bybit", "BTC-USDT", 5, 10, badCandles);
+    expect(res.kind).toBe("unavailable");
+    if (res.kind === "unavailable") {
+      expect(res.reason).toContain("invalid numeric fields");
+    }
+  });
+
+  it("error payloads are bounded — a huge upstream error text cannot become the reason", async () => {
+    const noisyError: Fetcher = () =>
+      Promise.reject(new Error(`${"E".repeat(5_000)} upstream exploded`));
+    const r = await getJson(noisyError, "https://venue.test/ticker", 5_000);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.length).toBeLessThanOrEqual(302);
+  });
+
+  it("the timeout default is endpoint-appropriate and caps are sane", () => {
+    expect(FETCH_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(FETCH_TIMEOUT_MS).toBeLessThanOrEqual(15_000);
+    expect(MAX_RESPONSE_BYTES).toBeLessThanOrEqual(4 * 1024 * 1024);
   });
 });
 
