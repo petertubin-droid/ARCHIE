@@ -27,7 +27,15 @@ import type { WorldEntity, WorldModelQuery, WorldRelation } from "./types.ts";
 
 export const WORLD_MODEL_TABLE = table("archie_world_model");
 
+/** The owner's scope. Existing rows and the owner's writes use
+ *  this value, matching ARCHIE's memory tables (user_id DEFAULT
+ *  'owner'). Any other scope is a non-owner (visitor) world and
+ *  never reads or overwrites owner rows. */
+export const OWNER_SCOPE = "owner";
+const SCOPE_RE = /^[a-z0-9_-]{1,64}$/;
+
 interface WorldModelRow {
+  user_id?: string | null;
   id: string;
   subject: string;
   relation: string;
@@ -82,9 +90,27 @@ export class WorldModel {
   private usedIds = new Set<string>();
   private db: SupabaseLike | null;
   private hydrated = false;
+  /** Owner scope of this model instance (OWNER_SCOPE by default).
+   *  Every read is filtered to it and every write is stamped
+   *  with it, so one scope's facts never leak into another's. */
+  readonly ownerScope: string;
+  /** Prefix that keeps non-owner row ids disjoint from owner
+   *  row ids (the table's id is a global primary key). */
+  private keyPrefix: string;
 
-  constructor(db?: SupabaseLike) {
+  constructor(db?: SupabaseLike, options?: { ownerScope?: string }) {
     this.db = db ?? null;
+    const scope = options?.ownerScope ?? OWNER_SCOPE;
+    if (!SCOPE_RE.test(scope)) {
+      throw new Error("invalid world-model scope");
+    }
+    this.ownerScope = scope;
+    this.keyPrefix = scope === OWNER_SCOPE ? "" : `s:${scope}::`;
+  }
+
+  /** Semantic identity of a relation within this scope. */
+  private key(subject: string, relation: string, object: string): string {
+    return this.keyPrefix + idFor(subject, relation, object);
   }
 
   /** Issue a version id for a new observation of a semantic
@@ -107,13 +133,22 @@ export class WorldModel {
     if (this.hydrated || !this.db) return 0;
     this.hydrated = true;
     try {
-      const { data, error } = await this.db
+      const selected = this.db
         .from(WORLD_MODEL_TABLE)
         .select(
-          "id,subject,relation,object,subject_kind,object_kind,confidence,provenance,created_at,observed_at,superseded_by",
+          "id,user_id,subject,relation,object,subject_kind,object_kind,confidence,provenance,created_at,observed_at,superseded_by",
         );
+      // Scope filter in the database when the client supports it;
+      // otherwise filter the rows here. Either way a row outside
+      // this scope is never loaded.
+      const { data, error } = selected.eq
+        ? await selected.eq("user_id", this.ownerScope)
+        : await selected;
       if (error || !Array.isArray(data)) return 0;
-      for (const row of data as WorldModelRow[]) {
+      const scoped = (data as WorldModelRow[]).filter(
+        (row) => (row.user_id ?? OWNER_SCOPE) === this.ownerScope,
+      );
+      for (const row of scoped) {
         this.entities.set(idFor(row.subject), {
           id: idFor(row.subject),
           name: row.subject,
@@ -152,7 +187,7 @@ export class WorldModel {
         // current view is keyed by the semantic triple.
         if (!versioned.supersededBy) {
           this.relations.set(
-            idFor(row.subject, row.relation, row.object),
+            this.key(row.subject, row.relation, row.object),
             versioned,
           );
         }
@@ -194,7 +229,7 @@ export class WorldModel {
     observedAt?: string;
   }): Promise<WorldRelation> {
     const observedAt = input.observedAt ?? new Date().toISOString();
-    const id = idFor(input.subject, input.relation, input.object);
+    const id = this.key(input.subject, input.relation, input.object);
     const existing = this.relations.get(id);
     if (existing) {
       // Strengthen confidence when re-observed — and stamp the
@@ -216,6 +251,7 @@ export class WorldModel {
           // relation and stamps the new observation time.
           await this.db.from(WORLD_MODEL_TABLE).upsert({
             id: existing.id,
+            user_id: this.ownerScope,
             subject: existing.subject,
             relation: existing.relation,
             object: existing.object,
@@ -294,6 +330,7 @@ export class WorldModel {
         }
         await this.db.from(WORLD_MODEL_TABLE).upsert({
           id: versionId,
+          user_id: this.ownerScope,
           subject: input.subject,
           relation: input.relation,
           object: input.object,

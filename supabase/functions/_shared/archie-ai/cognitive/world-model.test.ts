@@ -6,17 +6,31 @@
 // ============================================================
 
 import { describe, expect, it } from "vitest";
-import { WorldModel, WORLD_MODEL_TABLE } from "./world-model.ts";
+import { WorldModel, WORLD_MODEL_TABLE, OWNER_SCOPE } from "./world-model.ts";
 
 /** Minimal in-memory double of the subset of the Supabase
  *  client WorldModel uses: select / upsert / update().eq(). */
 class FakeTable {
   rows = new Map<string, Record<string, unknown>>();
   failWrites = false;
+  /** When true the double behaves like a thenable-only client
+   *  (no .eq on select): the model must filter rows itself. */
+  noEq = false;
   constructor(private name: string) {}
   select() {
-    const rows = [...this.rows.values()].map((r) => ({ ...r }));
-    return Promise.resolve({ data: rows, error: null });
+    const self = this;
+    const result = (list: Record<string, unknown>[]) => {
+      const p = Promise.resolve({
+        data: list.map((r) => ({ ...r })),
+        error: null,
+      });
+      if (self.noEq) return p;
+      return Object.assign(p, {
+        eq: (col: string, val: unknown) =>
+          result(list.filter((r) => r[col] === val)),
+      });
+    };
+    return result([...this.rows.values()]);
   }
   upsert(row: Record<string, unknown>) {
     if (this.failWrites) return Promise.reject(new Error("db down"));
@@ -144,5 +158,86 @@ describe("WorldModel — versioned relations", () => {
     const r = await m.relate({ subject: "a", relation: "is", object: "b", confidence: 0.5, provenance: "p", observedAt: T("2026-10-01T00:00:00.000Z") });
     expect(r.object).toBe("b");
     expect(m.currentView()).toHaveLength(1);
+  });
+});
+
+describe("WorldModel — owner scope", () => {
+  const CONST = { confidence: 0.6, provenance: "owner", observedAt: T("2026-10-01T00:00:00.000Z") };
+  const dbOf = () => new FakeDb();
+  const asDb = (db: FakeDb) => db as unknown as ConstructorParameters<typeof WorldModel>[0];
+
+  it("defaults to the owner scope", () => {
+    expect(new WorldModel().ownerScope).toBe(OWNER_SCOPE);
+  });
+
+  it("owner and visitor worlds are isolated in memory and in the database", async () => {
+    const db = dbOf();
+    const owner = new WorldModel(asDb(db));
+    const visitor = new WorldModel(asDb(db), { ownerScope: "visitor-abc" });
+    await owner.relate({ subject: "site", relation: "condition", object: "muddy", ...CONST });
+    await visitor.relate({ subject: "site", relation: "condition", object: "dry", ...CONST });
+    expect(owner.currentView().map((r) => r.object)).toEqual(["muddy"]);
+    expect(visitor.currentView().map((r) => r.object)).toEqual(["dry"]);
+    // Same triple in two scopes must not overwrite each other.
+    expect(db.world.rows.size).toBe(2);
+    const stamps = [...db.world.rows.values()].map((r) => r.user_id).sort();
+    expect(stamps).toEqual(["owner", "visitor-abc"]);
+  });
+
+  it("a visitor never hydrates owner rows, and the owner never hydrates visitor rows", async () => {
+    const db = dbOf();
+    const owner = new WorldModel(asDb(db));
+    const visitor = new WorldModel(asDb(db), { ownerScope: "visitor-abc" });
+    await owner.relate({ subject: "site", relation: "condition", object: "muddy", ...CONST });
+    await visitor.relate({ subject: "rate", relation: "is", object: "high", ...CONST });
+    const freshVisitor = new WorldModel(asDb(db), { ownerScope: "visitor-abc" });
+    await freshVisitor.hydrate();
+    expect(freshVisitor.currentView().map((r) => r.subject)).toEqual(["rate"]);
+    const freshOwner = new WorldModel(asDb(db));
+    await freshOwner.hydrate();
+    expect(freshOwner.currentView().map((r) => r.subject)).toEqual(["site"]);
+  });
+
+  it("backfilled legacy rows hydrate for the owner only", async () => {
+    const db = dbOf();
+    // Pre-existing rows after the owner-scope migration backfill:
+    // user_id is stamped 'owner' (the migration never leaves NULLs).
+    await db.world.upsert({
+      user_id: "owner",
+      id: "site::condition::muddy",
+      subject: "site",
+      relation: "condition",
+      object: "muddy",
+      subject_kind: "Concept",
+      object_kind: "Concept",
+      confidence: 0.6,
+      provenance: "legacy",
+      created_at: T("2026-09-01T00:00:00.000Z"),
+      observed_at: T("2026-09-01T00:00:00.000Z"),
+      superseded_by: null,
+    });
+    const owner = new WorldModel(asDb(db));
+    expect(await owner.hydrate()).toBe(1);
+    const visitor = new WorldModel(asDb(db), { ownerScope: "visitor-abc" });
+    expect(await visitor.hydrate()).toBe(0);
+  });
+
+  it("filters rows in memory when the client cannot filter in the database", async () => {
+    const db = dbOf();
+    db.world.noEq = true;
+    const owner = new WorldModel(asDb(db));
+    const visitor = new WorldModel(asDb(db), { ownerScope: "visitor-abc" });
+    await owner.relate({ subject: "site", relation: "condition", object: "muddy", ...CONST });
+    await visitor.relate({ subject: "site", relation: "condition", object: "dry", ...CONST });
+    const reader = new WorldModel(asDb(db), { ownerScope: "visitor-abc" });
+    await reader.hydrate();
+    expect(reader.currentView().map((r) => r.object)).toEqual(["dry"]);
+  });
+
+  it("rejects an invalid scope string", () => {
+    expect(() => new WorldModel(undefined, { ownerScope: "bad scope!" })).toThrow(
+      "invalid world-model scope",
+    );
+    expect(() => new WorldModel(undefined, { ownerScope: "" })).toThrow();
   });
 });

@@ -58,7 +58,7 @@ export interface SupabaseLike {
         limit(
           n: number,
         ): PromiseLike<{ data: unknown[] | null; error: unknown }>;
-      };
+      } & PromiseLike<{ data: unknown[] | null; error: unknown }>;
     };
     insert(rows: unknown): PromiseLike<{ error: unknown }>;
     update(patch: unknown): {
