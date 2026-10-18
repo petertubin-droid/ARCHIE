@@ -55,8 +55,8 @@ describe("StatusCenter", () => {
       refresh: vi.fn(),
     });
     const { container } = render(<StatusCenter />);
-    const tiles = container.querySelectorAll(".animate-pulse");
-    expect(tiles.length).toBe(9);
+    const tiles = container.querySelectorAll(".archie-skeleton");
+    expect(tiles.length).toBe(10);
     expect(screen.queryByText("ONLINE")).toBeNull();
   });
 

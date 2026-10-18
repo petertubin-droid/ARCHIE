@@ -152,3 +152,115 @@ export function ArchieBadge({
     </span>
   );
 }
+
+/** Labeled input field — label, hint and input as one a11y unit. */
+export function ArchieField({
+  label,
+  hint,
+  children,
+  htmlFor,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+  htmlFor?: string;
+}) {
+  return (
+    <label className="block" htmlFor={htmlFor}>
+      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+        {label}
+      </span>
+      {children}
+      {hint && (
+        <span className="mt-1 block text-[11px] text-slate-500">{hint}</span>
+      )}
+    </label>
+  );
+}
+
+/** Premium text input (light wrapper over .archie-input). */
+export function ArchieInput({
+  className = "",
+  ...props
+}: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`archie-input archie-focusable w-full rounded-lg px-3 py-2 text-sm text-slate-100 ${className}`}
+    />
+  );
+}
+
+/** Premium textarea (light wrapper over .archie-input). */
+export function ArchieTextarea({
+  className = "",
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={`archie-input archie-focusable w-full rounded-lg px-3 py-2 text-sm text-slate-100 ${className}`}
+    />
+  );
+}
+
+/** Ghost/secondary button — the quiet companion to ArchieButton. */
+export function ArchieGhostButton({
+  children,
+  disabled,
+  onClick,
+  type = "button",
+  className = "",
+  ...rest
+}: {
+  children: ReactNode;
+  disabled?: boolean;
+  onClick?: () => void;
+  type?: "button" | "submit";
+  className?: string;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      {...rest}
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={`archie-btn-ghost archie-focusable rounded-lg px-4 py-2 text-sm font-medium ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Honest empty state — icon, title, description. Never fake content. */
+export function ArchieEmptyState({
+  icon,
+  title,
+  description,
+}: {
+  icon?: ReactNode;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="archie-panel flex flex-col items-center justify-center gap-2 rounded-xl px-6 py-8 text-center">
+      {icon && <div className="text-slate-500" aria-hidden>{icon}</div>}
+      <p className="text-sm font-semibold text-slate-200">{title}</p>
+      {description && (
+        <p className="max-w-sm text-xs leading-relaxed text-slate-500">
+          {description}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Skeleton loading tile — shimmer, sized by className. */
+export function ArchieSkeleton({ className = "" }: { className?: string }) {
+  return (
+    <div
+      aria-hidden
+      className={`archie-skeleton rounded-lg ${className || "h-16 w-full"}`}
+    />
+  );
+}

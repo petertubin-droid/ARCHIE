@@ -306,3 +306,92 @@
 .archie-voice-pulse {
   animation: archie-voice-pulse-anim 2.2s ease-in-out infinite;
 }
+
+/* ---------- Premium kit additions (UI upgrade pass 2026-10-18) ---------- */
+
+/* Ghost / secondary button — quiet companion to the amber primary. */
+.archie-btn-ghost {
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.02)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
+}
+
+.archie-btn-ghost:hover:not(:disabled) {
+  border-color: rgba(252, 211, 77, 0.35);
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.08);
+  filter: brightness(1.08);
+}
+
+.archie-btn-ghost:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.archie-btn-ghost:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* Skeleton shimmer — honest loading placeholder, never fake data. */
+.archie-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.archie-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.07),
+    transparent
+  );
+  animation: archie-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes archie-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Live status dot pulse — used by StatusCenter state indicators. */
+.archie-dot-pulse {
+  animation: archie-dot-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes archie-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(52, 211, 153, 0);
+  }
+}
+
+/* Keyboard focus ring shared by every interactive premium surface. */
+.archie-focusable:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(11, 15, 20, 0.9),
+    0 0 0 4px rgba(252, 211, 77, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .archie-skeleton::after,
+  .archie-dot-pulse {
+    animation: none;
+  }
+}

@@ -13,10 +13,16 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import {
   ArchieBadge,
   ArchieButton,
+  ArchieEmptyState,
+  ArchieField,
+  ArchieGhostButton,
+  ArchieInput,
   ArchiePage,
   ArchiePanel,
   ArchieSectionTitle,
+  ArchieSkeleton,
   ArchieStat,
+  ArchieTextarea,
 } from "@/components/archie/premium";
 
 describe("ArchiePage", () => {
@@ -117,5 +123,81 @@ describe("ArchieBadge", () => {
       expect(screen.getByText(`${tone} badge`)).toBeTruthy();
       unmount();
     }
+  });
+});
+
+// ---------- UI upgrade pass 2026-10-18: new primitives ----------
+
+describe("ArchieInput / ArchieTextarea", () => {
+  it("renders accessible input wired to its label via ArchieField", () => {
+    render(
+      <ArchieField label="Target" htmlFor="tgt">
+        <ArchieInput id="tgt" placeholder="e.g. src/lib/engine.ts" />
+      </ArchieField>,
+    );
+    const input = screen.getByLabelText("Target");
+    expect(input.id).toBe("tgt");
+    expect(input.getAttribute("placeholder")).toBe("e.g. src/lib/engine.ts");
+  });
+
+  it("renders hint text under the field", () => {
+    render(
+      <ArchieField label="Secret" hint="Minimum 12 characters">
+        <ArchieInput />
+      </ArchieField>,
+    );
+    expect(screen.getByText("Minimum 12 characters")).toBeTruthy();
+  });
+
+  it("textarea carries its value", () => {
+    render(<ArchieTextarea defaultValue="hello" />);
+    expect(
+      (screen.getByRole("textbox") as HTMLTextAreaElement).value,
+    ).toBe("hello");
+  });
+});
+
+describe("ArchieGhostButton", () => {
+  it("fires onClick and forwards attributes", () => {
+    const onClick = vi.fn();
+    render(
+      <ArchieGhostButton onClick={onClick} data-testid="ghost">
+        Cancel
+      </ArchieGhostButton>,
+    );
+    fireEvent.click(screen.getByTestId("ghost"));
+    expect(onClick).toHaveBeenCalled();
+  });
+
+  it("stays disabled", () => {
+    render(
+      <ArchieGhostButton disabled data-testid="ghost2">
+        No
+      </ArchieGhostButton>,
+    );
+    expect(
+      (screen.getByTestId("ghost2") as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});
+
+describe("ArchieEmptyState / ArchieSkeleton", () => {
+  it("renders title and description, no fake content", () => {
+    render(
+      <ArchieEmptyState
+        title="Nothing to report"
+        description="No alerts were raised today."
+      />,
+    );
+    expect(screen.getByText("Nothing to report")).toBeTruthy();
+    expect(
+      screen.getByText("No alerts were raised today."),
+    ).toBeTruthy();
+  });
+
+  it("skeleton is aria-hidden decoration", () => {
+    const { container } = render(<ArchieSkeleton />);
+    const skel = container.firstElementChild as HTMLElement;
+    expect(skel.getAttribute("aria-hidden")).toBe("true");
   });
 });
