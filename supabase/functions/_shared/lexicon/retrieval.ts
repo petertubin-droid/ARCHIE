@@ -1,3 +1,17 @@
+import {
+  lookupCuratedWords,
+  selectCuratedContextualSenses,
+} from "./curated-corpus.ts";
+export {
+  CURATED_ENTRIES,
+  CURATED_LEXICON_SOURCE,
+  CURATED_SOURCE_ID,
+  lookupCuratedWord,
+  lookupCuratedWords,
+  selectCuratedContextualSenses,
+  createCuratedLexiconClient,
+} from "./curated-corpus.ts";
+
 // =========================================================
 // ARCHIE UNIVERSAL LEXICON ENGINE — RETRIEVAL LAYER
 //
@@ -59,6 +73,7 @@ export interface LexiconSourceRow {
   license: string;
   attribution: string;
   url: string | null;
+  notes?: string | null;
 }
 
 export interface LookupOptions {
@@ -68,6 +83,10 @@ export interface LookupOptions {
   language?: string;
   partOfSpeech?: string;
   limit?: number;
+  /** Include code-declared curated corpus to enrich or backfill missing forms */
+  includeCuratedCorpus?: boolean;
+  /** Fall back to code-declared curated corpus when database has no records */
+  fallbackToCorpus?: boolean;
 }
 
 /** Structural client (supabase-js subset) — satisfied by the
@@ -269,7 +288,13 @@ export async function lookupWords(
     .order("part_of_speech")
     .limit(opts.limit ?? 24);
   const wordRows = (words ?? []) as LexiconWordRow[];
-  if (!wordRows.length) return [];
+
+  if (!wordRows.length) {
+    if (opts.fallbackToCorpus || opts.includeCuratedCorpus) {
+      return lookupCuratedWords(normalized, { limit: opts.limit, statuses });
+    }
+    return [];
+  }
 
   const { data: senses } = await svc
     .from("lexicon_senses")
@@ -285,10 +310,21 @@ export async function lookupWords(
     .limit(40 * wordRows.length);
   const senseRows = (senses ?? []) as LexiconSenseRow[];
 
-  return wordRows.map((word) => ({
+  const results = wordRows.map((word) => ({
     word,
     senses: senseRows.filter((s) => s.word_id === word.id),
   }));
+
+  if (opts.includeCuratedCorpus) {
+    const existingNorms = new Set(wordRows.map((w) => w.normalized));
+    const missingForms = normalized.filter((n) => !existingNorms.has(n));
+    if (missingForms.length > 0) {
+      const curated = lookupCuratedWords(missingForms, { limit: opts.limit, statuses });
+      results.push(...curated);
+    }
+  }
+
+  return results;
 }
 
 /** One word (all POS). Deterministic, honest when absent. */
@@ -338,6 +374,9 @@ export async function selectContextualSenses(
 ): Promise<{ word: LexiconWordRow | null; selection: ContextualSelection }> {
   const entries = await lookupWord(svc, form, opts);
   if (!entries.length) {
+    if (opts.fallbackToCorpus) {
+      return selectCuratedContextualSenses(form, context);
+    }
     return {
       word: null,
       selection: {
@@ -816,6 +855,7 @@ export interface LexicalGroundTruth {
 export async function lexicalGroundTruth(
   svc: LexiconClient,
   message: string,
+  opts: LookupOptions = {},
 ): Promise<LexicalGroundTruth> {
   const rawTokens = Array.from(new Set(lexicalTokens(message)))
     .filter((t) => t.length >= 3)
@@ -825,7 +865,7 @@ export async function lexicalGroundTruth(
     return { block: "", wordsExamined: 0, disambiguated: [], ambiguous: [] };
   }
 
-  const results = await lookupWords(svc, tokens, { limit: 48 });
+  const results = await lookupWords(svc, tokens, { limit: 48, ...opts });
   const lines: string[] = [];
   const disambiguated: string[] = [];
   const ambiguous: string[] = [];

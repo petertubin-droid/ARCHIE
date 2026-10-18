@@ -50,6 +50,8 @@ const DRY_RUN = args.includes("--dry-run");
 const LIMIT = arg("limit") ? parseInt(arg("limit")!) : Infinity;
 const START_BATCH = parseInt(arg("batch-size", "1000")!);
 const THROTTLE_MS = parseInt(arg("throttle-ms", "150")!);
+const PRUNE_LONG_TAIL = args.includes("--prune-long-tail");
+const MIN_FREQUENCY = arg("min-frequency") ? parseFloat(arg("min-frequency")!) : 0;
 
 const PROJECT_REF = process.env.SUPABASE_PROJECT_REF ?? "hqhvlkunkdrxyuvziorm";
 const TOKEN = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -261,7 +263,27 @@ try {
   for (const f of entryFiles.slice(0, LIMIT)) {
     console.log(`— ${f}`);
     const entries = loadJson(path.join(DATASET_DIR, f)) as OewnEntriesFile;
-    const r = transformOewn(entries, synsets);
+    let r = transformOewn(entries, synsets);
+    if (PRUNE_LONG_TAIL || MIN_FREQUENCY > 0) {
+      const keptWords = r.words.filter(w => {
+        if (MIN_FREQUENCY > 0 && w.frequency !== null && w.frequency < MIN_FREQUENCY) return false;
+        return true;
+      });
+      const keptWordIds = new Set(keptWords.map(w => w.id));
+      const keptSenses = r.senses.filter(s => {
+        if (!keptWordIds.has(s.word_id)) return false;
+        if (PRUNE_LONG_TAIL && s.knowledge_status === "UNVERIFIED" && (!s.usage_examples || (Array.isArray(s.usage_examples) && s.usage_examples.length === 0))) {
+          return false;
+        }
+        return true;
+      });
+      const finalWordIds = new Set(keptSenses.map(s => s.word_id));
+      r = {
+        ...r,
+        words: keptWords.filter(w => finalWordIds.has(w.id)),
+        senses: keptSenses,
+      };
+    }
     totals.entryFiles++;
     totals.words += r.words.length;
     totals.senses += r.senses.length;

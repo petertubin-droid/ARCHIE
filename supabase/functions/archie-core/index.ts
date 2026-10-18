@@ -1,3 +1,4 @@
+import { createCuratedLexiconClient } from "../_shared/lexicon/curated-corpus.ts";
 // Supabase Edge Function: archie-core
 // =========================================================
 // FRELUX ARCHIE STAGE 1 — THE CHAT FRONT DOOR TO THE REAL
@@ -101,17 +102,30 @@ type KnowledgeSource = {
 };
 
 async function resolveKnowledgeSource(): Promise<KnowledgeSource> {
-  let source: "A" | "B" = "A";
+  let source: "A" | "B" | "CODE" = "A";
   try {
     const { data, error } = await service
       .from("site_settings")
       .select("archie_knowledge_source")
       .limit(1);
-    if (!error && data?.[0]?.archie_knowledge_source === "B") {
-      source = "B";
+    if (!error) {
+      const s = data?.[0]?.archie_knowledge_source;
+      if (s === "B") {
+        source = "B";
+      } else if (s === "CODE" || s === "CURATED") {
+        source = "CODE";
+      }
     }
   } catch {
     // missing column / settings read failure → fail-safe 'A'
+  }
+  if (source === "CODE") {
+    return {
+      source: "A",
+      origin: "code-declared-curated",
+      lexiconClient: createCuratedLexiconClient(),
+      graphClient: service as unknown as GraphClient,
+    };
   }
   if (source === "B") {
     const repo = getKnowledgeRepository();
