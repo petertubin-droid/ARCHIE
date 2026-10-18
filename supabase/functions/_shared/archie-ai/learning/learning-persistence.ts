@@ -78,7 +78,7 @@ export class LearningPersistenceStore {
     // 1. In-memory commit
     this.inMemoryItems.set(item.id, item);
     if (item.provenance.sourceReference) {
-      this.hashIndex.set(item.provenance.sourceReference, item.id);
+      this.hashIndex.set(String(item.provenance.sourceReference), item.id);
     }
 
     // 2. Durable database write if configured

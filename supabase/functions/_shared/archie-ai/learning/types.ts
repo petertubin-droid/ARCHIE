@@ -29,7 +29,8 @@ export type EvidenceState =
   | "UNCERTAIN"
   | "OUTDATED"
   | "SUPERSEDED"
-  | "REJECTED";
+  | "REJECTED"
+  | "ROLLED_BACK";
 
 /** Action execution lifecycle states (spec §4.2). */
 export type ActionExecutionState =
@@ -70,7 +71,8 @@ export type LearningLifecycleStage =
   | "KNOWLEDGE_INTEGRATION"
   | "PERSISTENCE"
   | "IMPACT_EVALUATION"
-  | "CORRECTION_RECOVERY";
+  | "CORRECTION_RECOVERY"
+  | "INPUT_ACQUISITION";
 
 /** Lifecycle statuses of candidate records through review. */
 export type LearningLifecycleStatus =
@@ -126,7 +128,11 @@ export interface LearningInput {
   rawContent: string;
   metadata?: Record<string, unknown>;
   context?: string;
-  observedAt: string;
+  observedAt?: string;
+  corroboratingSources?: string[];
+  contradictingSources?: string[];
+  confidence?: number;
+  validAt?: string;
   scope?: KnowledgeScope;
   scopeKey?: string;
   domain?: string;
@@ -160,28 +166,30 @@ export interface TemporalEnvelope {
 /** Structured knowledge item produced by extraction. */
 export interface ExtractedKnowledgeItem {
   id: string;
-  kind: KnowledgeKind;
+  kind?: KnowledgeKind;
   subject: string;
   predicate: string;
-  object: string | number | boolean | Record<string, unknown>;
+  object: string | number | boolean | Record<string, unknown> | unknown;
   domain: string;
   scope: KnowledgeScope;
   scopeKey?: string;
   evidenceState: EvidenceState;
   confidence: number;
-  confidenceBasis: string;
-  source: LearningSource;
-  sourceReference: string;
-  corroboratingSources: string[];
-  contradictingSources: string[];
-  temporal: TemporalEnvelope;
+  confidenceBasis?: string;
+  source?: LearningSource;
+  sourceReference?: string;
+  corroboratingSources?: string[];
+  contradictingSources?: string[];
+  temporal?: TemporalEnvelope;
   prerequisites?: string[];
   dependencies?: string[];
   provenance: Record<string, unknown>;
   version: number;
   previousVersionId?: string;
   supersededBy?: string;
-  status: "ACTIVE" | "ARCHIVED" | "ROLLED_BACK";
+  status: "ACTIVE" | "ARCHIVED" | "ROLLED_BACK" | "EVALUATING" | "HELD_FOR_REVIEW";
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /** Novelty assessment result against existing knowledge. */
@@ -230,16 +238,17 @@ export interface ProceduralStep {
 export interface ProceduralSkill {
   id: string;
   name: string;
+  description?: string;
   domain: string;
   version: number;
   prerequisites: string[];
   steps: ProceduralStep[];
-  expectedOutcomes: string[];
-  failureConditions: string[];
-  recoveryStrategy: string;
+  expectedOutcomes?: string[];
+  failureConditions?: string[];
+  recoveryStrategy?: string;
   verifiedSuccessCount: number;
   failureCount: number;
-  status: "DRAFT" | "VERIFIED" | "DEPRECATED";
+  status?: "DRAFT" | "VERIFIED" | "DEPRECATED";
   createdAt: string;
   updatedAt: string;
 }
@@ -308,12 +317,15 @@ export interface EvaluationMetricReport {
 /** Observable audit event record (spec §14). */
 export interface LearningAuditEvent {
   id: string;
-  operationId: string;
+  operationId?: string;
   timestamp: string;
   stage: LearningLifecycleStage;
-  status: "SUCCESS" | "WARNING" | "BLOCKED" | "FAILED" | "QUARANTINED";
+  status?: "SUCCESS" | "WARNING" | "BLOCKED" | "FAILED" | "QUARANTINED" | string;
   action: string;
-  details: Record<string, unknown>;
+  details?: Record<string, unknown>;
+  candidateId?: string;
+  reason?: string;
+  operator?: string;
 }
 
 /** Rollback tracking record for reversible learning updates (spec §15). */
@@ -345,3 +357,36 @@ export const DEFAULT_CONTINUOUS_CONFIG: ContinuousLearningConfig = {
   stopOnBoundary: true,
   retryLimit: 3,
 };
+
+export type LearningConfig = ContinuousLearningConfig;
+export const DEFAULT_LEARNING_CONFIG = DEFAULT_CONTINUOUS_CONFIG;
+
+export interface LearningPersistenceStatus {
+  durable: boolean;
+  backend: "SUPABASE" | "IN_MEMORY" | string;
+  storedKnowledgeCount: number;
+  auditLogCount: number;
+}
+
+export interface RollbackResult {
+  candidateId: string;
+  success: boolean;
+  previousState: EvidenceState | string;
+  newState: EvidenceState | string;
+  affectedDownstreamCount: number;
+  reason: string;
+}
+
+export interface LearningBatchResult {
+  batchId: string;
+  processedCount: number;
+  acceptedCount: number;
+  heldCount: number;
+  rejectedCount: number;
+  quarantinedCount: number;
+  accepted: ExtractedKnowledgeItem[];
+  held: ExtractedKnowledgeItem[];
+  rejected: Array<{ id: string; reason: string }>;
+  quarantined: Array<{ id: string; reason: string }>;
+  totalDurationMs: number;
+}

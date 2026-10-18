@@ -49,23 +49,23 @@ export class InMemoryPlanStateStore implements PlanStateStore {
 export class SupabasePlanStateStore implements PlanStateStore {
   private memoryFallback = new InMemoryPlanStateStore();
 
-  constructor(private db?: SupabaseLike) {}
+  constructor(private db?: any) {}
 
   async saveCheckpoint(checkpoint: ExecutionCheckpoint): Promise<void> {
     await this.memoryFallback.saveCheckpoint(checkpoint);
     if (!this.db) return;
 
     try {
-      await this.db
+      await (this.db as any)
         .from("archie_task_states")
         .upsert(
           {
             task_id: checkpoint.planId,
-            task: `plan_version_${checkpoint.version}`,
+            task: `plan_version_${checkpoint.version ?? 1}`,
             completed_steps: checkpoint.completedStepIds.map((id) => ({
               id,
               result: checkpoint.stepResults[id],
-              verdict: checkpoint.stepVerdicts[id],
+              verdict: checkpoint.stepVerdicts ? (checkpoint.stepVerdicts as any)[id] : null,
             })),
             next_index: checkpoint.currentWaveIndex,
             status: "in_progress",
@@ -84,20 +84,20 @@ export class SupabasePlanStateStore implements PlanStateStore {
     if (!this.db) return null;
 
     try {
-      const { data, error } = await this.db
+      const { data, error } = await (this.db as any)
         .from("archie_task_states")
         .select("*")
-        .eq("task_id", planId)
-        .maybeSingle();
+        .eq("task_id", planId);
 
-      if (error || !data) return null;
+      const row = Array.isArray(data) ? data[0] : data;
+      if (error || !row) return null;
 
       const results: Record<string, string> = {};
       const verdicts: Record<string, "PASS" | "FAIL" | "UNVERIFIED"> = {};
       const completedIds: string[] = [];
 
-      if (Array.isArray(data.completed_steps)) {
-        for (const st of data.completed_steps) {
+      if (Array.isArray(row.completed_steps)) {
+        for (const st of row.completed_steps) {
           completedIds.push(st.id);
           if (st.result) results[st.id] = st.result;
           if (st.verdict) verdicts[st.id] = st.verdict;
@@ -111,7 +111,7 @@ export class SupabasePlanStateStore implements PlanStateStore {
         completedStepIds: completedIds,
         stepResults: results,
         stepVerdicts: verdicts,
-        currentWaveIndex: data.next_index ?? 0,
+        currentWaveIndex: row.next_index ?? 0,
         resumedFromCheckpoint: true,
       };
     } catch {
@@ -141,7 +141,7 @@ export function hydratePlanFromCheckpoint(
     if (checkpoint.completedStepIds.includes(node.id)) {
       node.status = "executed";
       node.result = checkpoint.stepResults[node.id] || "Completed in prior execution.";
-      node.verificationVerdict = checkpoint.stepVerdicts[node.id] || "PASS";
+      node.verificationVerdict = checkpoint.stepVerdicts?.[node.id] || "PASS";
       completedCount++;
     }
   }

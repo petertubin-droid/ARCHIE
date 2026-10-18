@@ -106,6 +106,9 @@ export class AdaptivePlanningEngine {
     repairsPerformed: 0,
     trackedOperatorsCount: 0,
     averagePlanReliability: 0.0,
+    resourceConflictsEncountered: 0,
+    ownerGatesEnforced: 0,
+    verificationFailures: 0,
   };
 
   constructor(
@@ -179,7 +182,9 @@ export class AdaptivePlanningEngine {
     const goalPattern: FactPattern =
       typeof request.goal === "string"
         ? { predicate: request.goal }
-        : { ...request.goal };
+        : ("predicate" in (request.goal as object)
+            ? (request.goal as FactPattern)
+            : { predicate: (request.goal as StructuredGoal).primaryObjective ?? "planned" });
 
     const goalSubject = goalPattern.subject ?? "general_task";
     const goalPredicate = goalPattern.predicate ?? "planned";
@@ -331,7 +336,7 @@ export class AdaptivePlanningEngine {
 
       // Duration: check telemetry history, else use standard domain heuristics
       const telem = this.telemetryStore.getTelemetry(item.op.id);
-      let expDuration = telem?.averageDurationMs && telem.executionsCount > 0
+      let expDuration = telem?.averageDurationMs && (telem.invocations ?? (telem as any).executionsCount ?? 0) > 0
         ? telem.averageDurationMs
         : (item.op.id.includes("research") ? 1200 : (item.op.id.includes("calculate") || item.op.id.includes("survey") ? 400 : 200));
 
@@ -424,6 +429,7 @@ export class AdaptivePlanningEngine {
 
     const plan: AdaptivePlan = {
       id: planId,
+      version: 1,
       goal: `${goalSubject} ${goalPredicate}`.trim(),
       goalSubject,
       profile,
@@ -455,19 +461,20 @@ export class AdaptivePlanningEngine {
     input: GoalFormalizationInput | StructuredGoal,
   ): Promise<StructuredPlanResult> {
     // 1. Formalize goal
-    const structuredGoal: StructuredGoal = "primaryObjective" in input
+    const structuredGoal: StructuredGoal = typeof input === "object" && "primaryObjective" in input
       ? input
-      : this.goalFormalizer.formalizeGoal(input);
+      : this.goalFormalizer.formalizeGoal(input as GoalFormalizationInput);
 
     // 2. Base plan generation
+    const isCriticalPriority = structuredGoal.priority === "critical" || structuredGoal.priority === "CRITICAL";
     const basePlan = await this.generatePlan({
       goal: {
         subject: structuredGoal.primaryObjective,
         predicate: "planned",
       },
-      profile: structuredGoal.priority === "CRITICAL" ? "conservative" : "balanced",
-      workingMemoryConstraints: structuredGoal.constraints.map((c) => c.description),
-      domainContext: structuredGoal.provenance.requestedBy || "",
+      profile: isCriticalPriority ? "conservative" : "balanced",
+      workingMemoryConstraints: structuredGoal.constraints.map((c) => c.statement || c.description || ""),
+      domainContext: structuredGoal.provenance?.requestedBy || "",
     });
 
     // 3. Decompose structured milestones & checkpoints
@@ -485,15 +492,18 @@ export class AdaptivePlanningEngine {
 
     if (!resourceAllocation.feasible) {
       basePlan.executable = false;
+      this.diagnostics.resourceConflictsEncountered += resourceAllocation.conflicts.length;
       for (const conflict of resourceAllocation.conflicts) {
-        basePlan.gapReport.push(`Resource constraint: ${conflict.message}`);
+        basePlan.gapReport.push(`Resource constraint: ${conflict.message || conflict.recommendation || conflict.resourceType}`);
       }
     }
 
     // 5. Risk Assessment
     const riskAssessment = this.riskEngine.assessPlanRisks(basePlan.nodes);
-    if (riskAssessment.overallRiskLevel === "CRITICAL" && !structuredGoal.provenance.ownerAuthorized) {
+    const isCriticalRisk = riskAssessment.overallRiskLevel === "critical" || riskAssessment.overallRiskLevel === "CRITICAL";
+    if (isCriticalRisk && !structuredGoal.provenance?.ownerAuthorized) {
       basePlan.requiresOwnerAuthorization = true;
+      this.diagnostics.ownerGatesEnforced++;
     }
 
     // 6. Epistemic Uncertainty Management
@@ -598,7 +608,7 @@ export class AdaptivePlanningEngine {
         node.status = finalStatus;
         node.result = execRes.result;
         node.error = execRes.error;
-        node.verificationVerdict = execRes.verdict || (finalStatus === "executed" ? "PASS" : "FAIL");
+        node.verificationVerdict = (execRes.verdict as any) || (finalStatus === "executed" ? "PASS" : "FAIL");
         node.executedAt = new Date().toISOString();
         node.measuredDurationMs = duration;
 

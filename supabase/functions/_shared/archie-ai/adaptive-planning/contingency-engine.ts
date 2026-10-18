@@ -100,9 +100,11 @@ export class ContingencyEngine {
 
     return {
       planId: plan.id,
+      version: plan.version ?? 1,
       timestamp: new Date().toISOString(),
       completedStepIds,
       stepResults,
+      stepVerdicts: {},
       currentWaveIndex: currentWave,
       resumedFromCheckpoint: false,
     };

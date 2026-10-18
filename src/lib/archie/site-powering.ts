@@ -230,8 +230,9 @@ export async function executeWithGlitchShield<T>(
   while (attempt <= maxRetries) {
     attempt++;
     try {
+      let timerId: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(
+        timerId = setTimeout(
           () =>
             reject(
               new Error(
@@ -245,7 +246,11 @@ export async function executeWithGlitchShield<T>(
       const result = await Promise.race([
         Promise.resolve(operation()),
         timeoutPromise,
-      ]);
+      ]).finally(() => {
+        if (timerId !== undefined) {
+          clearTimeout(timerId);
+        }
+      });
 
       const latencyMs = Math.round(performance.now() - start);
 

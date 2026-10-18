@@ -19,6 +19,10 @@ import type {
   RiskSeverity,
 } from "./types.ts";
 
+export interface PlanRiskAssessment extends PlanRiskProfile {
+  risks: Array<IdentifiedRisk & { mitigation: string }>;
+}
+
 export class RiskAssessmentEngine {
   private static LIKELIHOOD_VALUES: Record<RiskLikelihood, number> = {
     unlikely: 1,
@@ -38,7 +42,7 @@ export class RiskAssessmentEngine {
   /**
    * Evaluates the risk profile of an entire plan and its constituent steps.
    */
-  assessPlanRisks(nodes: AdaptivePlanStepNode[], goalContext = ""): PlanRiskProfile {
+  assessPlanRisks(nodes: AdaptivePlanStepNode[], goalContext = ""): PlanRiskAssessment {
     const identifiedRisks: IdentifiedRisk[] = [];
     const ownerGates: string[] = [];
 
@@ -139,10 +143,10 @@ export class RiskAssessmentEngine {
     }
 
     const hasCriticalImpact = identifiedRisks.some(
-      (r) => r.impact === "critical" || r.requiresOwnerApproval,
+      (r) => r.impact === "critical" || r.impact === "CRITICAL" || r.requiresOwnerApproval,
     );
 
-    const overallRiskLevel: PlanRiskProfile["overallRiskLevel"] =
+    const rawOverall: "low" | "medium" | "high" | "critical" =
       maxScore >= 16
         ? "critical"
         : (maxScore >= 10 || hasCriticalImpact)
@@ -155,9 +159,16 @@ export class RiskAssessmentEngine {
       (r) => `[${r.category.toUpperCase()}] ${r.title}: ${r.mitigationStrategy}`,
     );
 
+    const risks = identifiedRisks.map((r) => ({
+      ...r,
+      impact: typeof r.impact === "string" ? r.impact.toUpperCase() : r.impact,
+      mitigation: r.mitigationStrategy,
+    }));
+
     return {
-      overallRiskLevel,
+      overallRiskLevel: rawOverall.toUpperCase() as any,
       identifiedRisks,
+      risks,
       ownerGatesRequired: ownerGates,
       mitigationPlan,
     };
@@ -169,28 +180,3 @@ export class RiskAssessmentEngine {
     return l * i;
   }
 }
-
-export interface PlanRiskAssessment extends PlanRiskProfile {
-  risks: Array<IdentifiedRisk & { mitigation: string }>;
-}
-
-const originalAssessPlanRisks = RiskAssessmentEngine.prototype.assessPlanRisks;
-
-RiskAssessmentEngine.prototype.assessPlanRisks = function (
-  this: RiskAssessmentEngine,
-  nodes: AdaptivePlanStepNode[],
-  goalContext = "",
-): any {
-  const profile = originalAssessPlanRisks.call(this, nodes, goalContext);
-  const risks = profile.identifiedRisks.map((r: any) => ({
-    ...r,
-    impact: typeof r.impact === 'string' ? r.impact.toUpperCase() : r.impact,
-    mitigation: r.mitigationStrategy,
-  }));
-
-  return {
-    ...profile,
-    overallRiskLevel: profile.overallRiskLevel.toUpperCase(),
-    risks,
-  };
-};

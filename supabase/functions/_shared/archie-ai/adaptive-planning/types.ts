@@ -82,6 +82,7 @@ export type ResourceType =
   | "storage"
   | "tool_call"
   | "budget"
+  | "cost"
   | "human_effort"
   | "quota"
   | "authorized_access";
@@ -95,12 +96,15 @@ export interface ResourceRequirement {
 
 export interface ResourceBudget {
   timeLimitMs?: number;
+  timeBudgetMs?: number;
   maxCost?: number;
+  financialCostLimit?: number;
   maxComputeTokens?: number;
   toolCallQuota?: number;
   storageBytesLimit?: number;
   maxConcurrentTasks?: number;
   financialBudget?: number;
+  [key: string]: unknown;
 }
 
 export interface ResourceAllocation {
@@ -114,21 +118,38 @@ export interface ResourceAllocation {
 export interface ResourceConflict {
   resourceType: ResourceType;
   requested: number;
-  available: number;
-  deficit: number;
-  affectedStepIds: string[];
-  recommendation: string;
+  available?: number;
+  deficit?: number;
+  shortfall?: number;
+  affectedStepIds?: string[];
+  blockingStepId?: string;
+  recommendation?: string;
+  limit?: number;
+  severity?: "hard" | "soft" | string;
+  message?: string;
 }
 
 // ------------------- STRUCTURED GOALS -------------------
 
-export type GoalPriority = "critical" | "high" | "medium" | "low";
+export type GoalPriority =
+  | "critical"
+  | "high"
+  | "medium"
+  | "low"
+  | "CRITICAL"
+  | "HIGH"
+  | "MEDIUM"
+  | "LOW"
+  | "NORMAL";
 
 export interface GoalConstraint {
   id: string;
   type: "HARD" | "SOFT";
-  kind: "USER" | "RESOURCE" | "TEMPORAL" | "SECURITY" | "POLICY";
-  statement: string;
+  kind?: "USER" | "RESOURCE" | "TEMPORAL" | "SECURITY" | "POLICY" | string;
+  statement?: string;
+  dimension?: string;
+  description?: string;
+  rationale?: string;
   bound?: {
     dimension: string;
     value: number;
@@ -143,34 +164,41 @@ export interface AcceptanceCriterion {
   description: string;
   metric?: string;
   targetValue?: string | number;
-  verificationMethod: "automated" | "manual_owner" | "corroboration" | "heuristic";
-  satisfied: boolean;
+  verificationMethod?: "automated" | "manual_owner" | "corroboration" | "heuristic" | string;
+  satisfied?: boolean;
+  status?: string;
 }
+
+export type TrackedAcceptanceCriterion = AcceptanceCriterion;
 
 export interface StructuredGoal {
   id: string;
-  title: string;
+  title?: string;
   primaryObjective: string;
-  secondaryObjectives: string[];
-  desiredOutcomes: string[];
+  secondaryObjectives?: string[];
+  desiredOutcomes?: string[];
+  status?: string;
   constraints: GoalConstraint[];
   priority: GoalPriority;
   targetDate?: string | null;
-  resourceBudget: ResourceBudget;
-  qualityRequirements: string[];
+  deadline?: string | null;
+  resourceBudget?: ResourceBudget;
+  qualityRequirements?: string[];
   acceptanceCriteria: AcceptanceCriterion[];
-  explicitExclusions: string[];
-  successConditions: string[];
-  failureConditions: string[];
-  assumptions: string[];
-  isAmbiguous: boolean;
+  explicitExclusions?: string[];
+  successConditions?: string[];
+  failureConditions?: string[];
+  assumptions?: string[];
+  isAmbiguous?: boolean;
   ambiguityQuestions: string[];
   provenance: {
-    source: "user_utterance" | "owner_directive" | "operational_requirement";
-    rawInput: string;
+    source: string;
+    rawInput?: string;
     timestamp: string;
+    requestedBy?: string;
+    ownerAuthorized?: boolean;
   };
-  verificationRequirements: string[];
+  verificationRequirements?: string[];
 }
 
 // ------------------- DECISION INTELLIGENCE -------------------
@@ -189,8 +217,10 @@ export interface DecisionAlternative {
   description: string;
   scores: Record<string, number>;
   qualitativeNotes?: Record<string, string>;
-  reversibility: "high" | "medium" | "low";
-  operationalComplexity: "high" | "medium" | "low";
+  advantages?: string[];
+  disadvantages?: string[];
+  reversibility?: "high" | "medium" | "low";
+  operationalComplexity?: "high" | "medium" | "low";
   estimatedCost?: number;
   estimatedTimeMs?: number;
   securityRisk?: "none" | "low" | "medium" | "high";
@@ -212,7 +242,7 @@ export interface DecisionEvaluationResult {
   recommendedOptionId: string | null;
   tradeOffSummary: string;
   methodology: "MCDA_WEIGHTED_SUM" | "PARETO_DOMINANCE" | "DIRECT_REASONING";
-  sensitivityAnalysis?: Record<string, string>;
+  sensitivityAnalysis: Record<string, unknown>;
 }
 
 // ------------------- RISK ASSESSMENT -------------------
@@ -234,7 +264,7 @@ export interface IdentifiedRisk {
   description: string;
   category: RiskCategory;
   likelihood: RiskLikelihood;
-  impact: RiskSeverity;
+  impact: RiskSeverity | string;
   riskScore: number; // 1 to 25
   failureModes: string[];
   mitigationStrategy: string;
@@ -244,8 +274,9 @@ export interface IdentifiedRisk {
 }
 
 export interface PlanRiskProfile {
-  overallRiskLevel: "low" | "medium" | "high" | "critical";
+  overallRiskLevel: "low" | "medium" | "high" | "critical" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   identifiedRisks: IdentifiedRisk[];
+  risks?: Array<IdentifiedRisk & { mitigation?: string }>;
   ownerGatesRequired: string[];
   mitigationPlan: string[];
 }
@@ -313,8 +344,8 @@ export interface AdaptivePlanStepNode {
   dependsOn: string[];
   softPreferences?: string[];
   estimatedDurationMs: number;
-  optimisticDurationMs: number;
-  pessimisticDurationMs: number;
+  optimisticDurationMs?: number;
+  pessimisticDurationMs?: number;
   measuredDurationMs?: number;
   baseCost: number;
   adaptiveCost: number;
@@ -324,12 +355,13 @@ export interface AdaptivePlanStepNode {
   milestoneId?: string;
   status: PlanExecutionStatus;
   resourceRequirements?: ResourceRequirement[];
-  verificationMethod?: "automated" | "manual_owner" | "corroboration" | "heuristic";
-  verificationVerdict?: "PASS" | "FAIL" | "UNVERIFIED" | null;
+  verificationMethod?: "automated" | "manual_owner" | "corroboration" | "heuristic" | string;
+  verificationVerdict?: "PASS" | "FAIL" | "UNVERIFIED" | "INCONCLUSIVE" | null;
   result?: string;
   error?: string;
   contingency?: ContingencyStrategy;
   executedAt?: string;
+  executionAuthorizationProof?: string;
 }
 
 export interface CriticalPathAnalysis {
@@ -343,6 +375,13 @@ export interface CriticalPathAnalysis {
   }>;
 }
 
+export interface MilestoneCheckpoint {
+  id: string;
+  name: string;
+  criteria: string[];
+  targetState: string;
+}
+
 export interface HierarchicalMilestone {
   id: string;
   title: string;
@@ -351,8 +390,9 @@ export interface HierarchicalMilestone {
   stepIds: string[];
   status: "pending" | "active" | "completed" | "blocked";
   dependsOnMilestones?: string[];
-  deliverables?: string[];
+  deliverables: string[];
   validationCheckpoint?: string;
+  checkpoints: MilestoneCheckpoint[];
 }
 
 export interface AdaptivePlan {
@@ -388,6 +428,7 @@ export interface OperatorTelemetry {
   operatorId: string;
   domain: string;
   invocations: number;
+  executionsCount?: number;
   successes: number;
   failures: number;
   totalDurationMs: number;
@@ -398,11 +439,11 @@ export interface OperatorTelemetry {
 
 export interface ExecutionCheckpoint {
   planId: string;
-  version: number;
+  version?: number;
   timestamp: string;
   completedStepIds: string[];
   stepResults: Record<string, string>;
-  stepVerdicts: Record<string, "PASS" | "FAIL" | "UNVERIFIED">;
+  stepVerdicts: Record<string, "PASS" | "FAIL" | "UNVERIFIED" | "INCONCLUSIVE">;
   currentWaveIndex: number;
   resumedFromCheckpoint: boolean;
 }
@@ -424,7 +465,7 @@ export interface WaveExecutionResult {
     stepId: string;
     operatorId: string;
     status: PlanExecutionStatus;
-    verificationVerdict?: "PASS" | "FAIL" | "UNVERIFIED" | null;
+    verificationVerdict?: "PASS" | "FAIL" | "UNVERIFIED" | "INCONCLUSIVE" | null;
     result?: string;
     error?: string;
     contingencyTriggered?: boolean;

@@ -176,6 +176,7 @@ export class AdvancedUnifiedLearningEngine {
 
     const candidateItem: ExtractedKnowledgeItem = {
       id: input.id,
+      kind: "FACT",
       subject: extractedContent.subject,
       predicate: extractedContent.predicate,
       object: extractedContent.object,
@@ -185,6 +186,10 @@ export class AdvancedUnifiedLearningEngine {
       evidenceState: validation.evidenceState,
       status: "EVALUATING",
       version: 1,
+      source: input.source,
+      sourceReference: input.sourceReference ?? "",
+      corroboratingSources: input.corroboratingSources ?? [],
+      contradictingSources: input.contradictingSources ?? [],
       dependencies: extractedContent.dependencies ?? [],
       provenance: {
         source: input.source,
@@ -293,7 +298,7 @@ export class AdvancedUnifiedLearningEngine {
           relation: candidateItem.predicate,
           object: typeof candidateItem.object === "string" ? candidateItem.object : JSON.stringify(candidateItem.object),
           confidence: candidateItem.confidence,
-          provenance: candidateItem.provenance.sourceReference ?? candidateItem.provenance.source,
+          provenance: String(candidateItem.provenance.sourceReference ?? candidateItem.provenance.source ?? ""),
           observedAt: candidateItem.temporal?.observedAt,
         });
       } catch (err) {

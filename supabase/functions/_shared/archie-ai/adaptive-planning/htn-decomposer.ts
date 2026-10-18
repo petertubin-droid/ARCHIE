@@ -310,7 +310,7 @@ export class HtnDecomposer {
       order: order++,
       subGoals: [
         `Execute core steps for: ${goal.primaryObjective}`,
-        ...goal.secondaryObjectives,
+        ...(goal.secondaryObjectives ?? []),
       ],
       stepIds: [],
       status: "pending",

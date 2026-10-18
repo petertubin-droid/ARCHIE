@@ -12,11 +12,20 @@
 // =========================================================
 
 import type {
+  AdaptivePlanStepNode,
   DecisionUnderUncertaintyPolicy,
   EpistemicStatus,
   TrackedAssumption,
   UncertaintyAssessment,
 } from "./types.ts";
+
+export interface UncertaintyReport {
+  overallConfidence: number;
+  averageConfidence: number;
+  recommendedPolicy: "PROCEED_AUTONOMOUSLY" | "PROCEED_WITH_DISCLAIMER" | "GATHER_MORE_INFO" | "REPLAN";
+  criticalUncertainties: string[];
+  rationale: string;
+}
 
 export class UncertaintyManager {
   /**
@@ -84,6 +93,60 @@ export class UncertaintyManager {
   }
 
   /**
+   * Assesses plan-level uncertainty across steps.
+   */
+  assessPlanUncertainty(
+    nodes: AdaptivePlanStepNode[],
+    goal?: unknown,
+  ): UncertaintyReport {
+    const assumptions: Array<Omit<TrackedAssumption, "id" | "isVerified">> = [];
+    const missingKnowledge: string[] = [];
+
+    for (const node of nodes) {
+      if (node.reliabilityScore < 0.8 || node.operatorId.includes("research")) {
+        assumptions.push({
+          statement: `Operator ${node.operatorId} will execute reliably for "${node.title}"`,
+          confidence: node.reliabilityScore,
+          source: "TELEMETRY",
+          status: "ASSUMPTION",
+          impactIfInvalid: node.reliabilityScore < 0.7 ? "high" : "medium",
+        });
+        missingKnowledge.push(`Reliability verification for step "${node.title}"`);
+      }
+    }
+
+    if (assumptions.length === 0) {
+      assumptions.push({
+        statement: "Baseline operational assumptions",
+        confidence: 0.95,
+        source: "FACT_STORE",
+        status: "FACT",
+        impactIfInvalid: "low",
+      });
+    }
+
+    const assessment = this.assessUncertainty(assumptions, missingKnowledge, true);
+
+    const policyMap: Record<string, UncertaintyReport["recommendedPolicy"]> = {
+      proceed: "PROCEED_AUTONOMOUSLY",
+      gather_evidence: "GATHER_MORE_INFO",
+      ask_clarification: "GATHER_MORE_INFO",
+      reversible_fallback: "PROCEED_WITH_DISCLAIMER",
+      halt_unexecutable: "REPLAN",
+    };
+
+    const recPolicy = policyMap[assessment.recommendedPolicy] ?? "PROCEED_WITH_DISCLAIMER";
+
+    return {
+      overallConfidence: assessment.overallConfidence,
+      averageConfidence: assessment.overallConfidence,
+      recommendedPolicy: recPolicy,
+      criticalUncertainties: assessment.missingInformation,
+      rationale: assessment.rationale,
+    };
+  }
+
+  /**
    * Promotes an assumption to FACT when corroborated by verified evidence.
    */
   verifyAssumption(
@@ -99,62 +162,3 @@ export class UncertaintyManager {
     };
   }
 }
-
-export interface UncertaintyReport {
-  overallConfidence: number;
-  averageConfidence: number;
-  recommendedPolicy: "PROCEED_AUTONOMOUSLY" | "PROCEED_WITH_DISCLAIMER" | "GATHER_MORE_INFO" | "REPLAN";
-  criticalUncertainties: string[];
-  rationale: string;
-}
-
-UncertaintyManager.prototype.assessPlanUncertainty = function (
-  nodes: AdaptivePlanStepNode[],
-  goal?: any,
-): UncertaintyReport {
-  const assumptions: Array<Omit<TrackedAssumption, "id" | "isVerified">> = [];
-  const missingKnowledge: string[] = [];
-
-  for (const node of nodes) {
-    if (node.reliabilityScore < 0.8 || node.operatorId.includes("research")) {
-      assumptions.push({
-        statement: `Operator ${node.operatorId} will execute reliably for "${node.title}"`,
-        confidence: node.reliabilityScore,
-        source: "TELEMETRY",
-        status: "ASSUMPTION",
-        impactIfInvalid: node.reliabilityScore < 0.7 ? "high" : "medium",
-      });
-      missingKnowledge.push(`Reliability verification for step "${node.title}"`);
-    }
-  }
-
-  if (assumptions.length === 0) {
-    assumptions.push({
-      statement: "Baseline operational assumptions",
-      confidence: 0.95,
-      source: "FACT_STORE",
-      status: "FACT",
-      impactIfInvalid: "low",
-    });
-  }
-
-  const assessment = this.assessUncertainty(assumptions, missingKnowledge, true);
-
-  const policyMap: Record<string, UncertaintyReport["recommendedPolicy"]> = {
-    proceed: "PROCEED_AUTONOMOUSLY",
-    gather_evidence: "GATHER_MORE_INFO",
-    ask_clarification: "GATHER_MORE_INFO",
-    reversible_fallback: "PROCEED_WITH_DISCLAIMER",
-    halt_unexecutable: "REPLAN",
-  };
-
-  const recPolicy = policyMap[assessment.recommendedPolicy] ?? "PROCEED_WITH_DISCLAIMER";
-
-  return {
-    overallConfidence: assessment.overallConfidence,
-    averageConfidence: assessment.overallConfidence,
-    recommendedPolicy: recPolicy,
-    criticalUncertainties: assessment.missingInformation,
-    rationale: assessment.rationale,
-  };
-};

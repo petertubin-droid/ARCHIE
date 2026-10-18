@@ -59,51 +59,64 @@ export const STANDARD_DECISION_CRITERIA: DecisionCriterion[] = [
     name: "Operational Simplicity",
     weight: 0.10,
     direction: "maximize",
-    description: "Low operational complexity and minimal points of failure",
+    description: "Low operational complexity, fewer moving parts",
   },
 ];
 
+export interface DecisionContext {
+  decisionId?: string;
+  title?: string;
+  alternatives: DecisionAlternative[];
+  criteria?: DecisionCriterion[];
+  customWeights?: Record<string, number>;
+}
+
+export interface AlternativeEvaluationResult extends DecisionEvaluationResult {
+  recommendedAlternativeId: string | null;
+  paretoFrontierIds: string[];
+  tradeoffMatrix: Array<{
+    alternativeId: string;
+    alternativeName: string;
+    tradeoffs: string[];
+    compositeScore: number;
+  }>;
+}
+
 export class DecisionIntelligenceEngine {
   /**
-   * Evaluates a set of alternatives against criteria using MCDA and Pareto analysis.
+   * Evaluates alternatives using Multi-Criteria Decision Analysis (Weighted Sum Model)
+   * and identifies Pareto-optimal options.
    */
   evaluateAlternatives(
-    alternatives: DecisionAlternative[],
+    input: DecisionAlternative[] | DecisionContext,
     customCriteria?: DecisionCriterion[],
-  ): DecisionEvaluationResult {
+  ): AlternativeEvaluationResult {
+    let alternatives: DecisionAlternative[];
+    let criteria: DecisionCriterion[];
+
+    if (Array.isArray(input)) {
+      alternatives = input;
+      criteria = customCriteria ? this.normalizeWeights(customCriteria) : STANDARD_DECISION_CRITERIA;
+    } else {
+      alternatives = input.alternatives || [];
+      criteria = input.criteria ? this.normalizeWeights(input.criteria) : (customCriteria ? this.normalizeWeights(customCriteria) : STANDARD_DECISION_CRITERIA);
+    }
+
     if (alternatives.length === 0) {
       return {
-        criteria: customCriteria ?? STANDARD_DECISION_CRITERIA,
+        criteria,
         rankedAlternatives: [],
         recommendedOptionId: null,
+        recommendedAlternativeId: null,
+        paretoFrontierIds: [],
+        tradeoffMatrix: [],
         tradeOffSummary: "No alternatives provided for evaluation.",
-        methodology: "DIRECT_REASONING",
+        methodology: "MCDA_WEIGHTED_SUM",
+        sensitivityAnalysis: {},
       };
     }
 
-    const criteria = this.normalizeWeights(customCriteria ?? STANDARD_DECISION_CRITERIA);
-
-    // If only one alternative, evaluate directly without complex scoring
-    if (alternatives.length === 1) {
-      const alt = alternatives[0];
-      return {
-        criteria,
-        rankedAlternatives: [
-          {
-            alternative: alt,
-            compositeScore: 1.0,
-            rank: 1,
-            paretoOptimal: true,
-            tradeOffs: ["Single viable course of action identified."],
-          },
-        ],
-        recommendedOptionId: alt.id,
-        tradeOffSummary: `Single identified option "${alt.name}" satisfies requirements.`,
-        methodology: "DIRECT_REASONING",
-      };
-    }
-
-    // 1. Calculate Weighted Composite Scores
+    // 1. Score each alternative against normalized criteria
     const scoredList: Array<{
       alt: DecisionAlternative;
       compositeScore: number;
@@ -144,7 +157,6 @@ export class DecisionIntelligenceEngine {
     }
 
     // 2. Determine Pareto Optimality
-    // Alternative A dominates Alternative B if A is >= B in all criteria and strictly > B in at least one
     const paretoFlags = new Map<string, boolean>();
     for (let i = 0; i < scoredList.length; i++) {
       let isDominated = false;
@@ -178,35 +190,58 @@ export class DecisionIntelligenceEngine {
       paretoFlags.set(a.alt.id, !isDominated);
     }
 
-    // 3. Sort by Composite Score descending
-    scoredList.sort((x, y) => y.compositeScore - x.compositeScore);
+    // 3. Rank alternatives by composite score
+    scoredList.sort((a, b) => b.compositeScore - a.compositeScore);
 
-    // 4. Sensitivity Analysis (evaluate stability under weight variations)
-    const sensitivityAnalysis = this.performSensitivityAnalysis(
-      scoredList.map((s) => s.alt),
-      criteria,
-      scoredList[0].alt.id,
-    );
-
-    const rankedAlternatives: EvaluatedAlternative[] = scoredList.map((item, idx) => ({
+    const rankedAlternatives: EvaluatedAlternative[] = scoredList.map((item, index) => ({
       alternative: item.alt,
       compositeScore: item.compositeScore,
-      rank: idx + 1,
-      paretoOptimal: paretoFlags.get(item.alt.id) ?? true,
+      rank: index + 1,
+      paretoOptimal: paretoFlags.get(item.alt.id) ?? false,
       tradeOffs: item.tradeOffs,
-      sensitivityNotes: sensitivityAnalysis[item.alt.id] ? [sensitivityAnalysis[item.alt.id]] : [],
     }));
+
+    // 4. Sensitivity Analysis
+    const sensitivityAnalysis = this.performSensitivityAnalysis(
+      alternatives,
+      criteria,
+      rankedAlternatives[0]?.alternative.id ?? "",
+    );
 
     const top = rankedAlternatives[0];
     const tradeOffSummary = this.composeTradeOffSummary(rankedAlternatives, criteria);
+
+    const paretoFrontierIds = rankedAlternatives
+      .filter((a) => a.paretoOptimal)
+      .map((a) => a.alternative.id);
+
+    const tradeoffMatrix = rankedAlternatives.map((a) => ({
+      alternativeId: a.alternative.id,
+      alternativeName: a.alternative.name,
+      tradeoffs: a.tradeOffs,
+      compositeScore: a.compositeScore,
+    }));
+
+    const isRobust = Object.values(sensitivityAnalysis).some((n) =>
+      typeof n === "string" && (n.includes("Stable") || n.includes("Robust") || n.includes("stable") || n.includes("winner across")),
+    );
+
+    const enhancedSensitivity: Record<string, unknown> = {
+      ...sensitivityAnalysis,
+      robust: isRobust,
+      notes: sensitivityAnalysis,
+    };
 
     return {
       criteria,
       rankedAlternatives,
       recommendedOptionId: top?.alternative.id ?? null,
+      recommendedAlternativeId: top?.alternative.id ?? null,
+      paretoFrontierIds,
+      tradeoffMatrix,
       tradeOffSummary,
       methodology: "MCDA_WEIGHTED_SUM",
-      sensitivityAnalysis,
+      sensitivityAnalysis: enhancedSensitivity,
     };
   }
 
@@ -280,72 +315,3 @@ export class DecisionIntelligenceEngine {
     return `Recommended: "${top.alternative.name}" (score ${top.compositeScore.toFixed(3)}, ${paretoNote}), leading runner-up "${runnerUp.alternative.name}" by +${scoreDiff}. ${topTradeOffs}`;
   }
 }
-
-export interface DecisionContext {
-  decisionId?: string;
-  title?: string;
-  alternatives: DecisionAlternative[];
-  criteria?: DecisionCriterion[];
-  customWeights?: Record<string, number>;
-}
-
-export interface AlternativeEvaluationResult extends DecisionEvaluationResult {
-  recommendedAlternativeId?: string | null;
-  paretoFrontierIds: string[];
-  tradeoffMatrix: Array<{
-    alternativeId: string;
-    alternativeName: string;
-    tradeoffs: string[];
-    compositeScore: number;
-  }>;
-}
-
-const originalEvaluate = DecisionIntelligenceEngine.prototype.evaluateAlternatives;
-
-DecisionIntelligenceEngine.prototype.evaluateAlternatives = function (
-  this: DecisionIntelligenceEngine,
-  input: DecisionAlternative[] | DecisionContext,
-  customCriteria?: DecisionCriterion[],
-): any {
-  let alts: DecisionAlternative[];
-  let crits = customCriteria;
-
-  if (Array.isArray(input)) {
-    alts = input;
-  } else {
-    alts = input.alternatives || [];
-    crits = crits ?? input.criteria;
-  }
-
-  const result = originalEvaluate.call(this, alts, crits);
-
-  const paretoFrontierIds = result.rankedAlternatives
-    .filter((a) => a.paretoOptimal)
-    .map((a) => a.alternative.id);
-
-  const tradeoffMatrix = result.rankedAlternatives.map((a) => ({
-    alternativeId: a.alternative.id,
-    alternativeName: a.alternative.name,
-    tradeoffs: a.tradeOffs,
-    compositeScore: a.compositeScore,
-  }));
-
-  const sensitivityNotes = result.sensitivityAnalysis || {};
-  const isRobust = Object.values(sensitivityNotes).some((n) =>
-    typeof n === "string" && (n.includes("Stable") || n.includes("Robust") || n.includes("stable") || n.includes("winner across")),
-  );
-
-  const enhancedSensitivity = {
-    ...sensitivityNotes,
-    robust: isRobust,
-    notes: sensitivityNotes,
-  };
-
-  return {
-    ...result,
-    recommendedAlternativeId: result.recommendedOptionId,
-    paretoFrontierIds,
-    tradeoffMatrix,
-    sensitivityAnalysis: enhancedSensitivity,
-  };
-};
