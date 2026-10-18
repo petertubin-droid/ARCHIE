@@ -46,12 +46,41 @@ function crc32(bytes: Uint8Array): number {
 
 // ---------- inflate (zlib, via the platform's DecompressionStream) ----------
 
-async function inflateZlib(data: Uint8Array): Promise<Uint8Array> {
+/**
+ * Bounded inflate (EA-02): reads the decompression stream
+ * CHUNK BY CHUNK and refuses the moment the output exceeds
+ * maxBytes — a compressed bomb can no longer buffer an
+ * unbounded body before any cap is consulted.
+ */
+async function inflateZlib(
+  data: Uint8Array,
+  maxBytes: number,
+): Promise<Uint8Array> {
   const stream = new Blob([data as unknown as BlobPart])
     .stream()
     .pipeThrough(new DecompressionStream("deflate"));
-  const buf = await new Response(stream).arrayBuffer();
-  return new Uint8Array(buf);
+  const reader = (stream as ReadableStream<Uint8Array>).getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(
+        `decompressed data exceeds expected size (${total} > ${maxBytes} bytes) — refused`,
+      );
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const c of chunks) {
+    out.set(c, pos);
+    pos += c.byteLength;
+  }
+  return out;
 }
 
 // ---------- PNG decode ----------
@@ -154,6 +183,11 @@ async function decodePng(bytes: Uint8Array): Promise<DecodedImage> {
     if (!chunk) break;
     const d = chunk.data;
     if (chunk.type === "IHDR") {
+      if (d.length < 13) {
+        throw new Error(
+          `PNG IHDR malformed (${d.length} bytes < 13) — refused`,
+        );
+      }
       info = {
         width: (d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3],
         height: (d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7],
@@ -203,10 +237,30 @@ async function decodePng(bytes: Uint8Array): Promise<DecodedImage> {
   }
   if (idat.length === 0) throw new Error("PNG missing IDAT — refused");
 
-  const raw = await inflateZlib(concat(idat));
+  // ---- EA-02: ALL caps are enforced here, BEFORE any
+  // decompression or large allocation. A crafted PNG with
+  // huge declared dimensions is refused on its header alone
+  // — inflate never runs on it.
   const { width, height } = info;
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height)
+  ) {
+    throw new Error(
+      `PNG dimensions not safe integers (${width}x${height}) — refused`,
+    );
+  }
+  if (width * height > MAX_PIXELS) {
+    throw new Error(
+      `PNG is ${width}x${height} (${width * height} pixels) — over the 4MP analysis cap — refused BEFORE decompression`,
+    );
+  }
   const stride = width * bpp;
   const expected = (stride + 1) * height;
+
+  // bounded inflate: the decompressed stream can never exceed
+  // the size the header declared — bombs are cut mid-stream
+  const raw = await inflateZlib(concat(idat), expected);
   if (raw.length < expected) {
     throw new Error(
       `PNG pixel data truncated (${raw.length} < ${expected}) — refused`,

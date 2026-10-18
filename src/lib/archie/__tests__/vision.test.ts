@@ -354,6 +354,135 @@ describe("native vision — honest summarization", () => {
 // ---------------------------------------------------------
 // Batch 12 (Level 8) regressions — fixes 35, 36
 // ---------------------------------------------------------
+// -------------------------------------------------------
+// EA-02 — caps enforced BEFORE decompression. Adversarial
+// fixtures are hand-built PNGs (header-only claims).
+// -------------------------------------------------------
+
+// crc32: already defined above for encodePng — hand-built
+// chunks reuse it (real CRCs or the decoder refuses first)
+function chunkBytes(type: string, body: Uint8Array): Uint8Array {
+  // PNG chunk layout (big-endian): [0,3] length, [4,7] type,
+  // [8, 8+len) body, then CRC over type+body
+  const out = new Uint8Array(12 + body.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, body.length);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(body, 8);
+  const crc = crc32(out.subarray(4, 8 + body.length));
+  dv.setUint32(8 + body.length, crc);
+  return out;
+}
+function ihdrBody(w: number, h: number): Uint8Array {
+  const b = new Uint8Array(13);
+  const dv = new DataView(b.buffer);
+  dv.setUint32(0, w);
+  dv.setUint32(4, h);
+  b[8] = 8; // bit depth
+  b[9] = 2; // color type RGB
+  b[12] = 0; // no interlace
+  return b;
+}
+const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function handPng(chunks: Uint8Array[]): Uint8Array {
+  const parts = [PNG_SIGNATURE, ...chunks];
+  const total = parts.reduce((a, p) => a + p.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+describe("EA-02 — PNG caps enforced BEFORE decompression", () => {
+  it("huge declared dimensions + garbage IDAT → refused by the CAP, never decoded", async () => {
+    // 100000x100000 = 10^10 px. The IDAT is 100 bytes of
+    // garbage — if the cap ran AFTER inflate, this would be
+    // a zlib decode failure instead. The cap message is the
+    // proof caps run first.
+    const png = handPng([
+      chunkBytes("IHDR", ihdrBody(100000, 100000)),
+      chunkBytes("IDAT", new Uint8Array(100).fill(0xff)),
+      chunkBytes("IEND", new Uint8Array(0)),
+    ]);
+    const res = await analyzeImage(png);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.note).toContain("4MP analysis cap");
+    expect(res.note).toContain("BEFORE decompression");
+  });
+
+  it("exact 4MP boundary passes the cap (refusal, if any, comes later honestly)", async () => {
+    // 2000x2000 = exactly 4MP: NOT over the cap. The tiny
+    // IDAT is real zlib but decompresses to far less than
+    // expected → the honest refusal is truncation, proving
+    // the boundary check let it through.
+    const smallZlib = await new Response(
+      new Blob([new Uint8Array(64)]).stream().pipeThrough(new CompressionStream("deflate")),
+    ).arrayBuffer();
+    const png = handPng([
+      chunkBytes("IHDR", ihdrBody(2000, 2000)),
+      chunkBytes("IDAT", new Uint8Array(smallZlib)),
+      chunkBytes("IEND", new Uint8Array(0)),
+    ]);
+    const res = await analyzeImage(png);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.note).toContain("truncated");
+    expect(res.note).not.toContain("4MP");
+  });
+
+  it("decompression bomb: valid small header, IDAT inflates to megabytes → cut mid-stream, refused", async () => {
+    // 64x64 RGB declares ~12KB of pixel data; the IDAT is a
+    // real zlib stream that inflates to 5MB of zeros. The
+    // bounded inflate refuses the moment output exceeds the
+    // declared size — the 5MB is never buffered.
+    const bomb = new Uint8Array(5 * 1024 * 1024);
+    const bombZlib = await new Response(
+      new Blob([bomb]).stream().pipeThrough(new CompressionStream("deflate")),
+    ).arrayBuffer();
+    expect(bombZlib.byteLength).toBeLessThan(60_000); // the bomb is genuinely small
+    const png = handPng([
+      chunkBytes("IHDR", ihdrBody(64, 64)),
+      chunkBytes("IDAT", new Uint8Array(bombZlib)),
+      chunkBytes("IEND", new Uint8Array(0)),
+    ]);
+    const res = await analyzeImage(png);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.note).toContain("exceeds expected size");
+  });
+
+  it("malformed IHDR (chunk under 13 bytes) refused as malformed", async () => {
+    const png = handPng([
+      chunkBytes("IHDR", new Uint8Array(8).fill(1)),
+      chunkBytes("IDAT", new Uint8Array(8).fill(0)),
+      chunkBytes("IEND", new Uint8Array(0)),
+    ]);
+    const res = await analyzeImage(png);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.note).toContain("IHDR malformed");
+  });
+
+  it("valid small images still decode after the fix (regression guard)", async () => {
+    const png = await encodePng({
+      width: 12,
+      height: 12,
+      colorType: 2,
+      channels: rgbPixels(12, 12, () => [30, 200, 30]),
+    });
+    const res = await analyzeImage(png);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.analysis.width).toBe(12);
+    expect(res.analysis.dominantColors?.[0]?.name).toBe("green");
+  });
+});
+
 describe("batch 12 — vision boundary honesty", () => {
   it("fix 35: a JPEG whose SOF marker is truncated at the buffer edge is refused, never given fake dimensions", async () => {
     // SOF0 marker (FF C0) near the end, payload cut short.
