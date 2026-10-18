@@ -18,6 +18,14 @@ import type { EvidenceState, KnowledgeScope } from "@/lib/learning/types";
 /** The nine ARCHIE evidence states (Phase 6.5 §13, unchanged). */
 export type ArchieEvidenceState = EvidenceState;
 
+/** Unified cognitive epistemic taxonomy (KNOWN / VERIFIED / INFERRED / ASSUMED / UNKNOWN). */
+export type ArchieEpistemicState =
+  | "KNOWN"
+  | "VERIFIED"
+  | "INFERRED"
+  | "ASSUMED"
+  | "UNKNOWN";
+
 /** ARCHIE knowledge scopes (Phase 6.5, unchanged). */
 export type ArchieScope = KnowledgeScope;
 

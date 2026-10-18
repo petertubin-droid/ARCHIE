@@ -43,6 +43,33 @@ export {
 } from "@studio-shared/archie-ai/native-engine/coding.ts";
 export { evaluateExpression } from "@studio-shared/archie-ai/native-engine/tools.ts";
 
+// Multi-Domain Reasoning Loop, Cognitive Synthesis & Cross-Domain Analogy Engine
+export {
+  runMultiDomainReasoningLoop,
+  executeMultiDomainReasoning,
+  detectDomainsFromText,
+  type MultiDomainLoopInput,
+  type MultiDomainLoopOutcome,
+  type MultiDomainLoopStep,
+} from "./multi-domain-reasoning-loop";
+export {
+  cognitiveSynthesisEngine,
+  CognitiveSynthesisEngine,
+  type DomainClaim,
+  type DialecticalTension,
+  type SynthesisResolution,
+  type CognitiveSynthesisReport,
+  type SynthesisStrategy,
+} from "./cognitive-synthesis";
+export {
+  analogyEngine,
+  CrossDomainAnalogyEngine,
+  REGISTERED_ANALOGIES,
+  type AnalogySchema,
+  type AnalogyEvaluationReport,
+  type RelationalMapping,
+} from "./cross-domain-analogy";
+
 import {
   nativeEngineCapabilityManifest,
   manifestSummary,

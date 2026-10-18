@@ -86,4 +86,14 @@ describe("DomainReasoning", () => {
     // FITNESS_PLAN is health-adjacent → disclaimers required.
     expect(screen.getByText(/Disclaimers:/)).toBeTruthy();
   });
+  it("the cognitive synthesis & analogy panel executes multi-domain loop with breakdown checks", async () => {
+    renderWorkspace();
+    await userEvent.click(screen.getByText("Cognitive synthesis & analogy"));
+    expect(screen.getByLabelText("Multi-domain inquiry")).toBeTruthy();
+    await userEvent.click(screen.getByText("Execute multi-domain loop"));
+    expect(await screen.findByText(/Multi-Domain Scope & Epistemic Audit/)).toBeTruthy();
+    expect(screen.getByText(/Active Domains:/)).toBeTruthy();
+    expect(screen.getByText(/Cross-Domain Structural Analogies/)).toBeTruthy();
+    expect(screen.getByText(/Cognitive Synthesis & Tension Resolutions/)).toBeTruthy();
+  });
 });

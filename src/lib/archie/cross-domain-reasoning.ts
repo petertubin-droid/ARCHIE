@@ -18,6 +18,8 @@
 import { archieDomains } from "./domains";
 import type { DomainRelation, DomainSelectionResult } from "./phase9-types";
 
+export type { DomainRelation, DomainSelectionResult };
+
 /**
  * Registered cross-domain relations. Each carries its rationale
  * so any recommendation can explain WHY the domains connect.
@@ -156,6 +158,98 @@ export const DOMAIN_RELATIONS: readonly DomainRelation[] = [
     relation: "governed_by",
     rationale:
       "Regional practice must comply with local standards where reliable information exists.",
+  },
+  // ── Global Expansion Domain Relations (Computing, Security, Engineering) ──
+  {
+    from_domain: "web_development",
+    to_domain: "programming_languages",
+    relation: "implemented_in",
+    rationale:
+      "Web applications are implemented and compiled through programming language runtimes.",
+  },
+  {
+    from_domain: "web_development",
+    to_domain: "databases",
+    relation: "persists_in",
+    rationale:
+      "Web applications store and retrieve state through database management systems.",
+  },
+  {
+    from_domain: "web_development",
+    to_domain: "api_design",
+    relation: "interfaces_through",
+    rationale:
+      "Web systems communicate across boundaries via structured API contracts.",
+  },
+  {
+    from_domain: "api_design",
+    to_domain: "secure_architecture",
+    relation: "secured_by",
+    rationale:
+      "API interfaces require boundary threat modeling, authentication, and schema validation.",
+  },
+  {
+    from_domain: "cloud_infrastructure",
+    to_domain: "networking",
+    relation: "routed_over",
+    rationale:
+      "Cloud resources communicate over virtual networks, load balancers, and distributed topologies.",
+  },
+  {
+    from_domain: "cloud_infrastructure",
+    to_domain: "costing",
+    relation: "budgeted_by",
+    rationale:
+      "Cloud computing resources incur operational expenditures that must be budgeted and monitored.",
+  },
+  {
+    from_domain: "cybersecurity",
+    to_domain: "defensive_security",
+    relation: "operationalized_by",
+    rationale:
+      "Cybersecurity principles are executed through defensive controls and active countermeasures.",
+  },
+  {
+    from_domain: "cybersecurity",
+    to_domain: "secure_architecture",
+    relation: "architected_by",
+    rationale:
+      "Cybersecurity requirements are structurally embedded into system topology through secure architecture.",
+  },
+  {
+    from_domain: "engineering",
+    to_domain: "structural",
+    relation: "applies_mechanics",
+    rationale:
+      "Engineering applies principles of structural mechanics, equilibrium, and material stress.",
+  },
+  {
+    from_domain: "economics",
+    to_domain: "business",
+    relation: "governed_by",
+    rationale:
+      "Business operations and financial viability operate within macroeconomic and microeconomic market dynamics.",
+  },
+  {
+    from_domain: "ai_ml",
+    to_domain: "automation",
+    relation: "powers",
+    rationale:
+      "Machine learning models power predictive automation and cognitive workflows.",
+  },
+  {
+    from_domain: "automation",
+    to_domain: "cloud_infrastructure",
+    relation: "orchestrates",
+    rationale:
+      "Infrastructure-as-code and CI/CD pipelines automate cloud provisioning and release.",
+  },
+  {
+    from_domain: "structural",
+    to_domain: "construction",
+    relation: "built_through",
+    rationale:
+      "Structural engineering designs are physically erected through construction techniques.",
   },
 ];
 

@@ -1,3 +1,7 @@
+import {
+  executeMultiDomainReasoning,
+  type MultiDomainLoopOutcome,
+} from "@/lib/archie/multi-domain-reasoning-loop";
 // =========================================================
 // ARCHIE DOMAIN REASONING WORKSPACE (PWA)
 //
@@ -73,6 +77,7 @@ import { ArchieSectionTitle } from "@/components/archie/premium";
 const TABS = [
   ["route", "Route a request"],
   ["frame", "Reasoning frame"],
+  ["synthesis", "Cognitive synthesis & analogy"],
   ["weather", "Weather plan"],
   ["prices", "Prices"],
   ["audience", "Audience"],
@@ -1084,6 +1089,137 @@ function PlanPanel() {
 }
 
 // ---------------------------------------------------------
+// Tab 2.5 — Cognitive Synthesis & Cross-Domain Analogy Engine
+// ---------------------------------------------------------
+function SynthesisPanel() {
+  const [inquiry, setInquiry] = useState(
+    "Design a resilient cloud architecture utilizing immune defense analogies and evaluate latency vs security tradeoffs",
+  );
+  const [outcome, setOutcome] = useState<MultiDomainLoopOutcome | null>(null);
+
+  const handleRun = () => {
+    if (!inquiry.trim()) return;
+    const res = executeMultiDomainReasoning({
+      query: inquiry,
+      include_analogies: true,
+    });
+    setOutcome(res);
+  };
+
+  return (
+    <div className="space-y-3">
+      <Field label="Multi-domain inquiry / problem statement">
+        <textarea
+          aria-label="Multi-domain inquiry"
+          value={inquiry}
+          onChange={(e) => setInquiry(e.target.value)}
+          rows={3}
+          className="w-full rounded border border-white/10 bg-slate-900/60 p-2 text-xs text-slate-200"
+        />
+      </Field>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={handleRun}
+          className="rounded bg-amber-400/20 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-400/30"
+        >
+          Execute multi-domain loop
+        </button>
+      </div>
+
+      {outcome && (
+        <div className="space-y-3">
+          <ResultCard title="Multi-Domain Scope & Epistemic Audit">
+            <p className="mb-1 text-slate-300">
+              Epistemic Classification:{" "}
+              <span className="font-semibold text-amber-300">
+                {outcome.epistemic_classification}
+              </span>{" "}
+              · Confidence:{" "}
+              <span className="font-semibold text-emerald-300">
+                {(outcome.overall_confidence * 100).toFixed(0)}%
+              </span>
+            </p>
+            <p className="text-slate-400">
+              Active Domains: {outcome.active_domains.join(", ")}
+            </p>
+            {outcome.excluded_domains.length > 0 && (
+              <div className="mt-2 text-[11px] text-slate-500">
+                <span className="font-medium text-slate-400">
+                  Excluded Domains ({outcome.excluded_domains.length}):
+                </span>{" "}
+                {outcome.excluded_domains.map((e) => e.domain).slice(0, 5).join(", ")}
+                {outcome.excluded_domains.length > 5 ? "..." : ""} (Anti-fabrication: unlinked in relation graph)
+              </div>
+            )}
+          </ResultCard>
+
+          {outcome.analogies_found.length > 0 && (
+            <ResultCard title={`Cross-Domain Structural Analogies (${outcome.analogies_found.length})`}>
+              <div className="space-y-2">
+                {outcome.analogies_found.map((a) => (
+                  <div key={a.id} className="border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                    <p className="font-semibold text-slate-200">
+                      {a.name} ({a.source_domain} → {a.target_domain})
+                    </p>
+                    <p className="text-slate-400">{a.core_mechanism}</p>
+                    <p className="mt-1 text-emerald-300">
+                      Heuristic Transfer: {a.solution_transfer.heuristic}
+                    </p>
+                    <p className="mt-1 text-amber-400/80">
+                      Breakdown condition: {a.boundary_conditions.breakdown_points[0]}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </ResultCard>
+          )}
+
+          <ResultCard title="Cognitive Synthesis & Tension Resolutions">
+            <p className="mb-2 italic text-slate-200">
+              "{outcome.synthesis_report.synthesized_thesis}"
+            </p>
+            {outcome.synthesis_report.tensions.length > 0 ? (
+              <div className="space-y-2">
+                {outcome.synthesis_report.tensions.map((t) => {
+                  const res = outcome.synthesis_report.resolutions.find(
+                    (r) => r.tension_id === t.id,
+                  );
+                  return (
+                    <div key={t.id} className="border-t border-white/5 pt-1.5">
+                      <p className="font-medium text-amber-200">
+                        {t.nature} ({t.domain_a} vs {t.domain_b}) [{t.severity}]
+                      </p>
+                      <p className="text-slate-400">{t.description}</p>
+                      {res && (
+                        <p className="mt-1 text-sky-300">
+                          Strategy ({res.strategy}): {res.resolution_statement}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-slate-500">
+                No acute dialectical tensions detected among extracted domain claims.
+              </p>
+            )}
+          </ResultCard>
+
+          <ResultCard title="Execution Trace">
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-slate-400">
+              {outcome.trace}
+            </pre>
+          </ResultCard>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------
 // Workspace shell
 // ---------------------------------------------------------
 export default function DomainReasoning() {
@@ -1122,6 +1258,7 @@ export default function DomainReasoning() {
       </div>
       {tab === "route" && <RoutePanel />}
       {tab === "frame" && <FramePanel />}
+      {tab === "synthesis" && <SynthesisPanel />}
       {tab === "weather" && <WeatherPanel />}
       {tab === "prices" && <PricesPanel />}
       {tab === "audience" && <AudiencePanel />}

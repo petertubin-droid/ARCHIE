@@ -38,6 +38,27 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
       measuredBy: "native-engine.test.ts (reasoning cases)",
     },
     {
+      id: "multi-domain-reasoning-loop",
+      description:
+        "Multi-domain reasoning loop expansion: multi-domain anchoring, transitive relation path resolution via BFS over registered domain relations, claim extraction with risk-class weighting, bounded execution with honest budget reporting, and end-to-end epistemic state preservation (VERIFIED / INFERRED / ASSUMED)",
+      maturity: "OPERATIONAL",
+      measuredBy: "multi-domain-reasoning-loop.test.ts",
+    },
+    {
+      id: "cross-domain-analogy-engine",
+      description:
+        "Cross-domain analogy engine: structural relational invariant mapping between heterogeneous systems, solution heuristic transfer, explicit boundary condition and breakdown analysis, and anti-fabrication enforcement (unregistered analogical leaps rejected)",
+      maturity: "OPERATIONAL",
+      measuredBy: "cross-domain-analogy.test.ts",
+    },
+    {
+      id: "cognitive-synthesis-engine",
+      description:
+        "Cognitive synthesis engine: dialectical tension detection across cross-domain claims (objective conflicts, resource competition, temporal misalignment, paradigm divergence), multi-criteria tradeoff arbitration (Pareto optimization, hierarchical safety precedence, contextual partitioning), and epistemic audit reporting",
+      maturity: "OPERATIONAL",
+      measuredBy: "cognitive-synthesis.test.ts",
+    },
+    {
       id: "context-management",
       description:
         "Context management: working memory with salience-ranked retrieval (relevance × recency) over vectorized conversation turns",
