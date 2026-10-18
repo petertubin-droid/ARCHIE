@@ -285,6 +285,27 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
       measuredBy: "telegram/protocol.test.ts",
     },
     {
+      id: "code-authoring",
+      description:
+        "Generative coding (A-3): bounded TypeScript authoring from a structured spec — deterministic template composition with a tokenized expression grammar and self-verification. Open-ended prose→application authoring remains honestly refused",
+      maturity: "OPERATIONAL",
+      measuredBy: "code-author.test.ts, cognitive/creation.test.ts",
+    },
+    {
+      id: "video-perception",
+      description:
+        "Video perception (B-3): pure-TS MP4 container inspection (dimensions, duration, codec, frame statistics) and decoded frame-sequence analysis (motion, scene cuts, brightness). Signal statistics only — content understanding honestly NOT implemented",
+      maturity: "OPERATIONAL",
+      measuredBy: "video-perception.test.ts",
+    },
+    {
+      id: "media-generation",
+      description:
+        "Media generation (B-4): procedural SVG diagrams/charts/flow and motion graphics from structured specs, PCM audio cue synthesis. Procedural and deterministic — no external AI; speech synthesis honestly NOT implemented",
+      maturity: "OPERATIONAL",
+      measuredBy: "media-forge.test.ts",
+    },
+    {
       id: "email-channel",
       description:
         "Email intelligence: provider-agnostic inbound webhook + pluggable outbound adapter (Resend/Postmark), owner-linked addresses, honest HTML-only refusal. Channel DISABLED until the Owner enables it and wires EMAIL_PROVIDER + EMAIL_API_KEY",
