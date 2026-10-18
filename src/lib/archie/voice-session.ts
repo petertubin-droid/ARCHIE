@@ -50,6 +50,10 @@ import {
   extractVoiceprint,
   type VoiceprintVector,
 } from "@studio-shared/archie-ai/native-engine/voiceprint";
+import {
+  analyzeAudioEvents,
+  type AudioEventAnalysis,
+} from "@studio-shared/archie-ai/native-engine/audio-events";
 import type { ArchieConsent } from "@/lib/archie/mobile/types";
 
 // ---------------------------------------------------------
@@ -87,6 +91,12 @@ export interface SpeakerStatus {
 export interface VoiceTurn {
   transcript: string;
   speaker: SpeakerStatus | null;
+  /** Native audio-event analysis of THIS turn's raw PCM
+   *  (audio-event engine, roadmap 10 / audit B-2): voice
+   *  activity, speaker turns, honest ambient labels —
+   *  computed on-device where the raw audio already lives.
+   *  Null when no PCM was captured (honest, never faked). */
+  audioEvents: AudioEventAnalysis | null;
   reply: string | null;
   spoken: boolean;
 }
@@ -131,7 +141,9 @@ export interface VoiceSessionEvents {
   /** Real interim recognition text (HEARING state). */
   onHearing?(text: string): void;
   /** The owner's final transcript, with the speaker signal. */
-  onUserTranscript?(turn: Pick<VoiceTurn, "transcript" | "speaker">): void;
+  onUserTranscript?(
+    turn: Pick<VoiceTurn, "transcript" | "speaker" | "audioEvents">,
+  ): void;
   /** ARCHIE's reply (always shown as text; spoken when the
    *  VOICE_OUTPUT consent allows). */
   onArchieReply?(reply: string, spoken: boolean, spokenError?: string): void;
@@ -404,12 +416,23 @@ export async function createVoiceSession(
       // The utterance vector: stop the parallel recorder and
       // extract the voiceprint ON-DEVICE.
       let speaker: SpeakerStatus | null = null;
+      let audioEvents: AudioEventAnalysis | null = null;
       try {
         const recording = recorder ? await recorder.stop() : null;
         recorder = null;
         if (recording) {
           const decoded = await decodeBlob(recording.blob);
           if (decoded) {
+            // Audio-event engine (roadmap 10, audit B-2):
+            // honest VAD + bounded diarization + ambient
+            // labels on the raw PCM, on-device. Best-effort
+            // metadata like the speaker signal — a failure
+            // is an honest null, never a fabricated event.
+            try {
+              audioEvents = analyzeAudioEvents(decoded.pcm, decoded.sampleRate);
+            } catch {
+              audioEvents = null;
+            }
             const vector = extractVector(decoded.pcm, decoded.sampleRate);
             if (vector.ok) {
               const signal = await speakerCheck(vector.vector);
@@ -432,9 +455,19 @@ export async function createVoiceSession(
       const transcript = result.transcript.replace(/\s+/g, " ").trim();
 
       if (!result.speechDetected || transcript.length === 0) {
+        // Honest diagnosis: if the audio-event engine heard
+        // WHY it wasn't speech (a tone, a noise burst), say
+        // so instead of a generic "didn't hear".
+        const ambientWhy = audioEvents?.ok
+          ? audioEvents.segments.find(
+              (seg) => seg.kind === "tone" || seg.kind === "noise",
+            )
+          : null;
         events.onError?.(
           "NO_SPEECH",
-          "I didn't hear a clear request. Tap the microphone and speak again.",
+          ambientWhy
+            ? `I heard ${ambientWhy.kind === "tone" ? "a tone" : "a burst of noise"}, not speech. Tap the microphone and speak again.`
+            : "I didn't hear a clear request. Tap the microphone and speak again.",
         );
         // bounded: the loop never spins unbounded on silence
         noSpeechStreak += 1;
@@ -462,7 +495,7 @@ export async function createVoiceSession(
 
       noSpeechStreak = 0;
       transcriptBuffer.push(transcript);
-      events.onUserTranscript?.({ transcript, speaker });
+      events.onUserTranscript?.({ transcript, speaker, audioEvents });
       events.onState?.("PROCESSING");
 
       // Audited intake — a failure is reported honestly but

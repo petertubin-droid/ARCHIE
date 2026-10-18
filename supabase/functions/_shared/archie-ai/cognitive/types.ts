@@ -54,7 +54,7 @@ export const UNSUPPORTED_MODALITIES: ReadonlyArray<{
 }> = [
   {
     modality: "audio",
-    note: "auditory perception is not implemented yet — reported honestly, never faked",
+    note: "audio EVENTS are implemented natively where raw PCM lives (on-device voice session: voice-activity detection, bounded diarization, honest ambient labels) — but full semantic audio understanding (what a sound MEANS) is not implemented; reported honestly, never faked",
   },
 ];
 
