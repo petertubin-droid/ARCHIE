@@ -678,6 +678,95 @@ describe("Construction calculators (deterministic)", () => {
     );
   });
 
+  // -----------------------------------------------------
+  // EA-03 — ambiguous/malformed dimensions are REFUSED,
+  // never silently normalized. The old digit-substring
+  // scanner: stripped negative signs, split "1,200" into
+  // 1 and 200, and converted "12 ft x 3 m" both as feet.
+  // -----------------------------------------------------
+
+  it("EA-03: negative dimension refused, never sign-stripped", () => {
+    const answer = constructionEstimate(
+      "how many blocks for a -6 by 3 meter wall",
+    );
+    expect(answer).toContain("negative dimension refused");
+    expect(answer).not.toContain("blocks. Assumptions");
+  });
+
+  it("EA-03: zero dimension refused", () => {
+    const answer = constructionEstimate(
+      "how many blocks for a 6 by 0 meter wall",
+    );
+    expect(answer).toContain("zero dimension refused");
+  });
+
+  it("EA-03: thousands-grouped numbers refused, never split", () => {
+    const answer = constructionEstimate(
+      "how many blocks for a 1,200 by 3 meter wall",
+    );
+    expect(answer).toContain("grouped thousands");
+    expect(answer).not.toContain("approximately");
+  });
+
+  it("EA-03: ambiguous locale decimal refused", () => {
+    const answer = constructionEstimate(
+      "how much paint for 1.200 square meters",
+    );
+    expect(answer).toContain("ambiguous decimal");
+  });
+
+  it("EA-03: plain decimals still work (no over-refusal)", () => {
+    const answer = constructionEstimate(
+      "how many blocks for a 6.5 by 3 meter wall",
+    );
+    expect(answer).toContain("blocks");
+    expect(answer).not.toContain("refused");
+  });
+
+  it("EA-03: mixed units convert EACH dimension independently", () => {
+    // 12 ft = 3.6576 m, 3 m → area = 10.9728 m2 →
+    // 10.9728 / 0.1081 = 101.5 * 1.05 = 106.6 → 107 blocks
+    const answer = constructionEstimate(
+      "how many blocks for a 12 ft x 3 m wall",
+    );
+    expect(answer).toContain("107 blocks");
+    expect(answer).toContain("12 ft x 3 m");
+  });
+
+  it("EA-03: bare number + mixed explicit units refused as ambiguous", () => {
+    const answer = constructionEstimate(
+      "how many blocks for a 6 by 3 ft and 2 m wall",
+    );
+    expect(answer).toContain("mixed units with an unmarked number");
+  });
+
+  it("EA-03: unsupported unit refused honestly", () => {
+    const answer = constructionEstimate(
+      "how many blocks for a 6 by 3 cm wall",
+    );
+    expect(answer).toContain('unsupported unit "cm"');
+    expect(answer).toContain("meters or feet only");
+  });
+
+  it("EA-03: extra unrelated numbers refused, never first-two-picked", () => {
+    const blocks = constructionEstimate(
+      "how many blocks for a 6 by 3 wall with 2 doors",
+    );
+    expect(blocks).toContain("needs exactly two dimensions");
+    expect(blocks).not.toContain("175 blocks");
+
+    const cement = constructionEstimate(
+      "how many bags of cement for 2 cubic meters and 3 bags of sand",
+    );
+    expect(cement).toContain("needs exactly one");
+  });
+
+  it("EA-03: honest ask preserved when NO numbers are present", () => {
+    expect(constructionEstimate("how many blocks for a wall")).toContain(
+      "I will not guess dimensions",
+    );
+  });
+
   it("offers the three calculators when the intent has no target", () => {
     const answer = constructionEstimate("calculate something for me");
     expect(answer).toContain("blocks");

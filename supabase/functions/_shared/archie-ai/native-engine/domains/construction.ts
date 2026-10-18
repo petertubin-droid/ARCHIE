@@ -20,9 +20,124 @@ import { constructionConstant } from "./construction.data.ts";
 
 // ── Deterministic helpers (moved from engine.ts) ──
 
-/** Parse decimal numbers from free text. */
-function parseNumbers(input: string): number[] {
-  return (input.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
+// ── EA-03 (audit 2026-10-17): measurement-aware parsing ──
+// Every number the calculator uses is extracted WITH its
+// unit and validated BEFORE any arithmetic. The old digit-
+// substring scanner silently stripped negative signs, split
+// grouped numbers ("1,200" -> 1 and 200) and converted mixed
+// units with one request-wide flag ("12 ft x 3 m" applied
+// feet to both). This parser refuses all three instead.
+
+export interface ParsedMeasurement {
+  value: number;
+  /** Unit as stated on the number or inherited from the
+   *  request's explicit units, normalized for conversion. */
+  unit: "m" | "ft";
+  /** True when the unit was stated on the number itself. */
+  explicit: boolean;
+}
+
+export interface ParseOutcome {
+  ok: boolean;
+  /** Refusal note when ok is false — honest, never a guess. */
+  note?: string;
+  measurements?: ParsedMeasurement[];
+}
+
+const UNIT_WORD_RE = /^(meters?|metres?|m\b|feet|foot|ft\b|ft\.)/i;
+const UNSUPPORTED_UNIT_RE =
+  /^(centimeters?|centimetres?|cm\b|millimeters?|millimetres?|mm\b|inches|inch|in\b|yards?|yd\b|kilometers?|kilometres?|km\b|miles?|mi\b)/i;
+
+/** Extract validated measurements from chat text. Refuses
+ *  (ok:false, note) anything ambiguous or malformed. */
+export function extractMeasurements(input: string): ParseOutcome {
+  // locale grouping ("1,200") and European decimal style
+  // ("1.200") are ambiguous — refused rather than split/guessed
+  if (/\d{1,3}(,\d{3})+/.test(input)) {
+    return {
+      ok: false,
+      note: "grouped thousands (like 1,200) are ambiguous — write plain numbers, e.g. 1200",
+    };
+  }
+  if (/\d\.\d{3}\b/.test(input)) {
+    return {
+      ok: false,
+      note: "ambiguous decimal notation (like 1.200) — write plain numbers, e.g. 1.5 or 1200",
+    };
+  }
+
+  const matches = [...input.matchAll(/-?\d+(?:\.\d+)?/g)];
+  if (matches.length === 0) return { ok: true, measurements: [] };
+
+  interface RawMeasurement {
+    value: number;
+    explicitUnit: "m" | "ft" | null;
+  }
+  const raw: RawMeasurement[] = [];
+  for (const m of matches) {
+    const value = Number(m[0]);
+    if (!Number.isFinite(value)) {
+      return { ok: false, note: "malformed number — refused" };
+    }
+    if (value < 0) {
+      return {
+        ok: false,
+        note: "negative dimension refused — a length cannot be negative",
+      };
+    }
+    if (value === 0) {
+      return {
+        ok: false,
+        note: "zero dimension refused — a dimension must be positive",
+      };
+    }
+    const rest = input.slice((m.index ?? 0) + m[0].length);
+    if (/^\s*['’]/.test(rest)) {
+      raw.push({ value, explicitUnit: "ft" });
+      continue;
+    }
+    const nextWord = rest.match(/^\s*[a-zA-Z]+/);
+    const word = nextWord ? nextWord[0].trim() : "";
+    if (word && UNIT_WORD_RE.test(word)) {
+      const unit = word.startsWith("m") || word.startsWith("M") ? "m" : "ft";
+      raw.push({ value, explicitUnit: unit });
+      continue;
+    }
+    if (word && UNSUPPORTED_UNIT_RE.test(word)) {
+      return {
+        ok: false,
+        note: `unsupported unit "${word}" — give me meters or feet only, and I will convert honestly`,
+      };
+    }
+    // bare number (connector word, end of string, or any
+    // other word) — unit resolved below
+    raw.push({ value, explicitUnit: null });
+  }
+
+  // Unit resolution: a bare number inherits from the
+  // request's explicit units — but ONLY when every explicit
+  // unit agrees. Mixed explicit units plus a bare number is
+  // ambiguous, refused rather than guessed.
+  const explicitUnits = [
+    ...new Set(
+      raw
+        .filter((r) => r.explicitUnit !== null)
+        .map((r) => r.explicitUnit as "m" | "ft"),
+    ),
+  ];
+  if (explicitUnits.length > 1 && raw.some((r) => !r.explicitUnit)) {
+    return {
+      ok: false,
+      note: "mixed units with an unmarked number — mark every number (e.g. 12 ft x 3 m) so no dimension is guessed",
+    };
+  }
+  const inheritUnit: "m" | "ft" = explicitUnits.length === 1 ? explicitUnits[0] : "m";
+  const measurements: ParsedMeasurement[] = raw.map((r) => ({
+    value: r.value,
+    unit: r.explicitUnit ?? inheritUnit,
+    explicit: r.explicitUnit !== null,
+  }));
+  return { ok: true, measurements };
 }
 
 /** Numeric unification helper (Phase 2.4): a bound value is
@@ -39,9 +154,9 @@ function parseNumeric(value: string | number | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** Feet→meters when the query is in imperial units. */
-const isFeet = (input: string): boolean =>
-  /\b(?:feet|foot|ft\b|ft\.|['’])/i.test(input);
+/** Feet→meters per measurement, independently. */
+const toMeters = (n: number, unit: "m" | "ft"): number =>
+  unit === "ft" ? n * C.ftToM : n;
 
 // ── Constants are SEEDED DATA RECORDS (audit phase 2
 //    completion, 2026-09-11): every number the calculator
@@ -68,33 +183,47 @@ const C = {
  *  Returns the fully-composed answer string. (Moved verbatim
  *  from engine.ts — audit 2026-09-11.) */
 export function constructionEstimate(input: string): string {
-  const nums = parseNumbers(input);
-  const feet = isFeet(input);
-  const meters = nums.map((n) => (feet ? n * C.ftToM : n));
+  // EA-03: measurements are parsed WITH units and validated
+  // before any arithmetic; ambiguous input is refused.
+  const parsed = extractMeasurements(input);
+  if (!parsed.ok) {
+    return `I will not guess from that request: ${parsed.note}. Give me clean dimensions — for example "how many blocks for a 6 by 3 meter wall" — and I will compute.`;
+  }
+  const measurements = parsed.measurements ?? [];
+  const meters = measurements.map((mm) => toMeters(mm.value, mm.unit));
 
   const wantsBlocks = /\b(?:blocks?|bricks?)\b/i.test(input);
   const wantsPaint = /\bpaint\b/i.test(input);
   const wantsCement = /\bcement\b/i.test(input) && !wantsBlocks && !wantsPaint;
 
   if (wantsBlocks) {
-    if (meters.length < 2) {
+    if (measurements.length < 2) {
       return `To estimate blocks I need the wall length and height — for example "how many blocks for a 6 by 3 meter wall". I will not guess dimensions.`;
+    }
+    if (measurements.length > 2) {
+      return `I see ${measurements.length} numbers but a wall needs exactly two dimensions (length and height). I will not pick two and ignore the rest — remove the extra numbers or mark them clearly.`;
     }
     const [l, h] = meters;
     const area = l * h;
     const base = area / C.blockFaceM2;
     const withWaste = Math.ceil(base * C.blockWaste);
+    const dims = measurements
+      .map((mm, i) => `${mm.value} ${mm.unit}${i < measurements.length - 1 ? " x" : ""}`)
+      .join(" ");
     return (
-      `For a ${feet ? `${nums[0]} ft x ${nums[1]} ft` : `${nums[0]} x ${nums[1]} m`} wall (${area.toFixed(2)} m2): approximately ${withWaste} blocks. ` +
+      `For a ${dims} wall (${area.toFixed(2)} m2): approximately ${withWaste} blocks. ` +
       `Assumptions: standard 450x225mm block with 10mm mortar joints (${C.blockFaceM2} m2 face), plus ${Math.round((C.blockWaste - 1) * 100)}% breakage/waste allowance. This is a deterministic estimate — verify on site before ordering.`
     );
   }
 
   if (wantsPaint) {
-    if (meters.length < 1) {
+    if (measurements.length < 1) {
       return `To estimate paint I need the surface area — for example "how much paint for a 4 by 5 meter wall". I will not guess dimensions.`;
     }
-    const area = meters.length >= 2 ? meters[0] * meters[1] : meters[0];
+    if (measurements.length > 2) {
+      return `I see ${measurements.length} numbers but a surface needs at most two dimensions (width and height). I will not pick two and ignore the rest.`;
+    }
+    const area = measurements.length >= 2 ? meters[0] * meters[1] : meters[0];
     const litres = Math.ceil((area / C.paintM2PerLitreCoat) * C.paintCoats);
     return (
       `For ${area.toFixed(2)} m2 of surface: approximately ${litres} litres for ${C.paintCoats} coats. ` +
@@ -103,8 +232,11 @@ export function constructionEstimate(input: string): string {
   }
 
   if (wantsCement) {
-    if (meters.length < 1) {
+    if (measurements.length < 1) {
       return `To estimate cement I need the concrete volume — for example "how many bags of cement for 2 cubic meters of concrete". I will not guess volumes.`;
+    }
+    if (measurements.length > 1) {
+      return `I see ${measurements.length} numbers but a concrete volume needs exactly one. I will not use the first and ignore the rest — give one volume, e.g. "2 cubic meters".`;
     }
     const volume = meters[0];
     const bags = Math.ceil(
