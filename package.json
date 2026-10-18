@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/inline-critical-css.mjs && node scripts/prerender.mjs && node scripts/generate-sitemap.mjs && node scripts/generate-sw.mjs",
+    "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",

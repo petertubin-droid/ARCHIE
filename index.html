@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>ARCHIE — Owner Assistant</title>
+    <meta
+      name="description"
+      content="The owner's private ARCHIE application: conversational front door to the ARCHIE Intelligence Core."
+    />
+    <meta name="theme-color" content="#0B0F14" />
+    <link rel="manifest" href="/assets/archie/manifest.webmanifest" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/assets/archie/archie-favicon-32.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="/assets/archie/archie-favicon-16.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      href="/assets/archie/archie-apple-touch-180.png"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ARCHIE" />
+  </head>
+  <body class="bg-[#0b0f14]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // PWA: register the ARCHIE service worker (offline-capable
+      // shell; API traffic is never cached — see archie-sw.js).
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register("/archie-sw.js")
+            .catch(() => undefined);
+        });
+      }
+    </script>
+  </body>
+</html>

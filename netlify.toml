@@ -1,0 +1,86 @@
+# =========================================================
+# ARCHIE PWA — Netlify deployment config
+#
+# The owner's standalone ARCHIE application. All intelligence
+# lives server-side in the archie-* edge functions on the
+# Freluxtools Supabase project (hqhvlkunkdrxyuvziorm); this
+# site ships only the client shell that talks to them.
+#
+# Required environment variables (Netlify UI → Site settings →
+# Environment variables):
+#   VITE_SUPABASE_URL      = https://hqhvlkunkdrxyuvziorm.supabase.co
+#   VITE_SUPABASE_ANON_KEY = (the Freluxtools public anon key —
+#                            public by design, access is
+#                            enforced by RLS + the functions'
+#                            own auth gates)
+#   VITE_SITE_URL          = this site's final URL (set once
+#                            the domain is known; optional —
+#                            code falls back to the deployed
+#                            URL)
+# =========================================================
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # These are intentionally client-bundled public values; omit
+  # them from Netlify's secret scanner (same lesson as FRELUX).
+  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_ANON_KEY,VITE_SUPABASE_URL,VITE_SITE_URL,VITE_APP_VERSION,VITE_SENTRY_RELEASE"
+  # Deno/SQL deployed separately via the ARCHIE deploy workflow
+  # (archie-deploy.yml); never built or shipped by Netlify.
+  SECRETS_SCAN_OMIT_PATHS = "supabase/migrations,supabase/functions,supabase/seed"
+
+[context.deploy-preview]
+  command = "npm run build"
+  publish = "dist"
+
+# ---------------------------------------------------------
+# SPA fallback — all routes serve index.html so React Router
+# handles /archie/* navigation (installed PWAs keep their
+# /archie/chat start_url working).
+# ---------------------------------------------------------
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/manifest.json"
+  to = "/assets/archie/manifest.webmanifest"
+  status = 200
+
+# ---------------------------------------------------------
+# Headers
+# ---------------------------------------------------------
+[[headers]]
+  for = "/archie-sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Service-Worker-Allowed = "/"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/assets/archie/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json; charset=utf-8"
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(self), geolocation=(self), interest-cohort=()"
+    Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
+    X-DNS-Prefetch-Control = "on"
+    # ARCHIE talks to: the Freluxtools Supabase project (auth,
+    # realtime, archie-* functions) and Sentry (error
+    # reporting). No ad networks — this is the owner's private
+    # app.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://*.sentry.io https://*.sentry-cdn.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.sentry.io https://*.sentry-cdn.com; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
