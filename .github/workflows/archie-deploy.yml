@@ -55,7 +55,15 @@ jobs:
         with:
           version: latest
 
-      - name: Deploy every archie-* function (Freluxtools only — Frelukx disconnected 2026-09-13, left intact)
+      - name: Deploy every archie-* + ai-* function (Freluxtools only — Frelukx disconnected 2026-09-13, left intact)
+        # OWNER DIRECTIVE 2026-10-18 — ARCHIE POWERS FRELUX: this
+        # repo is the source of truth for the FRELUX-facing ai-*
+        # functions too (extraction 2026-09-19). Deploying only
+        # archie-* meant every ai-* upgrade died in the repo and
+        # never reached the FRELUX frontend. All ai-* functions
+        # authenticate internally (own 401 + rate limit), so they
+        # deploy with --no-verify-jwt; only archie-agent-worker
+        # keeps the gateway JWT lock.
         # AUDIT FIX HIGH-2 + MEDIUM-5 (2026-09-13): CI used to
         # deploy only to the mirror project while live traffic
         # hit the production project — CI-green did not mean
@@ -75,7 +83,7 @@ jobs:
           fail=0
           deployed=0
           for ref in $ARCHIE_PROJECT_REFS; do
-            for d in supabase/functions/archie-*/; do
+            for d in supabase/functions/archie-*/ supabase/functions/ai-*/; do
               name="$(basename "$d")"
               jwt_flag="--no-verify-jwt"
               if [ "$name" = "archie-agent-worker" ]; then
@@ -95,6 +103,29 @@ jobs:
           done
           echo "Deployed $deployed function deployment(s), $fail failure(s)."
           if [ "$fail" -gt 0 ]; then exit 1; fi
+
+      - name: Post-deploy ai-copilot gate check (ARCHIE powers FRELUX)
+        env:
+          ARCHIE_PROJECT_URL: https://hqhvlkunkdrxyuvziorm.supabase.co
+        run: |
+          # ai-copilot deploys from this repo now. An unauthenticated
+          # POST must be refused (401/429 from its own auth/rate-limit
+          # gate) — proving liveness AND that self-auth survives the
+          # --no-verify-jwt deployment. 000 = unreachable, 404 = not
+          # deployed.
+          sleep 5
+          resp="$(curl -s -m 15 -w '\n%{http_code}' -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"ping"}' \
+            "$ARCHIE_PROJECT_URL/functions/v1/ai-copilot" || true)"
+          code="$(echo "$resp" | tail -n1)"
+          echo "ai-copilot HTTP $code"
+          if [ "$code" = "401" ] || [ "$code" = "429" ]; then
+            echo "ai-copilot live + gate verified"
+          else
+            echo "::error::ai-copilot health check failed: HTTP $code, body: $resp"
+            exit 1
+          fi
 
       - name: Post-deploy health check (BOTH projects)
         env:
