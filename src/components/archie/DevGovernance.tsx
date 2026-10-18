@@ -115,7 +115,7 @@ export default function DevGovernance() {
         </ol>
         <div className="mt-3 flex items-center gap-2">
           <select
-            className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground"
+            className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             value={actor}
             onChange={(e) => setActor(e.target.value as "ARCHIE" | "OWNER")}
             aria-label="Acting as"
@@ -126,7 +126,7 @@ export default function DevGovernance() {
           <button
             type="button"
             onClick={advance}
-            className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25"
+            className="archie-focusable rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25"
           >
             Advance stage
           </button>
@@ -143,7 +143,7 @@ export default function DevGovernance() {
         note="Deterministic scan of owner-authorized code content only. Findings cite rule and line; proposed fix directions are never applied automatically."
       >
         <textarea
-          className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] text-foreground"
+          className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           rows={6}
           value={code}
           onChange={(e) => setCode(e.target.value)}
@@ -152,7 +152,7 @@ export default function DevGovernance() {
         <button
           type="button"
           onClick={() => setReport(scanAuthorizedCode(code))}
-          className="mt-2 rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25"
+          className="archie-focusable mt-2 rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25"
         >
           Scan authorized content
         </button>

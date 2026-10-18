@@ -149,13 +149,26 @@ describe("CodeIntelligencePanel", () => {
 
   it("APPROVES a patch only with an explicit owner approval reference", async () => {
     decidePatchProposal.mockResolvedValue(undefined);
-    const promptMock = vi.fn().mockReturnValue("change-request #12");
-    vi.stubGlobal("prompt", promptMock);
     render(<CodeIntelligencePanel />);
     fireEvent.click(await screen.findByRole("button", { name: /patches/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /approve/i }));
 
-    expect(promptMock).toHaveBeenCalled();
+    // The inline reference input replaces the old native window.prompt.
+    const refInput = await screen.findByRole("textbox", {
+      name: /approval reference for patch p1/i,
+    });
+    // No reference → Approve stays disabled. Owner Authority is explicit.
+    const approveBtn = screen.getByRole("button", { name: /approve/i });
+    expect((approveBtn as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(refInput, {
+      target: { value: "change-request #12" },
+    });
+    expect(
+      (screen.getByRole("button", { name: /approve/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
     await waitFor(() =>
       expect(decidePatchProposal).toHaveBeenCalledWith(
         "p1",
@@ -163,12 +176,6 @@ describe("CodeIntelligencePanel", () => {
         "change-request #12",
       ),
     );
-    // No reference → no approval, no exception. Owner Authority is explicit.
-    promptMock.mockReturnValue("");
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
-    await waitFor(() => expect(decidePatchProposal).toHaveBeenCalledTimes(1));
-    promptMock.mockClear();
-    vi.unstubAllGlobals();
   });
 
   it("hides the decision flow for patches not awaiting the owner", async () => {

@@ -82,9 +82,18 @@ export default function CodeIntelligencePanel() {
     (p) => p.status === "AWAITING_OWNER_APPROVAL",
   ).length;
 
+  // Inline owner-approval references — one per pending patch. A native
+  // browser prompt is neither premium nor accessible; an explicit,
+  // reviewable input keeps Owner Authority honest (empty = refused).
+  const [approvalRefs, setApprovalRefs] = useState<
+    Record<string, string>
+  >({});
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-4 md:py-6">
-      <h1 className="text-lg font-semibold md:text-xl">Code Intelligence</h1>
+      <h1 className="archie-title-gradient text-lg font-semibold md:text-xl">
+        Code Intelligence
+      </h1>
       <p className="text-xs text-slate-400">
         The real audit state of the FRELUX codebase: findings from the deep code
         audit, calculation provenance traces, and approval-gated patch
@@ -250,14 +259,35 @@ export default function CodeIntelligencePanel() {
               )}
               {p.status === "AWAITING_OWNER_APPROVAL" && (
                 <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <label className="flex flex-1 flex-col gap-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                      Approval reference (owner instruction or change-request
+                      id) — required
+                    </span>
+                    <input
+                      value={approvalRefs[p.id] ?? ""}
+                      onChange={(e) =>
+                        setApprovalRefs((prev) => ({
+                          ...prev,
+                          [p.id]: e.target.value,
+                        }))
+                      }
+                      aria-label={`Approval reference for patch ${p.id}`}
+                      placeholder="e.g. change-request #12"
+                      className="archie-input archie-focusable w-full rounded-lg px-2.5 py-1.5 text-xs text-slate-100"
+                    />
+                  </label>
                   <Button
                     size="sm"
                     className="bg-emerald-500/80 text-white hover:bg-emerald-500"
-                    disabled={busy}
+                    disabled={busy || !(approvalRefs[p.id] ?? "").trim()}
+                    title={
+                      (approvalRefs[p.id] ?? "").trim()
+                        ? "Approve with this reference"
+                        : "Enter an approval reference first — Owner Authority is explicit"
+                    }
                     onClick={() => {
-                      const ref = window.prompt(
-                        "Approval reference (e.g. owner instruction or change-request id):",
-                      );
+                      const ref = (approvalRefs[p.id] ?? "").trim();
                       if (!ref) return;
                       act(() => decidePatchProposal(p.id, "APPROVED", ref));
                     }}

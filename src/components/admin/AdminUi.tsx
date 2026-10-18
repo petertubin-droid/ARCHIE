@@ -64,7 +64,7 @@ export function AdminButton({
   title?: string;
 }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-all active:scale-95 disabled:opacity-50";
+    "inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50";
   const variants = {
     primary: "bg-primary text-primary-foreground hover:bg-primary/90",
     secondary:

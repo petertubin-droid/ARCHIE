@@ -131,7 +131,7 @@ export default function MarketKnowledgePanel() {
             value={sector}
             onChange={(e) => setSector(e.target.value)}
             aria-label="Market sector"
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             {MARKET_SECTORS.map((sec) => (
               <option key={sec} value={sec}>
@@ -144,21 +144,21 @@ export default function MarketKnowledgePanel() {
             onChange={(e) => setRegion(e.target.value)}
             aria-label="Observation region"
             placeholder="Region (e.g. NG-Lagos)"
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <textarea
             value={statement}
             onChange={(e) => setStatement(e.target.value)}
             aria-label="Observation statement"
             placeholder="Observation statement"
-            className="h-16 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            className="h-16 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <input
             value={source}
             onChange={(e) => setSource(e.target.value)}
             aria-label="Observation source"
             placeholder="Named source"
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <AdminButton onClick={addObservation}>
             Add observation (validated)
@@ -216,21 +216,21 @@ export default function MarketKnowledgePanel() {
             onChange={(e) => setKKey(e.target.value)}
             aria-label="Knowledge key"
             placeholder="Knowledge key"
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <textarea
             value={kStatement}
             onChange={(e) => setKStatement(e.target.value)}
             aria-label="Knowledge statement"
             placeholder="Statement"
-            className="h-14 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            className="h-14 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <div className="grid grid-cols-3 gap-2">
             <select
               value={kState}
               onChange={(e) => setKState(e.target.value as ValidationState)}
               aria-label="Validation state"
-              className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              className="rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <option value="OWNER_PROVIDED">OWNER_PROVIDED</option>
               <option value="INFERRED">INFERRED</option>
@@ -245,14 +245,14 @@ export default function MarketKnowledgePanel() {
               onChange={(e) => setKConfidence(e.target.value)}
               aria-label="Confidence"
               placeholder="0..1"
-              className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              className="rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <input
               value={kSource}
               onChange={(e) => setKSource(e.target.value)}
               aria-label="Knowledge source"
               placeholder="Source"
-              className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              className="rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
           {kState === "VERIFIED" && (
@@ -261,7 +261,7 @@ export default function MarketKnowledgePanel() {
               onChange={(e) => setKEvidence(e.target.value)}
               aria-label="Verification evidence"
               placeholder="Human verification evidence (required for VERIFIED)"
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
           )}
           {kState === "INFERRED" && (
@@ -270,7 +270,7 @@ export default function MarketKnowledgePanel() {
               onChange={(e) => setKBasis(e.target.value)}
               aria-label="Inference basis"
               placeholder="Inference basis (required for INFERRED)"
-              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
           )}
           <AdminButton onClick={addKnowledge}>
@@ -286,7 +286,7 @@ export default function MarketKnowledgePanel() {
               return (
                 <li
                   key={`${k.key}-${k.version}`}
-                  className="rounded-lg border border-border p-2"
+                  className="rounded-lg border border-border p-2 focus:outline-none focus:ring-2 focus:ring-ring"
                   data-testid={`knowledge-${stale ? "stale" : "fresh"}`}
                 >
                   <div className="flex flex-wrap items-center gap-2">
