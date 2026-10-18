@@ -6,17 +6,14 @@
 # Freluxtools Supabase project (hqhvlkunkdrxyuvziorm); this
 # site ships only the client shell that talks to them.
 #
-# Required environment variables (Netlify UI → Site settings →
-# Environment variables):
-#   VITE_SUPABASE_URL      = https://hqhvlkunkdrxyuvziorm.supabase.co
-#   VITE_SUPABASE_ANON_KEY = (the Freluxtools public anon key —
-#                            public by design, access is
-#                            enforced by RLS + the functions'
-#                            own auth gates)
-#   VITE_SITE_URL          = this site's final URL (set once
-#                            the domain is known; optional —
-#                            code falls back to the deployed
-#                            URL)
+# ZERO-CONFIG IMPORT: .env.production in this repo carries the
+# public-by-design VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
+# (RLS-enforced), so importing this repo in Netlify builds a
+# working site with NO environment variables set. Optional
+# overrides (Netlify UI env vars take Vite precedence):
+#   VITE_SITE_URL = this site's final URL (set once the domain
+#                   is known; code falls back to the deployed
+#                   URL)
 # =========================================================
 
 [build]
