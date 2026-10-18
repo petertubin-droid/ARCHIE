@@ -42,6 +42,29 @@ const GEMINI_MODEL = "gemini-2.0-flash";
 // facts, never calculate. The deterministic engines stay the
 // only calculators.
 import { nativeInterpret } from "./native-interpret.ts";
+import { logKnowledgeGap, type ServiceLike } from "./gap-log.ts";
+
+// TREE METHODOLOGY (owner directive 2026-10-18) — the roots:
+// an "unsupported" question is a knowledge gap the branches
+// can research. Logged service-role, never blocks the answer.
+async function gapService(): Promise<ServiceLike | null> {
+  try {
+    const url = Deno.env.get("SUPABASE_URL");
+    const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!url || !key) return null;
+    return createClient(url, key) as unknown as ServiceLike;
+  } catch {
+    return null;
+  }
+}
+
+async function logGapIfUnsupported(
+  taskType: unknown,
+  text: string,
+): Promise<void> {
+  if (taskType !== "unsupported") return;
+  await logKnowledgeGap(await gapService(), text);
+}
 
 interface CopilotRequest {
   text: string;
@@ -216,32 +239,36 @@ Return JSON matching the schema.`;
       },
     );
 
+    // Every Gemini failure lands on ONE ARCHIE-native fallback —
+    // and a failure that was never interpreted may be a gap too.
+    const nativeFallback = () => {
+      const interpretation = nativeInterpret(requestText);
+      return { interpretation, engine: "archie-native-fallback" };
+    };
+
     if (!response.ok) {
       // Gemini unreachable — ARCHIE-native interpretation
       // keeps the Copilot alive, honestly labeled.
-      return jsonResponse({
-        interpretation: nativeInterpret(requestText),
-        engine: "archie-native-fallback",
-      });
+      const out = nativeFallback();
+      await logGapIfUnsupported(out.interpretation.taskType, requestText);
+      return jsonResponse(out);
     }
 
     const gemini = await response.json();
     const raw = gemini?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!raw) {
-      return jsonResponse({
-        interpretation: nativeInterpret(requestText),
-        engine: "archie-native-fallback",
-      });
+      const out = nativeFallback();
+      await logGapIfUnsupported(out.interpretation.taskType, requestText);
+      return jsonResponse(out);
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return jsonResponse({
-        interpretation: nativeInterpret(requestText),
-        engine: "archie-native-fallback",
-      });
+      const out = nativeFallback();
+      await logGapIfUnsupported(out.interpretation.taskType, requestText);
+      return jsonResponse(out);
     }
 
     // Defensive validation — trust nothing beyond the schema shape.
@@ -249,12 +276,15 @@ Return JSON matching the schema.`;
       parsed as { interpretation?: Record<string, unknown> }
     )?.interpretation;
     if (!interpretation || typeof interpretation !== "object") {
-      return jsonResponse({
-        interpretation: nativeInterpret(requestText),
-        engine: "archie-native-fallback",
-      });
+      const out = nativeFallback();
+      await logGapIfUnsupported(out.interpretation.taskType, requestText);
+      return jsonResponse(out);
     }
 
+    await logGapIfUnsupported(
+      (interpretation as { taskType?: unknown }).taskType,
+      requestText,
+    );
     return jsonResponse({ interpretation, engine: "gemini" });
   } catch (error) {
     console.error("ai-copilot error:", error);
