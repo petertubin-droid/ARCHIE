@@ -37,6 +37,7 @@ export type PlanExecutionStatus =
   | "awaiting_owner"
   | "contingency_active"
   | "failed"
+  | "blocked"
   | "skipped";
 
 export type ContingencyTrigger =

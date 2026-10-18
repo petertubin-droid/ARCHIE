@@ -53,7 +53,7 @@ export class AdaptivePlanningEngine {
     contingenciesTriggered: 0,
     repairsPerformed: 0,
     trackedOperatorsCount: 0,
-    averagePlanReliability: 0.92,
+    averagePlanReliability: 0.0,
   };
 
   constructor(
@@ -86,7 +86,7 @@ export class AdaptivePlanningEngine {
    * PERT critical path, dynamic contingencies, and HTN milestones.
    */
   async generatePlan(request: AdaptivePlanRequest): Promise<AdaptivePlan> {
-    this.diagnostics.totalPlansGenerated++;
+    // Will increment and compute actual average reliability when plan nodes are generated
 
     const goalPattern: FactPattern =
       typeof request.goal === "string"
@@ -318,6 +318,13 @@ export class AdaptivePlanningEngine {
       ).toFixed(3),
     );
 
+    this.diagnostics.totalPlansGenerated++;
+    const prevTotal = this.diagnostics.totalPlansGenerated - 1;
+    this.diagnostics.averagePlanReliability = Number(
+      ((this.diagnostics.averagePlanReliability * prevTotal + overallReliability) /
+        this.diagnostics.totalPlansGenerated).toFixed(3),
+    );
+
     const hasOwnerAuthGate = nodes.some((n) => n.requiresOwnerAuthorization);
 
     const plan: AdaptivePlan = {
@@ -374,6 +381,24 @@ export class AdaptivePlanningEngine {
     for (const stepId of currentWaveStepIds) {
       const node = plan.nodes.find((n) => n.id === stepId);
       if (!node) continue;
+
+      // Explicit prerequisite check: Ensure all declared dependencies have actually succeeded
+      const failedDep = node.dependsOn.find((depId) => {
+        const depNode = plan.nodes.find((n) => n.id === depId);
+        return !depNode || depNode.status !== "executed";
+      });
+
+      if (failedDep) {
+        node.status = "blocked";
+        node.error = `Prerequisite step ${failedDep} has not executed successfully.`;
+        stepResults.push({
+          stepId: node.id,
+          operatorId: node.operatorId,
+          status: "blocked",
+          error: node.error,
+        });
+        continue;
+      }
 
       if (node.requiresOwnerAuthorization && node.status === "awaiting_owner") {
         blockedForOwner = true;
