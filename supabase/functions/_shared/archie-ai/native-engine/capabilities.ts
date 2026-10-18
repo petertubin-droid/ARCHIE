@@ -292,6 +292,13 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
       measuredBy: "code-author.test.ts, cognitive-engine.test.ts",
     },
     {
+      id: "associative-memory",
+      description:
+        "Episodic and long-term associative memory: temporal episode clustering, deterministic Ebbinghaus retention and stability curves, Hebbian link reinforcement, multi-hop spreading activation, and bidirectional bridging with verified long-term FactStore",
+      maturity: "OPERATIONAL",
+      measuredBy: "associative-memory.test.ts",
+    },
+    {
       id: "semantic-understanding",
       description:
         "Semantic understanding and language reasoning: context resolution, structured intent classification, entity extraction, ambiguity detection, constraint analysis, temporal parsing, multi-lingual normalization, and security boundary evaluation without external LLMs",
