@@ -278,6 +278,20 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
       measuredBy: "whatsapp-integration.test.ts, whatsapp-protocol.test.ts",
     },
     {
+      id: "telegram-channel",
+      description:
+        "Telegram intelligence: secret-token-verified webhook, owner-linked chats, same ARCHIE core as the PWA, honest media acknowledgment. Channel DISABLED until the Owner enables it and sets TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET",
+      maturity: "OPERATIONAL",
+      measuredBy: "telegram/protocol.test.ts",
+    },
+    {
+      id: "email-channel",
+      description:
+        "Email intelligence: provider-agnostic inbound webhook + pluggable outbound adapter (Resend/Postmark), owner-linked addresses, honest HTML-only refusal. Channel DISABLED until the Owner enables it and wires EMAIL_PROVIDER + EMAIL_API_KEY",
+      maturity: "OPERATIONAL",
+      measuredBy: "email/protocol.test.ts",
+    },
+    {
       id: "web-source-registry",
       description:
         "Priority web source registry: domain-classified source selection for research (construction, finance, news and more)",
