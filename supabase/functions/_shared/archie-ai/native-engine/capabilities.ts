@@ -258,7 +258,7 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
     {
       id: "vision-perception",
       description:
-        "Vision/perception: image analysis adapters feeding document and site inspection intelligence",
+        "Vision/perception: deterministic image analysis — dimensions, depth, palette/dominant-color coverage, brightness, and bounded scene-feature scores (heuristic, NOT object recognition). Native OCR is honest template matching on clean machine-rendered text (charset 0-9 A-Z . , : -) and refuses below calibration. ARCHIE does not semantically 'see' or interpret image content; it reports measured statistics and refuses what it cannot honestly process",
       maturity: "OPERATIONAL",
       measuredBy: "vision.test.ts",
     },
