@@ -106,6 +106,10 @@ export function isSearchFailureNote(note: string): boolean {
     note.startsWith("google books api unavailable") ||
     note.startsWith("stack exchange api unavailable") ||
     note.startsWith("arxiv api unavailable") ||
+    // Gemini learning source (owner directive 2026-10-18): a
+    // missing key / unreachable model is a FAILURE, never a
+    // fake zero-hit search.
+    note.startsWith("gemini api unavailable") ||
     note.startsWith("site-scoped search not supported") ||
     // Audit fix H-4 (2026-09-11): a restricted source is never
     // searched — it must be reported as a failure, never

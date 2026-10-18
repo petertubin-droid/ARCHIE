@@ -35,6 +35,14 @@ const corsHeaders = {
 
 const GEMINI_MODEL = "gemini-2.0-flash";
 
+// OWNER DIRECTIVE 2026-10-18 — ARCHIE POWERS FRELUX: when
+// Gemini (the primary interpreter) is unconfigured or
+// unreachable, ARCHIE's native interpretation takes over
+// instead of failing. Same honest rules: extract only stated
+// facts, never calculate. The deterministic engines stay the
+// only calculators.
+import { nativeInterpret } from "./native-interpret.ts";
+
 interface CopilotRequest {
   text: string;
 }
@@ -139,27 +147,41 @@ serveWithCors(async (req: Request) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-  const geminiKey = Deno.env.get("GOOGLE_AI_API_KEY");
-  if (!geminiKey) {
-    return jsonResponse(
-      {
-        error:
-          "AI provider is not configured. The Copilot falls back to deterministic parsing.",
-      },
-      503,
-    );
-  }
-
+  const geminiKey = Deno.env.get("GEMINI_API_KEY") ?? Deno.env.get("GOOGLE_AI_API_KEY");
+  let userId: string | null = null;
   try {
-    const userId = await getAuthenticatedUserId(req, supabaseUrl, anonKey);
+    userId = await getAuthenticatedUserId(req, supabaseUrl, anonKey);
     if (!userId) {
       return jsonResponse({ error: "Unauthorized" }, 401);
     }
+  } catch (error) {
+    console.error("ai-copilot auth error:", error);
+    return jsonResponse({ error: "ai-copilot failed" }, 500);
+  }
 
-    const { text } = (await req.json()) as CopilotRequest;
-    if (!text || typeof text !== "string" || text.length > 2000) {
-      return jsonResponse({ error: "Invalid request text" }, 400);
-    }
+  let requestText = "";
+  try {
+    const body = (await req.json()) as CopilotRequest;
+    requestText = body.text ?? "";
+  } catch {
+    return jsonResponse({ error: "Invalid request body" }, 400);
+  }
+  if (!requestText || typeof requestText !== "string" || requestText.length > 2000) {
+    return jsonResponse({ error: "Invalid request text" }, 400);
+  }
+
+  if (!geminiKey) {
+    // ARCHIE-native interpretation powers the Copilot when the
+    // model provider is not configured — the surface stays
+    // usable, honestly labeled as native.
+    return jsonResponse({
+      interpretation: nativeInterpret(requestText),
+      engine: "archie-native",
+    });
+  }
+
+  try {
+    const text = requestText;
 
     const prompt = `You are the FRELUX Copilot interpreter. FRELUX is a construction & property intelligence platform with DETERMINISTIC calculation engines (build-to-roof building estimation, roof geometry, painting, tyrolene finishing).
 
@@ -195,23 +217,31 @@ Return JSON matching the schema.`;
     );
 
     if (!response.ok) {
-      return jsonResponse(
-        { error: "AI interpretation temporarily unavailable" },
-        502,
-      );
+      // Gemini unreachable — ARCHIE-native interpretation
+      // keeps the Copilot alive, honestly labeled.
+      return jsonResponse({
+        interpretation: nativeInterpret(requestText),
+        engine: "archie-native-fallback",
+      });
     }
 
     const gemini = await response.json();
     const raw = gemini?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!raw) {
-      return jsonResponse({ error: "Empty AI response" }, 502);
+      return jsonResponse({
+        interpretation: nativeInterpret(requestText),
+        engine: "archie-native-fallback",
+      });
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return jsonResponse({ error: "Malformed AI response" }, 502);
+      return jsonResponse({
+        interpretation: nativeInterpret(requestText),
+        engine: "archie-native-fallback",
+      });
     }
 
     // Defensive validation — trust nothing beyond the schema shape.
@@ -219,10 +249,13 @@ Return JSON matching the schema.`;
       parsed as { interpretation?: Record<string, unknown> }
     )?.interpretation;
     if (!interpretation || typeof interpretation !== "object") {
-      return jsonResponse({ error: "Malformed interpretation" }, 502);
+      return jsonResponse({
+        interpretation: nativeInterpret(requestText),
+        engine: "archie-native-fallback",
+      });
     }
 
-    return jsonResponse({ interpretation });
+    return jsonResponse({ interpretation, engine: "gemini" });
   } catch (error) {
     console.error("ai-copilot error:", error);
     return jsonResponse({ error: "ai-copilot failed" }, 500);

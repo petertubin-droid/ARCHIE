@@ -76,6 +76,7 @@ import { WikipediaSearchAdapter } from "./wikipedia-search.ts";
 import { GoogleBooksAdapter } from "./google-books-search.ts";
 import { StackExchangeAdapter } from "./stackexchange-search.ts";
 import { ArxivAdapter } from "./arxiv-search.ts";
+import { GeminiResearchAdapter } from "./gemini-research.ts";
 // LLM ROUTER (draft scaffold, owner directive 2026-09-16):
 // pluggable model seam shipping with ZERO providers — no
 // external AI model is wired into ARCHIE.
@@ -563,6 +564,14 @@ export class ArchieNativeEngine implements ArchieRuntime {
         new GoogleBooksAdapter(),
         new StackExchangeAdapter(),
         new ArxivAdapter(),
+        // OWNER DIRECTIVE 2026-10-18 — ARCHIE LEARNS FROM
+        // GEMINI: an external knowledge source consulted on a
+        // miss, stored as low-confidence candidate knowledge
+        // with named provenance. Gemini is NOT inside the
+        // reasoning path and is deliberately LAST in the chain:
+        // verifiable cited sources answer first; model
+        // synthesis is the final resort, never the first.
+        new GeminiResearchAdapter(),
       ]);
     this.facts = new FactStore(this.persistence ?? undefined);
     // Domain-skill registry (audit fix 2026-09-11, domain-
