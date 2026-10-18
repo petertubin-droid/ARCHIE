@@ -113,10 +113,17 @@ export function semanticFeatures(text: string): string[] {
   return feats;
 }
 
-/** Content tokens (len >= 3) for the anchor predicate. */
+const STOPWORDS = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "been", "am",
+  "do", "does", "did", "of", "to", "in", "on", "for", "with", "and",
+  "or", "but", "at", "by", "from", "as", "it", "its", "this", "that",
+  "these", "those", "what", "which", "who", "whom", "where", "when", "why", "how",
+]);
+
+/** Content tokens (len >= 3, non-stopword) for the anchor predicate. */
 function contentTokens(text: string): string[] {
   return (text.toLowerCase().match(/[a-z0-9+#]+/g) ?? []).filter(
-    (t) => t.length >= 3,
+    (t) => t.length >= 3 && !STOPWORDS.has(t),
   );
 }
 

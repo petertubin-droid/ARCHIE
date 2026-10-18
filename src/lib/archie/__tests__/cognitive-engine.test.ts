@@ -754,9 +754,9 @@ describe("creation engine", () => {
 
   it("reports open-ended generative creation as NOT implemented — never fakes it", () => {
     const capability = CreationEngine.capability();
-    expect(capability.implemented.length).toBe(4);
+    expect(capability.implemented.length).toBe(5);
     expect(capability.notImplemented.join(" ")).toContain(
-      "open-ended generative code authoring",
+      "open-ended code authoring",
     );
   });
 

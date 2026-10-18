@@ -218,7 +218,7 @@ export function stem(token: string): string {
   if (t.endsWith("ing") && t.length > 5) {
     t = t.slice(0, -3);
     // running → runn → run (undo doubled final consonant)
-    if (/(\w)\1$/.test(t) && t.length > 3 && !/[aeiou]\1$/.test(t))
+    if (/(\w)\1$/.test(t) && t.length > 3 && !/([aeiou])\1$/.test(t))
       t = t.slice(0, -1);
   } else if (t.endsWith("ies") && t.length > 4) t = t.slice(0, -3) + "y";
   else if (t.endsWith("es") && t.length > 4) t = t.slice(0, -2);

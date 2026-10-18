@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readdirSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import {
   understand,
   extractEntities,
@@ -755,10 +755,20 @@ describe("Capability manifest", () => {
     // that exists in this suite. A measuredBy naming a file
     // that does not exist fails here — no unmeasured
     // OPERATIONAL claims can ship.
-    const testDir = `${process.cwd()}/src/lib/archie/__tests__`;
-    const existing = new Set(
-      readdirSync(testDir).filter((f) => f.endsWith(".test.ts")),
-    );
+    const findTests = (dir: string): string[] => {
+      let res: string[] = [];
+      if (!existsSync(dir)) return res;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) res.push(...findTests(full));
+        else if (entry.name.endsWith(".test.ts")) res.push(entry.name);
+      }
+      return res;
+    };
+    const existing = new Set([
+      ...findTests(`${process.cwd()}/src/lib/archie/__tests__`),
+      ...findTests(`${process.cwd()}/supabase/functions/_shared/archie-ai`),
+    ]);
     for (const capability of nativeEngineCapabilityManifest()) {
       expect(capability.measuredBy.length).toBeGreaterThan(0);
       if (capability.maturity === "OPERATIONAL") {

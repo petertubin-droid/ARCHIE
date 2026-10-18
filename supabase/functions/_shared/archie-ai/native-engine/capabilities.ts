@@ -289,7 +289,14 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
       description:
         "Generative coding (A-3): bounded TypeScript authoring from a structured spec — deterministic template composition with a tokenized expression grammar and self-verification. Open-ended prose→application authoring remains honestly refused",
       maturity: "OPERATIONAL",
-      measuredBy: "code-author.test.ts, cognitive/creation.test.ts",
+      measuredBy: "code-author.test.ts, cognitive-engine.test.ts",
+    },
+    {
+      id: "semantic-understanding",
+      description:
+        "Semantic understanding and language reasoning: context resolution, structured intent classification, entity extraction, ambiguity detection, constraint analysis, temporal parsing, multi-lingual normalization, and security boundary evaluation without external LLMs",
+      maturity: "OPERATIONAL",
+      measuredBy: "semantic-engine.test.ts, semantic-evaluation.test.ts",
     },
     {
       id: "video-perception",
