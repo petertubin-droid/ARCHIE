@@ -4,28 +4,47 @@
 // Client-side entry point and presentation adapter for the
 // ARCHIE Adaptive Planning Engine. Connects the frontend to
 // DAG scheduling, Critical Path Method, HTN milestones,
-// dynamic contingency branches, and execution telemetry.
+// dynamic contingency branches, execution telemetry, Goal
+// Formalization, Resource Allocation, and Owner Authority.
 // =========================================================
 
 import {
   AdaptivePlanningEngine,
   createAdaptivePlanningEngine,
+  GoalFormalizer,
+  ResourceAllocator,
+  DecisionIntelligenceEngine,
+  RiskAssessmentEngine,
+  UncertaintyManager,
+  OwnerAuthorityGateKeeper,
+  PlanPersistenceStore,
 } from "@studio-shared/archie-ai/adaptive-planning/index.ts";
 import type {
   AdaptivePlan,
   AdaptivePlanRequest,
   PlanningObjectiveProfile,
+  StructuredGoal,
+  StructuredPlanResult,
   WaveExecutionResult,
-} from "@studio-shared/archie-ai/adaptive-planning/types.ts";
+} from "@studio-shared/archie-ai/adaptive-planning/index.ts";
 
 export {
   AdaptivePlanningEngine,
   createAdaptivePlanningEngine,
+  GoalFormalizer,
+  ResourceAllocator,
+  DecisionIntelligenceEngine,
+  RiskAssessmentEngine,
+  UncertaintyManager,
+  OwnerAuthorityGateKeeper,
+  PlanPersistenceStore,
 };
 export type {
   AdaptivePlan,
   AdaptivePlanRequest,
   PlanningObjectiveProfile,
+  StructuredGoal,
+  StructuredPlanResult,
   WaveExecutionResult,
 };
 
@@ -49,6 +68,33 @@ export async function planObjectiveAdaptively(
     profile: options.profile ?? "balanced",
     workingMemoryConstraints: options.workingMemoryConstraints,
     domainContext: options.domainContext,
+  });
+}
+
+/**
+ * Generates an end-to-end structured adaptive plan with goal formalization,
+ * resource checks, risk assessment, and owner authority validation.
+ */
+export async function planStructuredObjective(
+  objective: string,
+  options: {
+    constraints?: string[];
+    acceptanceCriteria?: string[];
+    priority?: "LOW" | "NORMAL" | "HIGH" | "CRITICAL";
+    budget?: { maxCost?: number; maxDurationMs?: number };
+    ownerAuthorized?: boolean;
+    requestedBy?: string;
+  } = {},
+): Promise<StructuredPlanResult> {
+  const engine = createAdaptivePlanningEngine();
+  return engine.generateStructuredPlan({
+    objective,
+    constraints: options.constraints,
+    acceptanceCriteria: options.acceptanceCriteria,
+    priority: options.priority,
+    budget: options.budget,
+    ownerAuthorized: options.ownerAuthorized,
+    requestedBy: options.requestedBy,
   });
 }
 

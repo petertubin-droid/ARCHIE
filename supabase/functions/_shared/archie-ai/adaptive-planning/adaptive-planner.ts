@@ -3,7 +3,10 @@
 //
 // Unifies means-ends analysis, Hierarchical Task Networks,
 // DAG scheduling, Critical Path Method, dynamic contingencies,
-// adaptive telemetry feedback, and Unified Memory integration.
+// adaptive telemetry feedback, Goal Formalization, Resource
+// Allocation, Multi-Criteria Decision Intelligence, Risk
+// Assessment, Epistemic Uncertainty Management, and the
+// strict Owner Authority Gate.
 // =========================================================
 
 import type {
@@ -26,6 +29,7 @@ import type {
   HierarchicalMilestone,
   PlanExecutionStatus,
   PlanningObjectiveProfile,
+  StructuredGoal,
   WaveExecutionResult,
 } from "./types.ts";
 import { DagScheduler } from "./dag-scheduler.ts";
@@ -33,9 +37,50 @@ import { HtnDecomposer } from "./htn-decomposer.ts";
 import { ContingencyEngine } from "./contingency-engine.ts";
 import { OperatorTelemetryStore } from "./telemetry-learning.ts";
 import { MemoryPlannerBridge } from "./memory-planner-bridge.ts";
+import { GoalFormalizer, type GoalFormalizationInput } from "./goal-formalizer.ts";
+import {
+  ResourceAllocator,
+  type ResourceAllocationResult,
+  type SystemResourceLimits,
+} from "./resource-allocator.ts";
+import {
+  DecisionIntelligenceEngine,
+  type AlternativeEvaluationResult,
+  type DecisionContext,
+} from "./decision-intelligence.ts";
+import {
+  RiskAssessmentEngine,
+  type PlanRiskAssessment,
+} from "./risk-assessment.ts";
+import {
+  UncertaintyManager,
+  type UncertaintyReport,
+} from "./uncertainty-manager.ts";
+import {
+  OwnerAuthorityGateKeeper,
+  type AuthorityCheckResult,
+} from "./owner-authority-gate.ts";
+import {
+  PlanPersistenceStore,
+  type PlanStore,
+} from "./plan-persistence.ts";
 
 function patternLabel(pattern: FactPattern): string {
   return `${pattern.subject ?? "?"} ${pattern.predicate ?? "?"}`;
+}
+
+export interface AdaptivePlanningEngineOptions {
+  customOperators?: Operator[];
+  systemLimits?: SystemResourceLimits;
+  planStore?: PlanStore;
+}
+
+export interface StructuredPlanResult extends AdaptivePlan {
+  structuredGoal: StructuredGoal;
+  resourceAllocation: ResourceAllocationResult;
+  riskAssessment: PlanRiskAssessment;
+  uncertaintyReport: UncertaintyReport;
+  authorityEvaluation: AuthorityCheckResult;
 }
 
 export class AdaptivePlanningEngine {
@@ -44,6 +89,13 @@ export class AdaptivePlanningEngine {
   private contingencyEngine = new ContingencyEngine();
   private telemetryStore = new OperatorTelemetryStore();
   private memoryBridge: MemoryPlannerBridge;
+  private goalFormalizer = new GoalFormalizer();
+  private resourceAllocator: ResourceAllocator;
+  private decisionEngine = new DecisionIntelligenceEngine();
+  private riskEngine = new RiskAssessmentEngine();
+  private uncertaintyManager = new UncertaintyManager();
+  private ownerGate = new OwnerAuthorityGateKeeper();
+  private persistenceStore: PlanPersistenceStore;
   private operators: Operator[];
 
   private diagnostics: AdaptivePlanningDiagnostics = {
@@ -60,8 +112,11 @@ export class AdaptivePlanningEngine {
     private facts: FactStore = new FactStore(),
     customOperators?: Operator[],
     private derivable?: (pattern: FactPattern) => boolean,
+    options: AdaptivePlanningEngineOptions = {},
   ) {
     this.memoryBridge = new MemoryPlannerBridge(facts);
+    this.resourceAllocator = new ResourceAllocator(options.systemLimits);
+    this.persistenceStore = new PlanPersistenceStore(options.planStore);
     this.operators = customOperators ?? [
       ...DEFAULT_OPERATORS,
       ...PLANNING_OPERATORS,
@@ -77,8 +132,43 @@ export class AdaptivePlanningEngine {
     return this.scheduler;
   }
 
+  getGoalFormalizer(): GoalFormalizer {
+    return this.goalFormalizer;
+  }
+
+  getResourceAllocator(): ResourceAllocator {
+    return this.resourceAllocator;
+  }
+
+  getDecisionEngine(): DecisionIntelligenceEngine {
+    return this.decisionEngine;
+  }
+
+  getRiskEngine(): RiskAssessmentEngine {
+    return this.riskEngine;
+  }
+
+  getUncertaintyManager(): UncertaintyManager {
+    return this.uncertaintyManager;
+  }
+
+  getOwnerGate(): OwnerAuthorityGateKeeper {
+    return this.ownerGate;
+  }
+
+  getPersistenceStore(): PlanPersistenceStore {
+    return this.persistenceStore;
+  }
+
   getOperators(): readonly Operator[] {
     return this.operators;
+  }
+
+  /**
+   * Evaluates decision alternatives using Multi-Criteria Decision Analysis.
+   */
+  evaluateAlternatives(context: DecisionContext): AlternativeEvaluationResult {
+    return this.decisionEngine.evaluateAlternatives(context);
   }
 
   /**
@@ -86,8 +176,6 @@ export class AdaptivePlanningEngine {
    * PERT critical path, dynamic contingencies, and HTN milestones.
    */
   async generatePlan(request: AdaptivePlanRequest): Promise<AdaptivePlan> {
-    // Will increment and compute actual average reliability when plan nodes are generated
-
     const goalPattern: FactPattern =
       typeof request.goal === "string"
         ? { predicate: request.goal }
@@ -200,11 +288,11 @@ export class AdaptivePlanningEngine {
       return false;
     };
 
-    const executable = resolvePrecondition(goalPattern, maxDepth);
+    let executable = resolvePrecondition(goalPattern, maxDepth);
 
     // 5. Build AdaptivePlanStepNode DAG
     const nodes: AdaptivePlanStepNode[] = [];
-    const producedByKey = new Map<string, string>(); // patternLabel -> stepId
+    const producedByKey = new Map<string, string>();
 
     // Pre-populate with store facts
     for (const p of memoryContext.preExistingSatisfiedPatterns) {
@@ -238,16 +326,14 @@ export class AdaptivePlanningEngine {
       const adaptiveCost = this.telemetryStore.computeAdaptiveCost(item.op);
       const reliabilityScore = this.telemetryStore.computeReliability(item.op.id);
 
-      const isConsequential =
-        item.op.id.includes("propose") ||
-        item.op.id.includes("trade") ||
-        item.op.id.includes("deploy") ||
-        item.op.id.includes("auth");
+      // Check whether operator requires owner authority
+      const authRequired = this.ownerGate.isActionProtected(item.op.id);
 
-      // Approximate durations based on operator type
-      let expDuration = 200;
-      if (item.op.id.includes("research")) expDuration = 1200;
-      if (item.op.id.includes("calculate") || item.op.id.includes("survey")) expDuration = 400;
+      // Duration: check telemetry history, else use standard domain heuristics
+      const telem = this.telemetryStore.getTelemetry(item.op.id);
+      let expDuration = telem?.averageDurationMs && telem.executionsCount > 0
+        ? telem.averageDurationMs
+        : (item.op.id.includes("research") ? 1200 : (item.op.id.includes("calculate") || item.op.id.includes("survey") ? 400 : 200));
 
       const node: AdaptivePlanStepNode = {
         id: stepId,
@@ -262,8 +348,8 @@ export class AdaptivePlanningEngine {
         baseCost,
         adaptiveCost,
         reliabilityScore,
-        requiresOwnerAuthorization: isConsequential,
-        status: isConsequential ? "awaiting_owner" : "pending",
+        requiresOwnerAuthorization: authRequired,
+        status: authRequired ? "awaiting_owner" : "pending",
       };
 
       // Assign to matching milestone
@@ -289,7 +375,14 @@ export class AdaptivePlanningEngine {
     );
 
     // 7. DAG Analysis: Validation, Waves, and Critical Path
-    this.scheduler.validateDag(nodes);
+    const dagValidation = this.scheduler.validateDag(nodes);
+    if (!dagValidation.valid) {
+      executable = false;
+      for (const issue of dagValidation.issues) {
+        gapReport.push(`DAG issue: ${issue}`);
+      }
+    }
+
     const criticalPath = this.scheduler.computeCriticalPath(nodes);
 
     // 8. Alternatives analysis
@@ -327,8 +420,10 @@ export class AdaptivePlanningEngine {
 
     const hasOwnerAuthGate = nodes.some((n) => n.requiresOwnerAuthorization);
 
+    const planId = `plan_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
     const plan: AdaptivePlan = {
-      id: `plan_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: planId,
       goal: `${goalSubject} ${goalPredicate}`.trim(),
       goalSubject,
       profile,
@@ -353,7 +448,81 @@ export class AdaptivePlanningEngine {
   }
 
   /**
-   * Executes a specific wave of steps concurrently.
+   * Generates an end-to-end structured plan with comprehensive verification,
+   * resource budgeting, risk assessment, and uncertainty tracking.
+   */
+  async generateStructuredPlan(
+    input: GoalFormalizationInput | StructuredGoal,
+  ): Promise<StructuredPlanResult> {
+    // 1. Formalize goal
+    const structuredGoal: StructuredGoal = "primaryObjective" in input
+      ? input
+      : this.goalFormalizer.formalizeGoal(input);
+
+    // 2. Base plan generation
+    const basePlan = await this.generatePlan({
+      goal: {
+        subject: structuredGoal.primaryObjective,
+        predicate: "planned",
+      },
+      profile: structuredGoal.priority === "CRITICAL" ? "conservative" : "balanced",
+      workingMemoryConstraints: structuredGoal.constraints.map((c) => c.description),
+      domainContext: structuredGoal.provenance.requestedBy || "",
+    });
+
+    // 3. Decompose structured milestones & checkpoints
+    const structuredMilestones = this.decomposer.decomposeStructuredGoal(structuredGoal);
+    if (structuredMilestones.length > 0) {
+      basePlan.milestones = structuredMilestones;
+    }
+
+    // 4. Resource Allocation
+    const resourceAllocation = this.resourceAllocator.allocate(
+      structuredGoal.id,
+      basePlan.nodes,
+      structuredGoal.resourceBudget,
+    );
+
+    if (!resourceAllocation.feasible) {
+      basePlan.executable = false;
+      for (const conflict of resourceAllocation.conflicts) {
+        basePlan.gapReport.push(`Resource constraint: ${conflict.message}`);
+      }
+    }
+
+    // 5. Risk Assessment
+    const riskAssessment = this.riskEngine.assessPlanRisks(basePlan.nodes);
+    if (riskAssessment.overallRiskLevel === "CRITICAL" && !structuredGoal.provenance.ownerAuthorized) {
+      basePlan.requiresOwnerAuthorization = true;
+    }
+
+    // 6. Epistemic Uncertainty Management
+    const uncertaintyReport = this.uncertaintyManager.assessPlanUncertainty(
+      basePlan.nodes,
+      structuredGoal,
+    );
+
+    // 7. Owner Authority Gate verification
+    const authorityEvaluation = this.ownerGate.evaluatePlan(basePlan.nodes);
+    if (authorityEvaluation.hasViolations) {
+      basePlan.requiresOwnerAuthorization = true;
+    }
+
+    // 8. Persist plan snapshot
+    await this.persistenceStore.savePlan(basePlan);
+
+    return {
+      ...basePlan,
+      structuredGoal,
+      resourceAllocation,
+      riskAssessment,
+      uncertaintyReport,
+      authorityEvaluation,
+    };
+  }
+
+  /**
+   * Executes a specific wave of steps concurrently with verification checks.
    */
   async executeWave(
     plan: AdaptivePlan,
@@ -362,6 +531,7 @@ export class AdaptivePlanningEngine {
       status: PlanExecutionStatus;
       result?: string;
       error?: string;
+      verdict?: "PASS" | "FAIL" | "INCONCLUSIVE";
     }>,
   ): Promise<WaveExecutionResult> {
     const waves = plan.criticalPath.parallelExecutionWaves;
@@ -417,12 +587,22 @@ export class AdaptivePlanningEngine {
         const execRes = await executor(node);
         const duration = Date.now() - start;
 
-        node.status = execRes.status;
+        // Honor verification verdict
+        let finalStatus = execRes.status;
+        if (execRes.verdict === "FAIL") {
+          finalStatus = "failed";
+          node.error = execRes.error || "Verification verdict was FAIL";
+          this.scheduler.propagateFailure(plan.nodes, node.id, node.error);
+        }
+
+        node.status = finalStatus;
         node.result = execRes.result;
         node.error = execRes.error;
+        node.verificationVerdict = execRes.verdict || (finalStatus === "executed" ? "PASS" : "FAIL");
         node.executedAt = new Date().toISOString();
+        node.measuredDurationMs = duration;
 
-        const success = execRes.status === "executed";
+        const success = finalStatus === "executed";
         this.telemetryStore.recordExecution(
           node.operatorId,
           success,
@@ -439,7 +619,7 @@ export class AdaptivePlanningEngine {
         stepResults.push({
           stepId: node.id,
           operatorId: node.operatorId,
-          status: execRes.status,
+          status: finalStatus,
           result: execRes.result,
           error: execRes.error,
         });
@@ -448,6 +628,8 @@ export class AdaptivePlanningEngine {
         const errMsg = err instanceof Error ? err.message : String(err);
         node.status = "failed";
         node.error = errMsg;
+        node.verificationVerdict = "FAIL";
+        this.scheduler.propagateFailure(plan.nodes, node.id, errMsg);
 
         this.telemetryStore.recordExecution(node.operatorId, false, duration, errMsg);
         this.diagnostics.failedExecutions++;
@@ -568,6 +750,7 @@ export class AdaptivePlanningEngine {
 export function createAdaptivePlanningEngine(
   facts?: FactStore,
   operators?: Operator[],
+  options?: AdaptivePlanningEngineOptions,
 ): AdaptivePlanningEngine {
-  return new AdaptivePlanningEngine(facts, operators);
+  return new AdaptivePlanningEngine(facts, operators, undefined, options);
 }

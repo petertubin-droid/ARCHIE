@@ -85,6 +85,12 @@ export class DagScheduler {
   computeExecutionWaves(steps: AdaptivePlanStepNode[]): string[][] {
     if (steps.length === 0) return [];
 
+    const validation = this.validateDag(steps);
+    // If strict circular dependencies are detected, refuse to produce invalid wave order
+    if (validation.hasCycles) {
+      return [];
+    }
+
     const inDegree = new Map<string, number>();
     const dependents = new Map<string, string[]>();
     const stepMap = new Map<string, AdaptivePlanStepNode>();
@@ -138,29 +144,70 @@ export class DagScheduler {
       currentWave = nextWave;
     }
 
-    // If there were cycles, unvisited nodes get placed in a final fallback wave
-    if (visitedCount.count < steps.length) {
-      const remaining = steps
-        .filter((s) => !waves.flat().includes(s.id))
-        .map((s) => s.id)
-        .sort();
-      if (remaining.length > 0) {
-        waves.push(remaining);
-      }
-    }
-
+    // If there were unvisited nodes (cycle or orphaned), do not schedule them
     return waves;
   }
 
   /**
-   * Computes expected duration using 3-point PERT estimation:
-   * (Optimistic + 4*Expected + Pessimistic) / 6.
+   * Computes expected duration.
+   * If actual measured duration is recorded in telemetry, honors it.
+   * Otherwise uses 3-point PERT estimation: (Optimistic + 4*Expected + Pessimistic) / 6.
    */
   computePertDuration(step: AdaptivePlanStepNode): number {
+    if (step.measuredDurationMs !== undefined && step.measuredDurationMs > 0) {
+      return Math.round(step.measuredDurationMs);
+    }
     const opt = step.optimisticDurationMs || step.estimatedDurationMs || 100;
     const exp = step.estimatedDurationMs || 200;
-    const pess = step.pessimisticDurationMs || step.estimatedDurationMs * 2 || 500;
+    const pess = step.pessimisticDurationMs || (step.estimatedDurationMs ? step.estimatedDurationMs * 2 : 500);
     return Math.round((opt + 4 * exp + pess) / 6);
+  }
+
+  /**
+   * Propagates a step failure downstream to all direct and indirect dependents,
+   * updating their statuses to "blocked" with the root failure explanation.
+   */
+  propagateFailure(
+    steps: AdaptivePlanStepNode[],
+    failedStepId: string,
+    failureReason: string,
+  ): string[] {
+    const stepMap = new Map(steps.map((s) => [s.id, s]));
+    const dependentsMap = new Map<string, string[]>();
+
+    for (const s of steps) {
+      for (const depId of s.dependsOn) {
+        const list = dependentsMap.get(depId) || [];
+        list.push(s.id);
+        dependentsMap.set(depId, list);
+      }
+    }
+
+    const blockedIds: string[] = [];
+    const queue = [...(dependentsMap.get(failedStepId) || [])];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      if (visited.has(currentId)) continue;
+      visited.add(currentId);
+
+      const node = stepMap.get(currentId);
+      if (node && node.status !== "executed") {
+        node.status = "blocked";
+        node.error = `Cascading dependency failure: Prerequisite step "${failedStepId}" failed (${failureReason}).`;
+        blockedIds.push(node.id);
+      }
+
+      const nextDeps = dependentsMap.get(currentId) || [];
+      for (const nxt of nextDeps) {
+        if (!visited.has(nxt)) {
+          queue.push(nxt);
+        }
+      }
+    }
+
+    return blockedIds;
   }
 
   /**
@@ -192,8 +239,9 @@ export class DagScheduler {
 
     for (const wave of waves) {
       for (const stepId of wave) {
-        const step = stepMap.get(stepId)!;
-        const dur = durations.get(stepId)!;
+        const step = stepMap.get(stepId);
+        if (!step) continue;
+        const dur = durations.get(stepId) || 200;
         let maxPredecessorEf = 0;
         for (const depId of step.dependsOn) {
           const depEf = ef.get(depId) || 0;
@@ -234,7 +282,7 @@ export class DagScheduler {
       const wave = waves[i];
       for (const stepId of wave) {
         const succs = successors.get(stepId) || [];
-        const dur = durations.get(stepId)!;
+        const dur = durations.get(stepId) || 200;
         let minSuccessorLs = projectDuration;
 
         if (succs.length > 0) {
