@@ -22,6 +22,7 @@ import {
   emergencyCancel,
   executeTrade,
   fetchTradingPositions,
+  validatePerceptualQuoteConsistency,
   fetchTradingStatus,
   invokeTrading,
   setTradingState,
@@ -153,5 +154,37 @@ describe("trading client contracts", () => {
     });
     await fetchTradingPositions();
     expect(invoke.mock.calls[0][1].body).toEqual({ action: "positions" });
+  });
+});
+
+describe("validatePerceptualQuoteConsistency", () => {
+  it("approves quotes within tolerance", () => {
+    const res = validatePerceptualQuoteConsistency({
+      observedPrice: 3010,
+      intendedPrice: 3000,
+      maxSlippagePct: 1.0,
+    });
+    expect(res.consistent).toBe(true);
+    expect(res.deviationPct).toBeLessThan(1.0);
+  });
+
+  it("flags stale or highly divergent quotes beyond tolerance", () => {
+    const res = validatePerceptualQuoteConsistency({
+      observedPrice: 3200,
+      intendedPrice: 3000,
+      maxSlippagePct: 2.0,
+    });
+    expect(res.consistent).toBe(false);
+    expect(res.deviationPct).toBeGreaterThan(6.0);
+    expect(res.reason).toContain("exceeds allowable limit");
+  });
+
+  it("rejects non-positive numbers honestly", () => {
+    const res = validatePerceptualQuoteConsistency({
+      observedPrice: -10,
+      intendedPrice: 3000,
+    });
+    expect(res.consistent).toBe(false);
+    expect(res.reason).toContain("Non-positive price");
   });
 });

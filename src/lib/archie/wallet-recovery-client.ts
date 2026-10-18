@@ -113,3 +113,44 @@ export async function fetchRecoveryJobs(): Promise<{
 }> {
   return invokeRecovery<{ jobs: RecoveryJobLedgerRow[] }>({ action: "jobs" });
 }
+
+
+// ---------------------------------------------------------
+// Perceptual Seed Word Extraction & Normalization
+// ---------------------------------------------------------
+
+/**
+ * Extract and validate candidate seed words from sensory text
+ * (such as OCR of handwritten notes or spoken voice transcripts).
+ * Filters tokens by length and valid word characters without
+ * persisting any private credentials.
+ */
+export function extractMnemonicCandidatesFromText(text: string): {
+  validTokens: string[];
+  candidatePool: string[];
+  rejectedTokens: string[];
+} {
+  const tokens = text
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const validTokens: string[] = [];
+  const rejectedTokens: string[] = [];
+
+  for (const t of tokens) {
+    // BIP39 words are 3 to 8 lowercase latin characters
+    if (t.length >= 3 && t.length <= 8) {
+      validTokens.push(t);
+    } else {
+      rejectedTokens.push(t);
+    }
+  }
+
+  return {
+    validTokens,
+    candidatePool: Array.from(new Set(validTokens)),
+    rejectedTokens,
+  };
+}

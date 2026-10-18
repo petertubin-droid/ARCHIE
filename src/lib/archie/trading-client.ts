@@ -178,3 +178,46 @@ export async function emergencyCancel(symbols: string[]): Promise<{
 export async function fetchTradingPositions(): Promise<PositionsResult> {
   return invokeTrading<PositionsResult>({ action: "positions" });
 }
+
+
+// ---------------------------------------------------------
+// Perceptual Quote Consistency & Trade-Gate Guardrails
+// ---------------------------------------------------------
+
+/**
+ * Cross-validate an orderbook or pricing observation (e.g. from OCR or visual perception)
+ * against a proposed trading intent to verify bounds prior to submitting dry-run gate checks.
+ */
+export function validatePerceptualQuoteConsistency(params: {
+  observedPrice: number;
+  intendedPrice: number;
+  maxSlippagePct?: number;
+}): {
+  consistent: boolean;
+  deviationPct: number;
+  reason?: string;
+} {
+  const maxSlippage = params.maxSlippagePct ?? 2.0;
+  if (params.observedPrice <= 0 || params.intendedPrice <= 0) {
+    return {
+      consistent: false,
+      deviationPct: 100,
+      reason: "Non-positive price in quote or observation",
+    };
+  }
+  const deviationPct =
+    (Math.abs(params.observedPrice - params.intendedPrice) /
+      params.intendedPrice) *
+    100;
+  if (deviationPct > maxSlippage) {
+    return {
+      consistent: false,
+      deviationPct,
+      reason: `Observed price deviation (${deviationPct.toFixed(2)}%) exceeds allowable limit (${maxSlippage}%). Potential stale perceptual quote.`,
+    };
+  }
+  return {
+    consistent: true,
+    deviationPct,
+  };
+}

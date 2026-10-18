@@ -32,7 +32,9 @@ export const EPISTEMIC_ORDER: Record<EpistemicStatus, number> = {
   UNKNOWN: 0,
 };
 
-/** Modality support is reported honestly — never faked. */
+/** Modality support is reported honestly — never faked.
+ * Unified across text, code, document, structured-data, website,
+ * system-info, image, audio, video, sensor, and multimodal fusion. */
 export type PerceptionModality =
   | "text"
   | "code"
@@ -40,7 +42,110 @@ export type PerceptionModality =
   | "structured-data"
   | "website"
   | "system-info"
-  | "image";
+  | "image"
+  | "audio"
+  | "video"
+  | "sensor"
+  | "multimodal";
+
+/** Epistemic status of an observation: distinguishing direct sensory
+ * evidence from derived hypotheses and human/ground-truth verified facts. */
+export type ObservationEpistemicStatus =
+  | "DIRECT_OBSERVATION"
+  | "INFERRED_HYPOTHESIS"
+  | "VERIFIED_FACT";
+
+/** Source origin of perceptual inputs. */
+export type PerceptionSourceType =
+  | "user_upload"
+  | "camera"
+  | "microphone"
+  | "screen"
+  | "external_api"
+  | "system"
+  | "iot_sensor"
+  | "conversation";
+
+/** Canonical structured observation format across all modalities. */
+export interface StructuredObservation {
+  id: string;
+  modality: PerceptionModality;
+  sourceType: PerceptionSourceType;
+  capturedAt: string;
+  processedAt: string;
+  language?: string;
+  epistemicStatus: ObservationEpistemicStatus;
+  confidence: number; // 0..1
+  uncertainties: string[];
+  limitations: string[];
+  provenance: {
+    origin: string;
+    algorithmOrModel: string;
+    rawHash?: string;
+    processingMs: number;
+  };
+  features: {
+    entities?: string[];
+    detectedObjects?: Array<{
+      label: string;
+      confidence: number;
+      boundingBox?: [number, number, number, number];
+      attributes?: Record<string, unknown>;
+    }>;
+    extractedText?: {
+      text: string;
+      confidence: number;
+      isFlaggedUncertain?: boolean;
+      ocrLayout?: unknown;
+    };
+    audioEvents?: Array<{
+      kind: string;
+      startSec: number;
+      endSec: number;
+      confidence: number;
+      speaker?: string;
+    }>;
+    motionAndScenes?: {
+      cutsCount: number;
+      averageMotionEnergy: number;
+      durationSec?: number;
+      fpsEstimate?: number;
+    };
+    spatialRelationships?: Array<{
+      subject: string;
+      relation: string;
+      object: string;
+      estimated: boolean;
+    }>;
+    constructionEstimates?: {
+      elements: string[];
+      defects: string[];
+      note: string;
+      validated: boolean;
+    };
+    sensorReadings?: Record<
+      string,
+      { value: number | string; unit: string; calibrated?: boolean }
+    >;
+  };
+  crossModalCorrelations?: Array<{
+    targetObservationId: string;
+    correlationType: "corroborates" | "contradicts" | "supplements";
+    confidence: number;
+    explanation: string;
+  }>;
+  contradictionsDetected?: string[];
+  securityClassification: "public" | "internal" | "sensitive" | "owner_only";
+  secretsRedactedCount: number;
+  retentionPolicy: "ephemeral" | "session" | "retained_by_policy";
+  recommendedDownstreamAction?:
+    | "semantic_reasoning"
+    | "knowledge_graph"
+    | "world_model_update"
+    | "frelux_verification"
+    | "clarification_needed"
+    | "security_escalation";
+}
 
 /** Image is now SUPPORTED natively but BOUNDED: PNG pixel
  *  analysis (colors/brightness/structure), JPEG/GIF structure
@@ -69,6 +174,8 @@ export interface Percept {
   observedAt: string;
   /** Honest parse/extract notes (e.g. detected language, code language). */
   metadata: Record<string, unknown>;
+  /** Structured observation data complying with ARCHIE's perception contract. */
+  observation?: StructuredObservation;
 }
 
 /** World model entity: a person, organization, system,

@@ -15,6 +15,7 @@ import {
   testPatch,
   TRACE_STEPS,
   validateTrace,
+  analyzePerceivedCodeSnippet,
   type TraceStepRecord,
 } from "../code-intelligence";
 import { AuthorizationRegistry } from "../capability-authority";
@@ -245,5 +246,28 @@ describe("§patch pipeline — owner approval enforced", () => {
     const applied = applyPatch(p.patch);
     expect(applied.ok).toBe(true);
     expect(p.patch.status).toBe("APPLIED");
+  });
+});
+
+describe("analyzePerceivedCodeSnippet", () => {
+  it("detects dangerous sinks and hardcoded credentials in perceived snippets", () => {
+    const snippet = [
+      "const key = \"api_key = 'sk-1234567890abcdef'\";",
+      "eval(untrustedInput);",
+      "try { doWork(); } catch (e) {}",
+    ].join("\n");
+
+    const result = analyzePerceivedCodeSnippet({ sourceCode: snippet });
+    expect(result.findings.some((f) => f.type === "DANGEROUS_EVAL")).toBe(true);
+    expect(result.findings.some((f) => f.type === "HARDCODED_SECRET")).toBe(true);
+    expect(result.findings.some((f) => f.type === "SILENT_ERROR_SUPPRESSION")).toBe(true);
+    expect(result.scentScore).toBeLessThan(100);
+  });
+
+  it("rates clean code 100 scent score", () => {
+    const cleanSnippet = "export function add(a: number, b: number): number { return a + b; }";
+    const result = analyzePerceivedCodeSnippet({ sourceCode: cleanSnippet });
+    expect(result.findings).toHaveLength(0);
+    expect(result.scentScore).toBe(100);
   });
 });

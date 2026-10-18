@@ -735,3 +735,73 @@ export const EDGE_FUNCTION_SCAN_RESULT = {
   missing: [] as string[],
   note: "_shared is a library directory without index.ts by design; deployment verification per-function is future work (needs live function status).",
 } as const;
+
+
+// ---------------------------------------------------------
+// Perceptual Code Intake & Smell Analysis
+// ---------------------------------------------------------
+
+/**
+ * Ingest code snippets or diffs extracted via perception (OCR, pasted transcripts, or file intake)
+ * and analyze them for known anti-patterns, hardcoded credentials, and architectural smells.
+ */
+export function analyzePerceivedCodeSnippet(input: {
+  filename?: string;
+  sourceCode: string;
+  sourceModality?: string;
+}): {
+  findings: Array<{
+    type: string;
+    line?: number;
+    description: string;
+    severity: "LOW" | "MEDIUM" | "HIGH";
+  }>;
+  scentScore: number;
+} {
+  const findings: Array<{
+    type: string;
+    line?: number;
+    description: string;
+    severity: "LOW" | "MEDIUM" | "HIGH";
+  }> = [];
+
+  const lines = input.sourceCode.split("\n");
+  lines.forEach((line, idx) => {
+    const lineNum = idx + 1;
+    if (/\b(?:eval|new\s+Function)\b/.test(line)) {
+      findings.push({
+        type: "DANGEROUS_EVAL",
+        line: lineNum,
+        description: "Dynamic code execution sink detected (eval / Function constructor).",
+        severity: "HIGH",
+      });
+    }
+    if (/(?:api_key|secret|password|bearer|private_key)\s*[:=]\s*['"][a-zA-Z0-9_\-]{8,}['"]/i.test(line)) {
+      findings.push({
+        type: "HARDCODED_SECRET",
+        line: lineNum,
+        description: "Potential hardcoded credential or token detected in source.",
+        severity: "HIGH",
+      });
+    }
+    if (/\b(?:mock|stub|fake|todo|placeholder)\b/i.test(line) && !line.includes("test")) {
+      findings.push({
+        type: "MOCK_OR_PLACEHOLDER",
+        line: lineNum,
+        description: "Unfinished placeholder or mock construct found in non-test code.",
+        severity: "LOW",
+      });
+    }
+    if (/catch\s*\([^)]*\)\s*\{\s*\}/.test(line)) {
+      findings.push({
+        type: "SILENT_ERROR_SUPPRESSION",
+        line: lineNum,
+        description: "Silent error suppression (empty catch block) obscures runtime defects.",
+        severity: "MEDIUM",
+      });
+    }
+  });
+
+  const scentScore = Math.max(0, 100 - findings.length * 15);
+  return { findings, scentScore };
+}

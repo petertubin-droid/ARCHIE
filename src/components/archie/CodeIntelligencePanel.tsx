@@ -19,8 +19,10 @@ import {
   ShieldCheck,
   Activity,
   Bug,
+  Scan,
 } from "lucide-react";
 import { Button } from "@/components/ui/shadcn/button";
+import { analyzePerceivedCodeSnippet } from "@/lib/archie/code-intelligence";
 import {
   decidePatchProposal,
   listCalculationTraces,
@@ -32,7 +34,7 @@ import {
   type PatchProposal,
 } from "@/lib/archie/code-intelligence-client";
 
-type Tab = "findings" | "traces" | "patches";
+type Tab = "findings" | "traces" | "patches" | "perception";
 
 export default function CodeIntelligencePanel() {
   const [tab, setTab] = useState<Tab>("findings");
@@ -41,6 +43,11 @@ export default function CodeIntelligencePanel() {
   const [patches, setPatches] = useState<PatchProposal[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [perceptionSnippet, setPerceptionSnippet] = useState("");
+  const [perceptionAnalysis, setPerceptionAnalysis] = useState<{
+    findings: Array<{ type: string; line?: number; description: string; severity: "LOW" | "MEDIUM" | "HIGH" }>;
+    scentScore: number;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -137,6 +144,13 @@ export default function CodeIntelligencePanel() {
               {pendingPatches} awaiting you
             </span>
           )}
+        </Button>
+        <Button
+          size="sm"
+          variant={tab === "perception" ? "secondary" : "ghost"}
+          onClick={() => setTab("perception")}
+        >
+          <Scan className="mr-1 h-3.5 w-3.5" aria-hidden /> Perception Ingest
         </Button>
       </div>
 
@@ -309,6 +323,65 @@ export default function CodeIntelligencePanel() {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* PERCEPTION INGEST */}
+      {tab === "perception" && (
+        <div className="mt-4 space-y-4">
+          <div className="rounded-lg archie-panel p-4">
+            <h3 className="text-sm font-medium text-slate-200">
+              Perceptual Code & Sensory Analysis
+            </h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Paste OCR text, code snippets, or perceptual observations for static smell analysis, secret redaction checks, and dangerous sink detection without executing code.
+            </p>
+            <textarea
+              className="mt-3 w-full rounded-md border border-slate-700 bg-slate-900/60 p-2 font-mono text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+              rows={6}
+              placeholder="// Paste code snippet or OCR text here..."
+              value={perceptionSnippet}
+              onChange={(e) => setPerceptionSnippet(e.target.value)}
+              aria-label="Perception code input"
+            />
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                disabled={!perceptionSnippet.trim()}
+                onClick={() => {
+                  const res = analyzePerceivedCodeSnippet({ sourceCode: perceptionSnippet });
+                  setPerceptionAnalysis(res);
+                }}
+              >
+                Analyze Percept
+              </Button>
+            </div>
+          </div>
+
+          {perceptionAnalysis && (
+            <div className="rounded-lg archie-panel p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-300">Analysis Verdict</span>
+                <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-medium text-emerald-400">
+                  Scent Score: {perceptionAnalysis.scentScore}/100
+                </span>
+              </div>
+              {perceptionAnalysis.findings.length === 0 ? (
+                <div className="flex items-center gap-2 text-xs text-emerald-400">
+                  <CheckCircle2 className="h-4 w-4" /> No dangerous sinks or hardcoded secrets detected in percept.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {perceptionAnalysis.findings.map((f, i) => (
+                    <div key={i} className="rounded border border-amber-500/20 bg-amber-500/10 p-2 text-xs text-amber-200">
+                      <span className="font-mono font-semibold uppercase">{f.type}</span>
+                      {f.line && <span className="ml-2 text-slate-400">Line {f.line}</span>}: {f.description}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

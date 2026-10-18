@@ -194,4 +194,17 @@ describe("CodeIntelligencePanel", () => {
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText(/RLS refused the read/i)).toBeTruthy();
   });
+
+  it("renders the perception ingest tab and analyzes pasted percept snippet", async () => {
+    render(<CodeIntelligencePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /perception ingest/i }));
+    expect(await screen.findByText(/Perceptual Code & Sensory Analysis/i)).toBeTruthy();
+
+    const textarea = screen.getByRole("textbox", { name: /perception code input/i });
+    fireEvent.change(textarea, { target: { value: "eval(badCode);" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /analyze percept/i }));
+    expect(await screen.findByText(/DANGEROUS_EVAL/i)).toBeTruthy();
+    expect(screen.getByText(/Scent Score:/i)).toBeTruthy();
+  });
 });

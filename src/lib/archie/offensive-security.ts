@@ -633,3 +633,60 @@ export function recommendRemediation(
     implementationRequiresOwnerApproval: true,
   };
 }
+
+
+// ---------------------------------------------------------
+// Perceptual Input Attack Vector Auditing
+// ---------------------------------------------------------
+
+/**
+ * Audit untrusted sensory inputs (text, OCR outputs, speech transcripts, file metadata)
+ * for adversarial injection patterns, shell metacharacters, or path traversal vectors.
+ * Returns honest, evidence-backed security findings.
+ */
+export function auditSensoryAttackVectors(input: {
+  modality: string;
+  payload: string;
+}): {
+  isSuspicious: boolean;
+  threats: Array<{ category: string; pattern: string; severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" }>;
+  quarantineRecommended: boolean;
+} {
+  const threats: Array<{ category: string; pattern: string; severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" }> = [];
+  const p = input.payload;
+
+  if (/system\s+prompt|ignore\s+previous|bypass\s+restrictions|elevate\s+privilege/i.test(p)) {
+    threats.push({
+      category: "PROMPT_INJECTION",
+      pattern: "Adversarial system prompt override instruction detected",
+      severity: "HIGH",
+    });
+  }
+  if (/\b(?:union\s+select|information_schema|drop\s+table)\b/i.test(p)) {
+    threats.push({
+      category: "SQL_INJECTION",
+      pattern: "SQL structure alteration token detected",
+      severity: "CRITICAL",
+    });
+  }
+  if (/(?:;|&&|\|\|)\s*(?:rm\s+-rf|nc\s+-e|bash\s+-i|curl\s+.*\|\s*sh)/i.test(p)) {
+    threats.push({
+      category: "COMMAND_INJECTION",
+      pattern: "Remote execution chain or destructive shell pattern detected",
+      severity: "CRITICAL",
+    });
+  }
+  if (/\.\.\/|\.\.\\/i.test(p)) {
+    threats.push({
+      category: "PATH_TRAVERSAL",
+      pattern: "Relative path traversal token detected",
+      severity: "MEDIUM",
+    });
+  }
+
+  return {
+    isSuspicious: threats.length > 0,
+    threats,
+    quarantineRecommended: threats.some((t) => t.severity === "HIGH" || t.severity === "CRITICAL"),
+  };
+}

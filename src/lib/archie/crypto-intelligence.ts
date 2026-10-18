@@ -409,3 +409,56 @@ export function validateExchangeIntegration(
   }
   return { ok: violations.length === 0, violations };
 }
+
+
+// ---------------------------------------------------------
+// Perceptual Market Evidence Correlation
+// ---------------------------------------------------------
+
+/**
+ * Ingest perceptual market evidence (e.g. OCR orderbook, chart transcript, or news alert)
+ * into crypto intelligence with guardrails against scam patterns and forbidden financial execution.
+ */
+export function correlateCryptoPerception(input: {
+  rawObservation: string;
+  sourceType: string;
+}): {
+  classification: CryptoClassification;
+  statement: string;
+  scamFlags: CryptoScamIndicator[];
+  isActionable: boolean;
+  warnings: string[];
+} {
+  const scamFlags = screenForScamIndicators(input.rawObservation);
+  const warnings: string[] = [];
+
+  if (scamFlags.length > 0) {
+    warnings.push(`Scam indicators detected: ${scamFlags.map((s) => s.label).join(", ")}`);
+  }
+
+  // Check for forbidden automated execution commands
+  for (const act of FORBIDDEN_FINANCIAL_ACTIONS) {
+    if (new RegExp(`\\b${act}\\b`, "i").test(input.rawObservation)) {
+      warnings.push(`Perception extracted forbidden financial action phrase "${act}"; automated execution remains blocked.`);
+    }
+  }
+
+  // Sensory observations default to OBSERVED_INFORMATION or LIVE_MARKET_DATA, never PREDICTION
+  const classification: CryptoClassification =
+    /price|spread|volume|bid|ask|depth|orderbook/i.test(input.rawObservation)
+      ? "LIVE_MARKET_DATA"
+      : "OBSERVED_INFORMATION";
+
+  const finalized = finalizeCryptoRecord({
+    classification,
+    statement: input.rawObservation,
+  });
+
+  return {
+    classification: finalized.classification,
+    statement: finalized.statement,
+    scamFlags,
+    isActionable: scamFlags.length === 0,
+    warnings,
+  };
+}

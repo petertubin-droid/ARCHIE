@@ -23,6 +23,7 @@ import {
   fetchRecoveryJobs,
   fetchRecoveryMeta,
   runRecovery,
+  extractMnemonicCandidatesFromText,
 } from "@/lib/archie/wallet-recovery-client";
 
 beforeEach(() => {
@@ -81,5 +82,17 @@ describe("wallet-recovery client contracts", () => {
     await expect(fetchRecoveryMeta()).rejects.toThrow(
       "archie-wallet-recovery: Wallet recovery is Owner/Admin-only.",
     );
+  });
+});
+
+describe("extractMnemonicCandidatesFromText", () => {
+  it("extracts and normalizes valid candidate tokens from noisy perceptual text", () => {
+    const rawOcr = "1. abandon 2. ability 3. #$@! 4. zoo 5. x 6. zzzzzzzzzzzzzz";
+    const res = extractMnemonicCandidatesFromText(rawOcr);
+    expect(res.validTokens).toContain("abandon");
+    expect(res.validTokens).toContain("ability");
+    expect(res.validTokens).toContain("zoo");
+    expect(res.rejectedTokens).toContain("x");
+    expect(res.candidatePool).toHaveLength(3);
   });
 });
