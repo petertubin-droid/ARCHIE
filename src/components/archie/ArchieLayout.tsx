@@ -255,7 +255,7 @@ export default function ArchieLayout() {
     });
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", "#0B0F14");
+      ?.setAttribute("content", getComputedStyle(document.documentElement).getPropertyValue("--archie-surface").trim() || "#0B0F14");
     // Register the ARCHIE service worker (scoped to /archie) —
     // required by browsers to offer the PWA install option.
     let registration: ServiceWorkerRegistration | undefined;
@@ -292,7 +292,7 @@ export default function ArchieLayout() {
       });
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute("content", "#6D28D9");
+        ?.setAttribute("content", getComputedStyle(document.documentElement).getPropertyValue("--archie-accent").trim() || "#6D28D9");
       registration?.unregister().catch(() => undefined);
     };
   }, []);
@@ -300,7 +300,7 @@ export default function ArchieLayout() {
   return (
     <div className="archie-root flex min-h-screen flex-col text-slate-100">
       {/* ARCHIE header */}
-      <header className="sticky top-0 z-20 border-b border-white/5 bg-[#0B0F14]/80 backdrop-blur-xl after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-gradient-to-r after:from-transparent after:via-amber-400/30 after:to-transparent">
+      <header className="sticky top-0 z-20 border-b border-white/5 archie-surface-bg/80 backdrop-blur-xl after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-gradient-to-r after:from-transparent after:via-amber-400/30 after:to-transparent">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
           <img
             src="/assets/archie/archie-icon-512.png"
@@ -330,7 +330,7 @@ export default function ArchieLayout() {
                   });
                   window.location.reload();
                 }}
-                className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2.5 py-0.5 text-[10px] font-semibold text-amber-300 hover:bg-amber-400/20"
+                className="archie-focusable rounded-full border border-amber-400/40 bg-amber-400/10 px-2.5 py-0.5 text-[10px] font-semibold text-amber-300 hover:bg-amber-400/20"
               >
                 UPDATE READY — RELOAD
               </button>
@@ -354,7 +354,7 @@ export default function ArchieLayout() {
           authorization.{" "}
           <Link
             to="/archie/legal"
-            className="font-semibold text-amber-200 underline underline-offset-2"
+            className="archie-focusable rounded font-semibold text-amber-200 underline underline-offset-2"
           >
             Read the AI Disclosure
           </Link>
@@ -386,7 +386,7 @@ export default function ArchieLayout() {
                   key={n.to}
                   to={n.to}
                   className={({ isActive }) =>
-                    `group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all ${
+                    `archie-focusable group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all ${
                       isActive
                         ? "archie-nav-active bg-amber-400/10 text-amber-200"
                         : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
@@ -401,7 +401,7 @@ export default function ArchieLayout() {
           ))}
           <a
             href="/"
-            className="mt-auto flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-500 transition-colors hover:text-slate-300"
+            className="archie-focusable mt-auto flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-500 transition-colors hover:text-slate-300"
           >
             <svg
               viewBox="0 0 24 24"
@@ -430,7 +430,7 @@ export default function ArchieLayout() {
 
       <nav
         aria-label="ARCHIE sections"
-        className="fixed inset-x-0 bottom-0 z-20 flex overflow-x-auto border-t border-white/10 bg-[#0B0F14]/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
+        className="fixed inset-x-0 bottom-0 z-20 flex overflow-x-auto border-t border-white/10 archie-surface-bg/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
       >
         {NAV.map((n) => (
           <NavLink
@@ -438,7 +438,7 @@ export default function ArchieLayout() {
             to={n.to}
             aria-label={n.label}
             className={({ isActive }) =>
-              `flex min-w-[68px] shrink-0 flex-col items-center gap-1 px-1 py-2 text-[10px] transition-colors ${
+              `archie-focusable flex min-w-[68px] shrink-0 flex-col items-center gap-1 px-1 py-2 text-[10px] transition-colors ${
                 isActive
                   ? "text-amber-200 drop-shadow-[0_0_8px_rgba(251,191,36,0.45)]"
                   : "text-slate-500"
@@ -455,11 +455,11 @@ export default function ArchieLayout() {
           cluttering the primary interface. */}
       <footer className="border-t border-white/5 px-4 pb-20 pt-4 text-center text-[11px] text-slate-500 md:pb-4">
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-          <Link to="/archie/legal" className="hover:text-slate-300">
+          <Link to="/archie/legal" className="rounded archie-focusable hover:text-slate-300">
             Legal &amp; Governance
           </Link>
           <span aria-hidden>·</span>
-          <Link to="/archie/privacy" className="hover:text-slate-300">
+          <Link to="/archie/privacy" className="rounded archie-focusable hover:text-slate-300">
             Privacy &amp; Memory Rights
           </Link>
         </div>

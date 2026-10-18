@@ -395,3 +395,20 @@
     animation: none;
   }
 }
+
+/* Design tokens for the shell (header/bottom-nav surface + brand accent).
+   Declared on :root too so the theme-color meta setters can read them
+   before the layout paints; harmless outside .archie-root. */
+:root {
+  --archie-surface: #0b0f14;
+  --archie-accent: #6d28d9;
+}
+
+.archie-root {
+  --archie-surface: #0b0f14;
+  --archie-accent: #6d28d9;
+}
+
+.archie-surface-bg {
+  background-color: var(--archie-surface);
+}

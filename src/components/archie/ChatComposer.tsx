@@ -139,7 +139,7 @@ export default function ChatComposer({
 
   return (
     <div
-      className="border-t border-border bg-card p-3"
+      className="border-t border-border bg-card/95 p-3 backdrop-blur-xl"
       data-testid="archie-composer"
     >
       {attachments.length > 0 && (
@@ -147,7 +147,7 @@ export default function ChatComposer({
           {attachments.map((a, i) => (
             <li
               key={`${a.name}-${i}`}
-              className="flex items-center gap-1.5 rounded-full border border-border bg-muted px-2.5 py-1 text-xs text-foreground"
+              className="flex items-center gap-1.5 rounded-full border border-border bg-muted px-2.5 py-1 text-xs text-foreground transition-colors hover:border-primary/40"
             >
               <span className="max-w-32 truncate">{a.name}</span>
               <button
@@ -156,7 +156,7 @@ export default function ChatComposer({
                 onClick={() =>
                   setAttachments((prev) => prev.filter((_, j) => j !== i))
                 }
-                className="text-muted-foreground transition-colors hover:text-destructive"
+                className="text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
               >
                 <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
@@ -179,7 +179,7 @@ export default function ChatComposer({
             title="Documents, PDF, spreadsheets"
             onClick={() => fileRef.current?.click()}
             disabled={busy || uploading}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             <Paperclip className="h-5 w-5" aria-hidden="true" />
           </button>
@@ -188,7 +188,7 @@ export default function ChatComposer({
             aria-label="Attach image from gallery"
             onClick={() => imageRef.current?.click()}
             disabled={busy || uploading}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             <svg
               viewBox="0 0 24 24"
@@ -210,7 +210,7 @@ export default function ChatComposer({
             aria-label="Take a photo with camera"
             onClick={() => cameraRef.current?.click()}
             disabled={busy || uploading}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             <Camera className="h-5 w-5" aria-hidden="true" />
           </button>
@@ -225,8 +225,8 @@ export default function ChatComposer({
             className={classNames(
               "rounded-lg p-2 transition-colors disabled:opacity-50",
               recording
-                ? "bg-destructive/10 text-destructive"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                ? "bg-destructive/10 text-destructive animate-pulse"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             )}
           >
             {recording ? (
@@ -249,7 +249,7 @@ export default function ChatComposer({
           rows={1}
           placeholder="Message ARCHIE…"
           aria-label="Message ARCHIE"
-          className="max-h-32 flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          className="max-h-32 min-h-10 flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
         />
 
         <button
@@ -259,7 +259,7 @@ export default function ChatComposer({
             busy || uploading || (!text.trim() && attachments.length === 0)
           }
           aria-label="Send message"
-          className="rounded-lg bg-primary p-2 text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+          className="rounded-lg bg-primary p-2 text-primary-foreground transition-all hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
         >
           {busy || uploading ? (
             <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
