@@ -55,22 +55,22 @@ const NAV: NavItem[] = [
 ];
 
 const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
-  { title: "Main", items: NAV.filter((_, i) => i < 2) },
+  { title: "Main", items: NAV.filter((item) => ["/archie/chat", "/archie/coding"].includes(item.to)) },
   {
     title: "Capabilities",
-    items: NAV.filter((_, i) => i >= 2 && i < 6),
+    items: NAV.filter((item) => ["/archie/control", "/archie/execution", "/archie/trading", "/archie/exchange-access", "/archie/wallet-recovery", "/archie/offensive", "/archie/voice", "/archie/evolution"].includes(item.to)),
   },
   {
     title: "Knowledge",
-    items: NAV.filter((_, i) => i >= 6 && i < 11),
+    items: NAV.filter((item) => ["/archie/knowledge", "/archie/learning", "/archie/training", "/archie/terminology", "/archie/shared"].includes(item.to)),
   },
   {
     title: "People & Access",
-    items: NAV.filter((_, i) => i >= 11 && i < 13),
+    items: NAV.filter((item) => ["/archie/people", "/archie/devices"].includes(item.to)),
   },
   {
     title: "System",
-    items: NAV.filter((_, i) => i >= 13),
+    items: NAV.filter((item) => ["/archie/system", "/archie/anatomy", "/archie/engines", "/archie/security", "/archie/ops", "/archie/migration"].includes(item.to)),
   },
 ];
 

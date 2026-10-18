@@ -92,6 +92,13 @@ export const PWA_CAPABILITY_MAP: readonly PwaCapability[] = [
     route: "/archie/terminology",
     sharedModule: "src/pages/archie/ArchieTerminology.tsx",
   },
+  // Trading intelligence & execution (Exness-grade)
+  {
+    id: "trading",
+    label: "ARCHIE Trading Terminal: Exness-grade execution, candles & indicators",
+    route: "/archie/trading",
+    sharedModule: "src/pages/archie/ArchieTrading.tsx",
+  },
   // Coding intelligence + Coding Studio + preview + workspace
   {
     id: "coding",

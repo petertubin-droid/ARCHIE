@@ -863,16 +863,21 @@ export default function Assistant() {
   }
 
   return (
-    <div className="mx-auto max-w-md px-4 pb-24 pt-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Brain className="h-6 w-6 text-primary" aria-hidden="true" />
-          <h1 className="bg-gradient-to-r from-primary via-primary/85 to-primary/60 bg-clip-text text-lg font-bold text-transparent">
-            ARCHIE
-          </h1>
+    <div className="mx-auto max-w-lg px-4 pb-24 pt-4 font-sans text-slate-100">
+      <div className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-900/80 p-3.5 backdrop-blur-xl shadow-lg">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-400/10 border border-amber-400/30 text-amber-300">
+            <Brain className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div>
+            <h1 className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-100 bg-clip-text text-base font-bold tracking-tight text-transparent">
+              ARCHIE INTELLIGENCE
+            </h1>
+            <p className="text-[10px] text-slate-400 font-mono">Owner Unified Sensory & Command Console</p>
+          </div>
         </div>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-          {isPrivileged ? "Family PWA" : "FRELUX assistant"}
+        <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">
+          {isPrivileged ? "Owner Authority" : "FRELUX Assistant"}
         </span>
       </div>
 
@@ -899,7 +904,7 @@ export default function Assistant() {
           visitors get a clean chat and nothing else. */}
       {isPrivileged && (
         <div
-          className="mt-4 grid grid-cols-4 gap-1 rounded-xl bg-muted p-1"
+          className="mt-3 grid grid-cols-4 gap-1.5 rounded-xl border border-white/10 bg-slate-950/70 p-1.5 backdrop-blur-md"
           role="tablist"
         >
           {TABS.map(({ key, label, icon: Icon }) => (
@@ -913,10 +918,10 @@ export default function Assistant() {
                 setNotice("");
               }}
               className={classNames(
-                "flex flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 text-[11px] font-medium transition-colors",
+                "flex flex-col items-center gap-1 rounded-lg px-1.5 py-2 text-[11px] font-medium transition-all",
                 tab === key
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground",
+                  ? "bg-amber-400 text-slate-950 font-semibold shadow-md shadow-amber-400/20"
+                  : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
               )}
             >
               <Icon className="h-4 w-4" /> {label}
@@ -1565,8 +1570,8 @@ function ActionButton({
       onClick={onClick}
       aria-label={label}
       className={classNames(
-        "flex flex-col items-center gap-1 rounded-xl border bg-card p-2 text-[11px] font-medium transition-colors hover:bg-accent",
-        active && "border-primary text-primary",
+        "flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-[11px] font-medium text-slate-300 transition-all hover:border-amber-400/40 hover:bg-slate-800/80 hover:text-white shadow-sm",
+        active && "border-amber-400 bg-amber-400/15 text-amber-300 shadow-md shadow-amber-400/10",
       )}
     >
       <Icon className="h-4 w-4" /> {label}
