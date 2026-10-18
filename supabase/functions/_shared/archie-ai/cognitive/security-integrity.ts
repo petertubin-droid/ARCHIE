@@ -24,9 +24,9 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bsk-[a-zA-Z0-9]{16,}\b/g, // OpenAI-style key
   /\bsk-ant-[a-zA-Z0-9-]{16,}\b/g, // Anthropic-style key
   /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, // JWT
-  /\b(?:api[_-]?key|secret|password|token|credential)\s*[:=]\s*["']?[^\s"']{8,}/gi,
+  /\b(?:api[\s_-]?key|secret[\s_-]?key|secret|password|token|credential)\s*[:=]\s*["']?[^\s"']{8,}/gi,
   /\bghp_[A-Za-z0-9]{30,}\b/g, // GitHub PAT
-  /\bpk_(?:live|test)_[A-Za-z0-9]{16,}\b/g, // Stripe key
+  /\b(?:pk|sk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, // Stripe key (public & secret)
   /\bsupabase[_-]?(?:service[_-]?role|anon)[_-]?key\s*[:=]\s*["']?[^\s"']{20,}/gi,
 ];
 

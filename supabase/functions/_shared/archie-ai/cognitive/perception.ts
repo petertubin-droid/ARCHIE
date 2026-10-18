@@ -219,6 +219,16 @@ export class PerceptionEngine {
       metadata = {
         format: structured.format,
       };
+    } else if (
+      redacted.startsWith("---") ||
+      (redacted.match(/^#{1,6}\s+/m) && redacted.split("\n").length > 3)
+    ) {
+      mainModality = "document";
+      contentVal = redacted;
+      metadata = {
+        words: redacted.split(/\s+/).filter(Boolean).length,
+        isMarkdownDocument: true,
+      };
     } else {
       mainModality = "text";
       contentVal = redacted;
@@ -292,6 +302,166 @@ export class PerceptionEngine {
     }
 
     return { percepts, secretsRedacted: foundCount };
+  }
+
+  /** Stage 1..10 Document Ingest: Full structured document perception (Markdown, YAML frontmatter, tables, sections). */
+  ingestDocument(
+    content: string,
+    filename = "document.md",
+    origin = "user_upload",
+  ): {
+    percept: Percept;
+    observation: StructuredObservation;
+    outline: {
+      title?: string;
+      sections: Array<{ level: number; heading: string }>;
+      tablesCount: number;
+      codeBlocksCount: number;
+      wordCount: number;
+      metadata?: Record<string, string>;
+    };
+  } {
+    const startTime = Date.now();
+    const { redacted, foundCount } = redactSecrets(content);
+    this.redactions += foundCount;
+    this.ingested += 1;
+
+    const lines = redacted.split("\n");
+    const sections: Array<{ level: number; heading: string }> = [];
+    const metadata: Record<string, string> = {};
+    let tablesCount = 0;
+    let codeBlocksCount = 0;
+    let inCodeBlock = false;
+    let inFrontmatter = false;
+    let docTitle: string | undefined;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (i === 0 && line === "---") {
+        inFrontmatter = true;
+        continue;
+      }
+      if (inFrontmatter) {
+        if (line === "---") {
+          inFrontmatter = false;
+          continue;
+        }
+        const kvMatch = line.match(/^([a-zA-Z0-9_\-]+)\s*:\s*(.*)$/);
+        if (kvMatch) {
+          metadata[kvMatch[1]] = kvMatch[2].replace(/^['"]|['"]$/g, "");
+          if (kvMatch[1].toLowerCase() === "title" && !docTitle) {
+            docTitle = metadata[kvMatch[1]];
+          }
+        }
+        continue;
+      }
+
+      if (line.startsWith("```")) {
+        inCodeBlock = !inCodeBlock;
+        if (inCodeBlock) codeBlocksCount++;
+        continue;
+      }
+      if (inCodeBlock) continue;
+
+      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        const level = headingMatch[1].length;
+        const heading = headingMatch[2].trim();
+        sections.push({ level, heading });
+        if (level === 1 && !docTitle) {
+          docTitle = heading;
+        }
+        continue;
+      }
+
+      if (line.startsWith("|") && line.endsWith("|")) {
+        if (line.includes("---")) {
+          tablesCount++;
+        }
+      }
+    }
+
+    if (!docTitle && sections.length > 0) {
+      docTitle = sections[0].heading;
+    }
+    if (!docTitle && filename) {
+      docTitle = filename.replace(/\.[^/.]+$/, "");
+    }
+
+    const words = redacted.split(/\s+/).filter(Boolean);
+    const outline = {
+      title: docTitle,
+      sections,
+      tablesCount,
+      codeBlocksCount,
+      wordCount: words.length,
+      metadata,
+    };
+
+    const injection = detectInjectionPatterns(redacted);
+    const rawHash = sha256(content.slice(0, 1024));
+
+    const obs: StructuredObservation = {
+      id: nextObservationId(),
+      modality: "document",
+      sourceType: "user_upload",
+      capturedAt: new Date().toISOString(),
+      processedAt: new Date().toISOString(),
+      epistemicStatus: "DIRECT_OBSERVATION",
+      confidence: injection.hasSuspiciousInstruction ? 0.8 : 0.98,
+      uncertainties: injection.hasSuspiciousInstruction
+        ? ["Contains potentially adversarial or override instruction in document body"]
+        : [],
+      limitations: [
+        "Document claims represent author assertions; physical world corroboration requires external evidence",
+      ],
+      provenance: {
+        origin,
+        algorithmOrModel: "native-document-structure-parser",
+        rawHash,
+        processingMs: Date.now() - startTime,
+      },
+      features: {
+        entities: redacted
+          .split(/\W+/)
+          .filter((w) => w.length > 4 && /^[A-Z]/.test(w))
+          .slice(0, 20),
+        extractedText: {
+          text: redacted,
+          confidence: 1.0,
+          isFlaggedUncertain: false,
+        },
+        documentOutline: outline,
+      },
+      securityClassification: injection.hasSuspiciousInstruction ? "sensitive" : "internal",
+      secretsRedactedCount: foundCount,
+      retentionPolicy: "session",
+      recommendedDownstreamAction: injection.hasSuspiciousInstruction
+        ? "security_escalation"
+        : "semantic_reasoning",
+    };
+
+    const percept: Percept = {
+      id: nextPerceptId(),
+      modality: "document",
+      content: {
+        filename,
+        outline,
+        redactedText: redacted,
+      },
+      origin,
+      observedAt: new Date().toISOString(),
+      metadata: {
+        filename,
+        sectionsCount: sections.length,
+        tablesCount,
+        codeBlocksCount,
+        wordCount: words.length,
+      },
+      observation: obs,
+    };
+
+    return { percept, observation: obs, outline };
   }
 
   /** Ingest image bytes with native vision, OCR, limitation detection,
@@ -395,6 +565,34 @@ export class PerceptionEngine {
         processingMs: Date.now() - startTime,
       },
       features: {
+        composition: {
+          aspectRatioCategory:
+            analysis.width / Math.max(1, analysis.height) > 2.0
+              ? "ultrawide"
+              : analysis.width / Math.max(1, analysis.height) >= 1.6
+              ? "widescreen_16_9"
+              : analysis.width / Math.max(1, analysis.height) >= 1.2
+              ? "standard_4_3"
+              : analysis.width / Math.max(1, analysis.height) >= 0.85
+              ? "square_1_1"
+              : "portrait_9_16",
+          brightnessCategory:
+            analysis.meanLuma !== null
+              ? analysis.meanLuma < 35
+                ? "dark_underexposed"
+                : analysis.meanLuma < 85
+                ? "dim_low_light"
+                : analysis.meanLuma <= 175
+                ? "balanced_normal"
+                : analysis.meanLuma <= 225
+                ? "bright_high_key"
+                : "overexposed_glare"
+              : "unknown",
+          blurScore:
+            analysis.edgeDensity !== null
+              ? Math.max(0, Number((1 - analysis.edgeDensity * 20).toFixed(2)))
+              : undefined,
+        },
         spatialRelationships,
         constructionEstimates: {
           elements: constructionElements,
@@ -628,25 +826,107 @@ export class PerceptionEngine {
     };
   }
 
-  /** Ingest sensor readings from connected device or IoT sensor. */
+  /** Ingest sensor readings from connected device or IoT sensor (§1, §10). */
   ingestSensor(
-    readings: Record<string, { value: number | string; unit: string; calibrated?: boolean }>,
+    readings: Record<
+      string,
+      { value: number | string; unit: string; calibrated?: boolean; location?: string; timestamp?: string }
+    >,
     origin = "iot_sensor",
   ): {
     percept: Percept;
     observation: StructuredObservation;
+    telemetryAnalysis: {
+      anomaliesDetected: string[];
+      uncalibratedSensors: string[];
+      outOfBoundsSensors: string[];
+      overallHealthScore: number;
+    };
   } {
     const startTime = Date.now();
     const uncertainties: string[] = [];
     const limitations: string[] = [
-      "Sensor observations are bounded to reported accuracy and calibration states",
+      "Sensor observations reflect telemetry data reported by external hardware gateway",
     ];
+    const anomaliesDetected: string[] = [];
+    const uncalibratedSensors: string[] = [];
+    const outOfBoundsSensors: string[] = [];
+
+    // Range bounds & physical feasibility dictionary
+    const bounds: Record<string, { min: number; max: number }> = {
+      temperature_celsius: { min: -273.15, max: 1000 },
+      temp_c: { min: -273.15, max: 1000 },
+      temperature: { min: -273.15, max: 1000 },
+      humidity_pct: { min: 0, max: 100 },
+      humidity: { min: 0, max: 100 },
+      battery_pct: { min: 0, max: 100 },
+      battery: { min: 0, max: 100 },
+      pressure_hpa: { min: 300, max: 1200 },
+      ambient_lux: { min: 0, max: 200000 },
+      lux: { min: 0, max: 200000 },
+      vibration_rms: { min: 0, max: 100 },
+      voltage_v: { min: 0, max: 500 },
+      tilt_degrees: { min: -180, max: 180 },
+    };
 
     for (const [key, val] of Object.entries(readings)) {
       if (val.calibrated === false) {
-        uncertainties.push(`Sensor reading '${key}' is marked UNCALIBRATED`);
+        uncalibratedSensors.push(key);
+        uncertainties.push(`Sensor '${key}' is marked UNCALIBRATED`);
+      }
+
+      const numVal = typeof val.value === "number" ? val.value : parseFloat(String(val.value));
+      if (!isNaN(numVal)) {
+        const boundKey = Object.keys(bounds).find(
+          (b) => key.toLowerCase() === b || key.toLowerCase().includes(b),
+        );
+        if (boundKey) {
+          const bound = bounds[boundKey];
+          if (numVal < bound.min || numVal > bound.max) {
+            outOfBoundsSensors.push(
+              `${key}: ${numVal} (physically valid ${bound.min}..${bound.max} ${val.unit})`,
+            );
+            uncertainties.push(`Physical boundary violation on '${key}': ${numVal} ${val.unit}`);
+          }
+        }
+
+        // Anomaly heuristics
+        if (key.toLowerCase().includes("vibration") && numVal > 15) {
+          anomaliesDetected.push(`High vibration anomaly: ${numVal} ${val.unit}`);
+        }
+        if (key.toLowerCase().includes("battery") && numVal < 10) {
+          anomaliesDetected.push(`Critical low battery: ${numVal}%`);
+        }
+        if (key.toLowerCase().includes("temp") && (numVal > 75 || numVal < -20)) {
+          anomaliesDetected.push(`Extreme temperature anomaly: ${numVal} ${val.unit}`);
+        }
       }
     }
+
+    const healthDeductions =
+      uncalibratedSensors.length * 10 +
+      outOfBoundsSensors.length * 25 +
+      anomaliesDetected.length * 15;
+    const overallHealthScore = Math.max(0, 100 - healthDeductions);
+
+    const telemetryAnalysis = {
+      anomaliesDetected,
+      uncalibratedSensors,
+      outOfBoundsSensors,
+      overallHealthScore,
+    };
+
+    const epistemicStatus: ObservationEpistemicStatus =
+      outOfBoundsSensors.length > 0 || uncalibratedSensors.length > 0
+        ? "INFERRED_HYPOTHESIS"
+        : "DIRECT_OBSERVATION";
+
+    const confidence =
+      outOfBoundsSensors.length > 0
+        ? 0.4
+        : uncalibratedSensors.length > 0
+        ? 0.7
+        : 0.98;
 
     const obs: StructuredObservation = {
       id: nextObservationId(),
@@ -654,37 +934,46 @@ export class PerceptionEngine {
       sourceType: "iot_sensor",
       capturedAt: new Date().toISOString(),
       processedAt: new Date().toISOString(),
-      epistemicStatus: "DIRECT_OBSERVATION",
-      confidence: uncertainties.length === 0 ? 0.95 : 0.7,
+      epistemicStatus,
+      confidence,
       uncertainties,
       limitations,
       provenance: {
         origin,
-        algorithmOrModel: "native-sensor-intake",
+        algorithmOrModel: "native-sensor-telemetry-engine",
         processingMs: Date.now() - startTime,
       },
       features: {
         sensorReadings: readings,
+        telemetryAnalysis,
       },
       securityClassification: "internal",
       secretsRedactedCount: 0,
       retentionPolicy: "ephemeral",
-      recommendedDownstreamAction: "semantic_reasoning",
+      recommendedDownstreamAction:
+        anomaliesDetected.length > 0 || outOfBoundsSensors.length > 0
+          ? "clarification_needed"
+          : "semantic_reasoning",
     };
 
     const percept: Percept = {
       id: nextPerceptId(),
       modality: "sensor",
-      content: readings,
+      content: {
+        readings,
+        telemetryAnalysis,
+      },
       origin,
       observedAt: new Date().toISOString(),
       metadata: {
         keys: Object.keys(readings),
+        healthScore: overallHealthScore,
+        hasAnomalies: anomaliesDetected.length > 0,
       },
       observation: obs,
     };
 
-    return { percept, observation: obs };
+    return { percept, observation: obs, telemetryAnalysis };
   }
 
   /** Cross-Modal Correlation & Contradiction Detection (§7). */
@@ -723,13 +1012,53 @@ export class PerceptionEngine {
       }
     }
 
-    // 3. Spoken transcript vs OCR text consistency
+    // 3. Sensor vs Image / Environment correlation
+    if (obsA.modality === "sensor" && obsB.modality === "image") {
+      const readings = obsA.features.sensorReadings ?? {};
+      const luxVal = readings["ambient_lux"]?.value ?? readings["lux"]?.value;
+      if (luxVal !== undefined) {
+        const lux = Number(luxVal);
+        if (lux < 20 && obsB.features.composition?.brightnessCategory === "bright_high_key") {
+          contradictions.push(
+            `Sensor lux is very low (${lux} lx) but image is classified as bright/high-key`,
+          );
+          correlationType = "contradicts";
+        } else if (lux > 500 && obsB.features.composition?.brightnessCategory === "dark_underexposed") {
+          contradictions.push(
+            `Sensor lux is high (${lux} lx) but image is classified as dark/underexposed`,
+          );
+          correlationType = "contradicts";
+        } else if (
+          (lux > 200 && (obsB.features.composition?.brightnessCategory === "balanced_normal" || obsB.features.composition?.brightnessCategory === "bright_high_key")) ||
+          (lux < 50 && obsB.features.composition?.brightnessCategory === "dim_low_light")
+        ) {
+          correlationType = "corroborates";
+        }
+      }
+    } else if (obsA.modality === "image" && obsB.modality === "sensor") {
+      return this.correlateObservations(obsB, obsA);
+    }
+
+    // 4. Audio vs Video motion / activity correlation
+    if (obsA.modality === "audio" && obsB.modality === "video") {
+      const hasSpeech = (obsA.features.audioEvents ?? []).some((e) => e.kind === "speech");
+      const videoMotion = obsB.features.motionAndScenes?.averageMotionEnergy ?? 0;
+      if (hasSpeech && videoMotion > 0.05) {
+        correlationType = "corroborates";
+      } else if (!hasSpeech && videoMotion === 0) {
+        correlationType = "corroborates";
+      }
+    } else if (obsA.modality === "video" && obsB.modality === "audio") {
+      return this.correlateObservations(obsB, obsA);
+    }
+
+    // 5. Spoken transcript vs OCR / Document text consistency
     if (obsA.features.extractedText && obsB.features.extractedText) {
       const tA = obsA.features.extractedText.text.toLowerCase();
       const tB = obsB.features.extractedText.text.toLowerCase();
       if (tA && tB) {
-        const wordsA = new Set(tA.split(/\s+/));
-        const wordsB = tB.split(/\s+/);
+        const wordsA = new Set(tA.split(/\s+/).filter((w) => w.length > 3));
+        const wordsB = tB.split(/\s+/).filter((w) => w.length > 3);
         const matchCount = wordsB.filter((w) => wordsA.has(w)).length;
         if (matchCount >= 2) {
           correlationType = "corroborates";
@@ -737,11 +1066,11 @@ export class PerceptionEngine {
       }
     }
 
-    const confidence = contradictions.length > 0 ? 0.9 : 0.8;
+    const confidence = contradictions.length > 0 ? 0.95 : correlationType === "corroborates" ? 0.9 : 0.8;
     const explanation =
       contradictions.length > 0
         ? `Contradiction detected: ${contradictions.join("; ")}`
-        : `Observations ${obsA.id} and ${obsB.id} ${correlationType} each other`;
+        : `Observations ${obsA.id} (${obsA.modality}) and ${obsB.id} (${obsB.modality}) ${correlationType} each other`;
 
     // Record cross-modal correlation link
     if (!obsA.crossModalCorrelations) obsA.crossModalCorrelations = [];
@@ -760,7 +1089,8 @@ export class PerceptionEngine {
     return { correlationType, confidence, explanation, contradictions };
   }
 
-  /** Fuse multiple observations into one coherent multimodal percept (§7). */
+  /** Fuse multiple observations into one coherent multimodal percept (§7).
+   *  Promotes epistemic status to CORROBORATED_FACT when distinct modalities corroborate without contradiction. */
   fuseMultimodal(
     observations: StructuredObservation[],
     origin = "multimodal_fusion",
@@ -768,13 +1098,18 @@ export class PerceptionEngine {
     percept: Percept;
     observation: StructuredObservation;
     contradictions: string[];
+    clarificationPrompt?: string;
   } {
     const allContradictions: string[] = [];
+    let corroborationsCount = 0;
+
     for (let i = 0; i < observations.length; i++) {
       for (let j = i + 1; j < observations.length; j++) {
         const corr = this.correlateObservations(observations[i], observations[j]);
         if (corr.contradictions.length > 0) {
           allContradictions.push(...corr.contradictions);
+        } else if (corr.correlationType === "corroborates") {
+          corroborationsCount++;
         }
       }
     }
@@ -790,12 +1125,31 @@ export class PerceptionEngine {
       new Set(observations.flatMap((o) => o.uncertainties)),
     );
 
-    const fusedConfidence = Math.max(
-      0.1,
+    const hasContradictions = allContradictions.length > 0;
+    const isCorroboratedFact =
+      !hasContradictions &&
+      corroborationsCount > 0 &&
+      modalities.length >= 2;
+
+    const epistemicStatus: ObservationEpistemicStatus = hasContradictions
+      ? "INFERRED_HYPOTHESIS"
+      : isCorroboratedFact
+      ? "VERIFIED_FACT"
+      : "DIRECT_OBSERVATION";
+
+    const baseConf =
       observations.reduce((acc, o) => acc + o.confidence, 0) /
-        Math.max(1, observations.length) -
-        (allContradictions.length > 0 ? 0.25 : 0),
-    );
+      Math.max(1, observations.length);
+
+    const fusedConfidence = hasContradictions
+      ? Math.max(0.1, Number((baseConf - 0.3).toFixed(2)))
+      : isCorroboratedFact
+      ? Math.min(1.0, Number((baseConf + 0.1).toFixed(2)))
+      : Number(baseConf.toFixed(2));
+
+    const clarificationPrompt = hasContradictions
+      ? `Contradictions detected between sensory modalities (${allContradictions.join("; ")}). ARCHIE requests explicit verification before updating world model or executing downstream actions.`
+      : undefined;
 
     const fusedObs: StructuredObservation = {
       id: nextObservationId(),
@@ -803,9 +1157,9 @@ export class PerceptionEngine {
       sourceType: "conversation",
       capturedAt: new Date().toISOString(),
       processedAt: new Date().toISOString(),
-      epistemicStatus: allContradictions.length > 0 ? "INFERRED_HYPOTHESIS" : "DIRECT_OBSERVATION",
-      confidence: Number(fusedConfidence.toFixed(2)),
-      uncertainties: [...allUncertainties, ...(allContradictions.length > 0 ? allContradictions : [])],
+      epistemicStatus,
+      confidence: fusedConfidence,
+      uncertainties: [...allUncertainties, ...(hasContradictions ? allContradictions : [])],
       limitations: allLimitations,
       provenance: {
         origin,
@@ -816,12 +1170,17 @@ export class PerceptionEngine {
         entities: allEntities,
       },
       contradictionsDetected: allContradictions,
+      clarificationPrompt,
       securityClassification: observations.some((o) => o.securityClassification === "sensitive")
         ? "sensitive"
         : "public",
       secretsRedactedCount: observations.reduce((acc, o) => acc + o.secretsRedactedCount, 0),
       retentionPolicy: "ephemeral",
-      recommendedDownstreamAction: allContradictions.length > 0 ? "clarification_needed" : "semantic_reasoning",
+      recommendedDownstreamAction: hasContradictions
+        ? "clarification_needed"
+        : isCorroboratedFact
+        ? "world_model_update"
+        : "semantic_reasoning",
     };
 
     const percept: Percept = {
@@ -832,17 +1191,25 @@ export class PerceptionEngine {
         modalities,
         observationCount: observations.length,
         contradictions: allContradictions,
+        isCorroboratedFact,
+        clarificationPrompt,
       },
       origin,
       observedAt: new Date().toISOString(),
       metadata: {
         fusedModalities: modalities,
-        hasContradictions: allContradictions.length > 0,
+        hasContradictions,
+        epistemicStatus,
       },
       observation: fusedObs,
     };
 
-    return { percept, observation: fusedObs, contradictions: allContradictions };
+    return {
+      percept,
+      observation: fusedObs,
+      contradictions: allContradictions,
+      clarificationPrompt,
+    };
   }
 
   /** Honest modality support report (§16). */
@@ -887,13 +1254,23 @@ export class PerceptionEngine {
         },
         {
           modality: "document",
-          level: "BOUNDED",
-          scope: "Text, Markdown, and structured plain-text documents",
+          level: "FULL",
+          scope: "Markdown, YAML frontmatter, table parsing, section hierarchy, and document outlines",
+        },
+        {
+          modality: "sensor",
+          level: "FULL",
+          scope: "Structured telemetry ingestion, boundary checks, anomaly scoring, and calibration validation",
+        },
+        {
+          modality: "multimodal",
+          level: "FULL",
+          scope: "Cross-modal temporal correlation, contradiction detection, epistemic fact promotion, and clarification prompts",
         },
         {
           modality: "image",
           level: "BOUNDED",
-          scope: "Native geometry, luminance, edge density, and OCR; no zero-shot semantic object detection",
+          scope: "Native geometry, luminance, edge density, composition categories, and OCR; no zero-shot semantic object detection",
         },
         {
           modality: "audio",
@@ -904,16 +1281,6 @@ export class PerceptionEngine {
           modality: "video",
           level: "BOUNDED",
           scope: "MP4 box metadata inspection and sampled frame statistics; no streaming semantic video understanding",
-        },
-        {
-          modality: "sensor",
-          level: "BOUNDED",
-          scope: "External JSON telemetry ingestion and bounds validation; no direct physical hardware bus",
-        },
-        {
-          modality: "multimodal",
-          level: "BOUNDED",
-          scope: "Cross-modal temporal correlation, OCR/audio transcript comparison, and contradiction detection",
         },
       ],
       unsupported: [

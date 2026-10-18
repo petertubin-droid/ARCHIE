@@ -348,5 +348,148 @@ describe("ARCHIE Advanced Unified Perception Engine", () => {
       expect(report.unsupported.some((u) => u.modality === "biometric_voice_id")).toBe(true);
       expect(report.capabilities.length).toBeGreaterThan(0);
     });
+
+    it("ingests structured documents with frontmatter, section hierarchy, tables, and secret scrubbing", () => {
+      const engine = new PerceptionEngine();
+      const doc = `---
+title: FRELUX Sensor & Vision Protocol
+version: 1.0.0
+---
+
+# Executive Summary
+ARCHIE unified perception integrates multimodal telemetry.
+Secret key: mock_dummy_test_secret_credential_12345
+
+## Architecture Modules
+Detailed structural specification.
+
+| Layer | Component | Status |
+| --- | --- | --- |
+| L1 | Vision Engine | Bounded |
+| L2 | Sensor Gateway | Full |
+`;
+      const res = engine.ingestDocument(doc, "frelux-spec.md");
+      expect(res.outline.title).toBe("FRELUX Sensor & Vision Protocol");
+      expect(res.outline.sections.length).toBe(2);
+      expect(res.outline.sections[0].heading).toBe("Executive Summary");
+      expect(res.outline.sections[1].heading).toBe("Architecture Modules");
+      expect(res.outline.tablesCount).toBe(1);
+      expect(res.outline.metadata?.version).toBe("1.0.0");
+      expect(res.observation.secretsRedactedCount).toBeGreaterThan(0);
+      expect(res.observation.epistemicStatus).toBe("DIRECT_OBSERVATION");
+      expect(res.observation.features.extractedText?.text).not.toContain("mock_dummy_test_secret_credential_12345");
+    });
+
+    it("detects sensor physical boundary violations, anomalies, uncalibrated units, and computes health score", () => {
+      const engine = new PerceptionEngine();
+      const res = engine.ingestSensor({
+        temperature_celsius: { value: 1250, unit: "C", calibrated: true },
+        pressure_hpa: { value: 1013, unit: "hPa", calibrated: false },
+        vibration_rms: { value: 28.5, unit: "m/s2", calibrated: true },
+        battery_pct: { value: 8, unit: "%", calibrated: true },
+      });
+
+      expect(res.telemetryAnalysis.outOfBoundsSensors.length).toBeGreaterThan(0);
+      expect(res.telemetryAnalysis.outOfBoundsSensors[0]).toContain("temperature_celsius");
+      expect(res.telemetryAnalysis.uncalibratedSensors).toContain("pressure_hpa");
+      expect(res.telemetryAnalysis.anomaliesDetected.some((a) => a.includes("vibration"))).toBe(true);
+      expect(res.telemetryAnalysis.anomaliesDetected.some((a) => a.includes("battery"))).toBe(true);
+      expect(res.telemetryAnalysis.overallHealthScore).toBeLessThan(70);
+      expect(res.observation.epistemicStatus).toBe("INFERRED_HYPOTHESIS");
+      expect(res.observation.recommendedDownstreamAction).toBe("clarification_needed");
+    });
+
+    it("detects contradiction between sensor ambient lux and image brightness category", () => {
+      const engine = new PerceptionEngine();
+      const sensorRes = engine.ingestSensor({
+        ambient_lux: { value: 5, unit: "lx", calibrated: true },
+      });
+      const dummyImageObs: any = {
+        id: "obs_img_test",
+        modality: "image",
+        sourceType: "user_upload",
+        capturedAt: new Date().toISOString(),
+        processedAt: new Date().toISOString(),
+        epistemicStatus: "DIRECT_OBSERVATION",
+        confidence: 0.9,
+        uncertainties: [],
+        limitations: [],
+        provenance: { origin: "test", algorithmOrModel: "test", processingMs: 1 },
+        features: {
+          composition: {
+            aspectRatioCategory: "widescreen_16_9",
+            brightnessCategory: "bright_high_key",
+          },
+        },
+        securityClassification: "public",
+        secretsRedactedCount: 0,
+        retentionPolicy: "ephemeral",
+      };
+
+      const corr = engine.correlateObservations(sensorRes.observation, dummyImageObs);
+      expect(corr.correlationType).toBe("contradicts");
+      expect(corr.contradictions.length).toBeGreaterThan(0);
+      expect(corr.contradictions[0]).toContain("lux");
+    });
+
+    it("promotes epistemic status to VERIFIED_FACT when multimodal corroboration is achieved without contradiction", () => {
+      const engine = new PerceptionEngine();
+      const sensorRes = engine.ingestSensor({
+        ambient_lux: { value: 450, unit: "lx", calibrated: true },
+      });
+      const dummyImageObs: any = {
+        id: "obs_img_corrob",
+        modality: "image",
+        sourceType: "user_upload",
+        capturedAt: new Date().toISOString(),
+        processedAt: new Date().toISOString(),
+        epistemicStatus: "DIRECT_OBSERVATION",
+        confidence: 0.9,
+        uncertainties: [],
+        limitations: [],
+        provenance: { origin: "test", algorithmOrModel: "test", processingMs: 1 },
+        features: {
+          composition: {
+            aspectRatioCategory: "standard_4_3",
+            brightnessCategory: "balanced_normal",
+          },
+        },
+        securityClassification: "public",
+        secretsRedactedCount: 0,
+        retentionPolicy: "ephemeral",
+      };
+
+      const fused = engine.fuseMultimodal([sensorRes.observation, dummyImageObs]);
+      expect(fused.contradictions.length).toBe(0);
+      expect(fused.observation.epistemicStatus).toBe("VERIFIED_FACT");
+      expect(fused.observation.recommendedDownstreamAction).toBe("world_model_update");
+    });
+
+    it("synthesizes a clarification prompt when cross-modal contradictions exist", () => {
+      const engine = new PerceptionEngine();
+      const textRes = engine.ingest("This was recorded in bright sunny daylight outdoors.");
+      const darkImageObs: any = {
+        id: "obs_img_dark",
+        modality: "image",
+        sourceType: "user_upload",
+        capturedAt: new Date().toISOString(),
+        processedAt: new Date().toISOString(),
+        epistemicStatus: "DIRECT_OBSERVATION",
+        confidence: 0.9,
+        uncertainties: [],
+        limitations: ["Low lighting / underexposed scene"],
+        provenance: { origin: "test", algorithmOrModel: "test", processingMs: 1 },
+        features: {},
+        securityClassification: "public",
+        secretsRedactedCount: 0,
+        retentionPolicy: "ephemeral",
+      };
+
+      const fused = engine.fuseMultimodal([textRes.percepts[0].observation!, darkImageObs]);
+      expect(fused.contradictions.length).toBeGreaterThan(0);
+      expect(fused.observation.epistemicStatus).toBe("INFERRED_HYPOTHESIS");
+      expect(fused.clarificationPrompt).toBeDefined();
+      expect(fused.clarificationPrompt).toContain("Contradictions detected between sensory modalities");
+    });
   });
 });

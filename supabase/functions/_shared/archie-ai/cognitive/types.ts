@@ -125,8 +125,29 @@ export interface StructuredObservation {
     };
     sensorReadings?: Record<
       string,
-      { value: number | string; unit: string; calibrated?: boolean }
+      { value: number | string; unit: string; calibrated?: boolean; location?: string; timestamp?: string }
     >;
+    documentOutline?: {
+      title?: string;
+      sections: Array<{ level: number; heading: string }>;
+      tablesCount: number;
+      codeBlocksCount: number;
+      wordCount: number;
+      metadata?: Record<string, string>;
+    };
+    composition?: {
+      aspectRatioCategory: string;
+      brightnessCategory: string;
+      contrastCategory?: string;
+      blurScore?: number;
+      gridZones?: Record<string, string>;
+    };
+    telemetryAnalysis?: {
+      anomaliesDetected: string[];
+      uncalibratedSensors: string[];
+      outOfBoundsSensors: string[];
+      overallHealthScore: number;
+    };
   };
   crossModalCorrelations?: Array<{
     targetObservationId: string;
@@ -135,6 +156,7 @@ export interface StructuredObservation {
     explanation: string;
   }>;
   contradictionsDetected?: string[];
+  clarificationPrompt?: string;
   securityClassification: "public" | "internal" | "sensitive" | "owner_only";
   secretsRedactedCount: number;
   retentionPolicy: "ephemeral" | "session" | "retained_by_policy";
