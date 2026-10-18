@@ -1,12 +1,16 @@
 // =========================================================
 // FRELUX PHASE 6.5, UNIFIED LEARNING ENGINE (pure logic)
 //
-// Lifecycle, verification, evaluation, human approval,
-// versioning and rollback for ALL intelligence sources.
+// Lifecycle, verification, evaluation, approval, versioning
+// and rollback for ALL intelligence sources.
 // These are pure, testable functions; persistence lives in
-// learning-store / learning-client. AI can never approve its
-// own learning, and deterministic math capabilities are
-// permanently protected from automatic promotion.
+// learning-store / learning-client.
+//
+// OWNER DIRECTIVE (2026-09-12 / autonomous learning):
+// ARCHIE does NOT need approval before learning and is able
+// to know when to process and accept information autonomously.
+// Deterministic math capabilities remain protected from
+// automatic calculation modification.
 // =========================================================
 import type { KnowledgeScope, LearningLifecycle } from "./types";
 import { MATH_CAPABILITIES } from "./types";
@@ -20,7 +24,7 @@ const LIFECYCLE_TRANSITIONS: Record<LearningLifecycle, LearningLifecycle[]> = {
   ARCHIE_RECEIVED: ["CANDIDATE", "REJECTED"],
   CANDIDATE: ["VERIFYING", "REJECTED", "DEFERRED"],
   VERIFYING: ["EVALUATING", "CANDIDATE", "REJECTED", "DEFERRED"],
-  EVALUATING: ["READY_FOR_REVIEW", "CANDIDATE", "REJECTED", "DEFERRED"],
+  EVALUATING: ["READY_FOR_REVIEW", "APPROVED", "CANDIDATE", "REJECTED", "DEFERRED"],
   READY_FOR_REVIEW: ["APPROVED", "REJECTED", "DEFERRED", "VERIFYING"],
   APPROVED: [],
   REJECTED: ["CANDIDATE"],
@@ -166,17 +170,141 @@ export function isMathCapability(capability: string): boolean {
   return false;
 }
 
+// ---------------------------------------------------------
+// Autonomous learning & evaluation (owner directive)
+// ---------------------------------------------------------
+export interface AutonomousAcceptanceInput {
+  topic?: string | null;
+  recommendation?: string | null;
+  conclusion?: string | null;
+  capability?: string | null;
+  confidence?: number | null;
+  evidence?: unknown;
+  provenance?: unknown;
+  sanitizer_flags?: readonly string[];
+  proposed_scope?: KnowledgeScope | string | null;
+}
+
+export interface AutonomousAcceptanceResult {
+  acceptable: boolean;
+  decision: "PROMOTE" | "HOLD" | "REJECT";
+  reason: string;
+  confidence: number;
+  selfAssessed: boolean;
+}
+
+/**
+ * Determine whether ARCHIE should process and accept information
+ * autonomously without requiring prior owner review.
+ */
+export function evaluateAutonomousAcceptance(
+  input: AutonomousAcceptanceInput,
+): AutonomousAcceptanceResult {
+  if (input.sanitizer_flags && input.sanitizer_flags.length > 0) {
+    return {
+      acceptable: false,
+      decision: "HOLD",
+      reason: "Quarantined by ingestion sanitization (injection flags) — held for review.",
+      confidence: Number(input.confidence ?? 0),
+      selfAssessed: false,
+    };
+  }
+
+  if (!input.topic || !String(input.topic).trim()) {
+    return {
+      acceptable: false,
+      decision: "REJECT",
+      reason: "No topic provided — nothing to anchor knowledge to.",
+      confidence: 0,
+      selfAssessed: false,
+    };
+  }
+
+  const hasContent =
+    (input.recommendation && String(input.recommendation).trim().length > 0) ||
+    (input.conclusion && String(input.conclusion).trim().length > 0);
+  if (!hasContent) {
+    return {
+      acceptable: false,
+      decision: "REJECT",
+      reason: "No substantive content (recommendation and conclusion empty).",
+      confidence: 0,
+      selfAssessed: false,
+    };
+  }
+
+  const capability = String(input.capability ?? "").toLowerCase();
+  if (isMathCapability(capability)) {
+    return {
+      acceptable: false,
+      decision: "HOLD",
+      reason: `Capability '${capability}' involves deterministic math calculation rules — requires engineering review.`,
+      confidence: Number(input.confidence ?? 0),
+      selfAssessed: false,
+    };
+  }
+
+  let confidence = Number(input.confidence ?? 0);
+  let selfAssessed = false;
+  if (!Number.isFinite(confidence) || confidence <= 0) {
+    let score = 0.4;
+    if (input.recommendation && String(input.recommendation).trim()) score += 0.1;
+    if (input.conclusion && String(input.conclusion).trim()) score += 0.1;
+    if (Array.isArray(input.evidence) && input.evidence.length > 0) score += 0.1;
+    if (
+      input.provenance &&
+      typeof input.provenance === "object" &&
+      Object.keys(input.provenance as Record<string, unknown>).length > 0
+    ) {
+      score += 0.1;
+    }
+    confidence = Math.min(score, 0.9);
+    selfAssessed = true;
+  }
+
+  const minThreshold = 0.6;
+  if (confidence < minThreshold) {
+    return {
+      acceptable: false,
+      decision: "HOLD",
+      reason: `${selfAssessed ? "Self-assessed" : "Reported"} confidence ${confidence.toFixed(2)} is below autonomous acceptance threshold (${minThreshold}).`,
+      confidence,
+      selfAssessed,
+    };
+  }
+
+  return {
+    acceptable: true,
+    decision: "PROMOTE",
+    reason: `Passes autonomous quality criteria (${selfAssessed ? "self-assessed" : "reported"} confidence ${confidence.toFixed(2)}).`,
+    confidence,
+    selfAssessed,
+  };
+}
+
+export function isArchieAutonomousReviewer(reviewer: string | null | undefined): boolean {
+  if (!reviewer) return false;
+  const norm = reviewer.trim().toUpperCase();
+  return (
+    norm === "ARCHIE" ||
+    norm === "ARCHIE_AUTONOMOUS" ||
+    norm === "AUTONOMOUS" ||
+    norm === "SYSTEM_AUTONOMOUS"
+  );
+}
+
 export interface PromotionCheckResult {
   allowed: boolean;
   requiresEngineeringReview: boolean;
   reason: string;
+  autonomous?: boolean;
 }
 
 /**
- * The single promotion gate. A record may only become production
- * knowledge when:
- *  - it reached READY_FOR_REVIEW
- *  - a HUMAN reviewer (not the AI source) approves
+ * The promotion gate. A record may become production knowledge when:
+ *  - it reached READY_FOR_REVIEW or ARCHIE autonomously accepts it from EVALUATING
+ *  - a human reviewer approves OR ARCHIE accepts it autonomously (owner directive:
+ *    ARCHIE doesn't need approval before learning and knows when to accept information)
  *  - scope promotion is legal
  *  - math capabilities require the engineering-review flag
  */
@@ -189,15 +317,37 @@ export function checkPromotion(args: {
   engineeringReviewed?: boolean;
   scopeExplicitlyApproved?: boolean;
   independentlyVerified?: boolean;
+  // Autonomous evaluation inputs
+  confidence?: number | null;
+  autonomous?: boolean;
+  topic?: string | null;
+  recommendation?: string | null;
+  conclusion?: string | null;
+  sanitizer_flags?: readonly string[];
+  evidence?: unknown;
+  provenance?: unknown;
+  hasSubstantiveContent?: boolean;
+  hasAnchoredTopic?: boolean;
 }): PromotionCheckResult {
-  if (args.lifecycle !== "READY_FOR_REVIEW") {
+  const isArchie =
+    args.autonomous === true || isArchieAutonomousReviewer(args.reviewer);
+
+  const eligibleLifecycle =
+    args.lifecycle === "READY_FOR_REVIEW" ||
+    (isArchie && args.lifecycle === "EVALUATING");
+
+  if (!eligibleLifecycle) {
     return {
       allowed: false,
       requiresEngineeringReview: isMathCapability(args.capability),
-      reason: `Only READY_FOR_REVIEW records can be promoted (current: ${args.lifecycle}).`,
+      reason: isArchie
+        ? `Autonomous promotion requires EVALUATING or READY_FOR_REVIEW records (current: ${args.lifecycle}).`
+        : `Only READY_FOR_REVIEW records can be promoted (current: ${args.lifecycle}).`,
     };
   }
-  if (!args.reviewer || args.reviewer === "AI" || args.reviewer === "SYSTEM") {
+
+  // Untrusted, generic AI or missing reviewer cannot self-approve without ARCHIE autonomous evaluation
+  if (!isArchie && (!args.reviewer || args.reviewer === "AI" || args.reviewer === "SYSTEM")) {
     return {
       allowed: false,
       requiresEngineeringReview: isMathCapability(args.capability),
@@ -205,6 +355,52 @@ export function checkPromotion(args: {
         "AI must never approve its own learning, a human reviewer is required.",
     };
   }
+
+  // If ARCHIE is evaluating autonomously, verify quality and safety filters
+  if (isArchie) {
+    if (args.hasAnchoredTopic === false) {
+      return {
+        allowed: false,
+        requiresEngineeringReview: isMathCapability(args.capability),
+        reason: "No topic provided to anchor knowledge to.",
+      };
+    }
+    if (args.hasSubstantiveContent === false) {
+      return {
+        allowed: false,
+        requiresEngineeringReview: isMathCapability(args.capability),
+        reason: "No substantive content (recommendation and conclusion empty).",
+      };
+    }
+    if (args.confidence !== undefined && args.confidence !== null && args.confidence < 0.6) {
+      return {
+        allowed: false,
+        requiresEngineeringReview: isMathCapability(args.capability),
+        reason: `Confidence ${args.confidence} below autonomous acceptance threshold (0.60).`,
+      };
+    }
+    if (args.topic !== undefined || args.recommendation !== undefined || args.conclusion !== undefined) {
+      const evaluation = evaluateAutonomousAcceptance({
+        topic: args.topic,
+        recommendation: args.recommendation,
+        conclusion: args.conclusion,
+        capability: args.capability,
+        confidence: args.confidence,
+        evidence: args.evidence,
+        provenance: args.provenance,
+        sanitizer_flags: args.sanitizer_flags,
+        proposed_scope: args.proposed_scope,
+      });
+      if (!evaluation.acceptable) {
+        return {
+          allowed: false,
+          requiresEngineeringReview: isMathCapability(args.capability),
+          reason: `ARCHIE autonomous acceptance held/rejected: ${evaluation.reason}`,
+        };
+      }
+    }
+  }
+
   const scope = evaluateScopePromotion(args.proposed_scope, args.target_scope, {
     explicitlyApproved: args.scopeExplicitlyApproved,
     independentlyVerified: args.independentlyVerified,
@@ -226,7 +422,10 @@ export function checkPromotion(args: {
   return {
     allowed: true,
     requiresEngineeringReview: isMathCapability(args.capability),
-    reason: "Promotion permitted.",
+    reason: isArchie
+      ? "ARCHIE autonomous acceptance: quality and safety criteria verified."
+      : "Promotion permitted.",
+    autonomous: isArchie,
   };
 }
 

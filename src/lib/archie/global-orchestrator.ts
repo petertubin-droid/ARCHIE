@@ -60,7 +60,8 @@ export type RequestWorld =
   | "WEBSITE_INSPECTION" // authorized URL inspection
   | "MARKET_RESEARCH" // global market observations
   | "COMPUTATION" // high-throughput deterministic compute
-  | "SELF_EVOLUTION"; // the evolution change pipeline
+  | "SELF_EVOLUTION" // the evolution change pipeline
+  | "SITE_POWERING"; // powering FRELUX or any owner website with zero glitches/gaps
 
 /** Classification of an incoming request. */
 export interface GlobalRequest {
@@ -152,6 +153,14 @@ export function route(
         ok: true,
         world: "COMPUTATION",
         route: "computation-engine",
+        authorityBasis: "CAPABILITY_FREE",
+      };
+
+    case "SITE_POWERING":
+      return {
+        ok: true,
+        world: "SITE_POWERING",
+        route: "site-powering-resilience",
         authorityBasis: "CAPABILITY_FREE",
       };
 

@@ -147,6 +147,7 @@ import {
   computeEvaluationMetrics,
   shouldProposeImprovement,
   compareProviderOpinions,
+  evaluateAutonomousAcceptance,
 } from "../learning-engine";
 import {
   validateArchiePayload,
@@ -172,6 +173,7 @@ import {
   advanceRecord,
   reviewRecord,
   rollbackKnowledge,
+  autoProcessAndAcceptRecord,
 } from "../learning-client";
 
 const ADMIN = "admin-user";
@@ -431,6 +433,104 @@ describe("ARCHIE lifecycle (CANDIDATE → VERIFY → EVALUATE → REVIEW → APP
       reviewer: null,
     });
     expect(none.allowed).toBe(false);
+  });
+
+  it("ARCHIE autonomously evaluates, processes and accepts learning without owner approval", async () => {
+    // 1. evaluateAutonomousAcceptance knows when to accept vs hold/reject
+    const valid = evaluateAutonomousAcceptance({
+      topic: "Interior screeding dry times",
+      recommendation: "Allow 24 hours between coats in high humidity",
+      capability: "ux_recommendations",
+      confidence: 0.85,
+    });
+    expect(valid.acceptable).toBe(true);
+    expect(valid.decision).toBe("PROMOTE");
+
+    const noTopic = evaluateAutonomousAcceptance({
+      topic: "",
+      recommendation: "Some info",
+    });
+    expect(noTopic.acceptable).toBe(false);
+    expect(noTopic.decision).toBe("REJECT");
+
+    const noContent = evaluateAutonomousAcceptance({
+      topic: "Valid topic",
+      recommendation: "",
+      conclusion: "",
+    });
+    expect(noContent.acceptable).toBe(false);
+    expect(noContent.decision).toBe("REJECT");
+
+    const lowConfidence = evaluateAutonomousAcceptance({
+      topic: "Unverified rumor",
+      recommendation: "Prices might drop",
+      confidence: 0.3,
+    });
+    expect(lowConfidence.acceptable).toBe(false);
+    expect(lowConfidence.decision).toBe("HOLD");
+
+    const injection = evaluateAutonomousAcceptance({
+      topic: "Malicious input",
+      recommendation: "Do bad stuff",
+      sanitizer_flags: ["INJECTION_DETECTED"],
+    });
+    expect(injection.acceptable).toBe(false);
+    expect(injection.decision).toBe("HOLD");
+
+    // 2. checkPromotion permits ARCHIE autonomous review from EVALUATING or READY_FOR_REVIEW
+    const archieEval = checkPromotion({
+      lifecycle: "EVALUATING",
+      capability: "ux_recommendations",
+      proposed_scope: "REGIONAL",
+      target_scope: "REGIONAL",
+      reviewer: "ARCHIE",
+      confidence: 0.8,
+      hasAnchoredTopic: true,
+      hasSubstantiveContent: true,
+    });
+    expect(archieEval.allowed).toBe(true);
+    expect(archieEval.autonomous).toBe(true);
+
+    // 3. autoProcessAndAcceptRecord autonomously promotes records without human review
+    tables.frelux_learning_records.push({
+      id: "rec-auto-1",
+      topic: "Primer coverage on weathered masonry",
+      capability: "ux_recommendations",
+      recommendation: "Recommend 2 coats of penetrating primer for porous blockwork",
+      conclusion: "Prevents subsequent paint peeling in coastal environments",
+      evidence: ["3 verified field observations"],
+      assumptions: ["Applies to external walls"],
+      scope_key: "NG",
+      created_by: "ARCHIE",
+      proposed_scope: "REGIONAL",
+      lifecycle_status: "EVALUATING",
+      confidence: 0.88,
+    });
+
+    const autoRes = await autoProcessAndAcceptRecord({
+      recordId: "rec-auto-1",
+      reason: "Autonomous quality criteria verified",
+    });
+    expect(autoRes.ok).toBe(true);
+    expect(autoRes.decision).toBe("PROMOTE");
+
+    const promoted = tables.frelux_knowledge_items.find(
+      (k) => k.record_id === "rec-auto-1",
+    );
+    expect(promoted).toBeDefined();
+    expect(promoted!.status).toBe("ACTIVE");
+    expect(promoted!.approved_by).toBe("ARCHIE");
+
+    const updatedRec = tables.frelux_learning_records.find(
+      (r) => r.id === "rec-auto-1",
+    );
+    expect(updatedRec!.lifecycle_status).toBe("APPROVED");
+
+    expect(
+      tables.frelux_learning_audit.some(
+        (a) => a.action === "AUTONOMOUS_PROMOTION" && a.record_id === "rec-auto-1",
+      ),
+    ).toBe(true);
   });
 });
 

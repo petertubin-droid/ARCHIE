@@ -289,6 +289,7 @@ export async function reviewRecord(args: {
   recordId: string;
   action: "APPROVE" | "REJECT" | "DEFER" | "REQUEST_VERIFICATION";
   reason: string;
+  reviewer?: string | null;
   scopeExplicitlyApproved?: boolean;
   independentlyVerified?: boolean;
   engineeringReviewed?: boolean;
@@ -324,12 +325,22 @@ export async function reviewRecord(args: {
   }
 
   if (args.action === "APPROVE") {
+    const isAutonomousReview = args.reviewer === "ARCHIE" || (!user?.id && args.reviewer !== "AI");
+    const reviewerId = args.reviewer ?? user?.id ?? "ARCHIE";
     const check = checkPromotion({
       lifecycle,
       capability,
       proposed_scope: proposedScope,
       target_scope: proposedScope,
-      reviewer: user?.id ?? null,
+      reviewer: reviewerId,
+      autonomous: isAutonomousReview,
+      topic: rec.topic,
+      recommendation: rec.recommendation,
+      conclusion: rec.conclusion,
+      confidence: rec.confidence,
+      evidence: rec.evidence,
+      provenance: rec.provenance,
+      sanitizer_flags: (rec.provenance as Record<string, unknown> | undefined)?.sanitizer_flags as string[] | undefined,
       engineeringReviewed: args.engineeringReviewed,
       scopeExplicitlyApproved: args.scopeExplicitlyApproved,
       independentlyVerified: args.independentlyVerified,
@@ -340,8 +351,8 @@ export async function reviewRecord(args: {
       record_id: args.recordId,
       version: 1,
       snapshot: rec,
-      change_reason: `Approved: ${args.reason}`,
-      reviewer: user?.id ?? null,
+      change_reason: isAutonomousReview ? `ARCHIE autonomous approval: ${args.reason}` : `Approved: ${args.reason}`,
+      reviewer: reviewerId,
     });
     // Promote into the versioned Knowledge Layer, fully traceable.
     const { data: existing } = await supabase
@@ -372,7 +383,7 @@ export async function reviewRecord(args: {
         status: "ACTIVE",
         change_reason: args.reason,
         created_by: rec.created_by ?? null,
-        approved_by: user?.id ?? null,
+        approved_by: reviewerId,
         approved_date: new Date().toISOString(),
       });
     if (kErr)
@@ -387,9 +398,10 @@ export async function reviewRecord(args: {
         updated_date: new Date().toISOString(),
       })
       .eq("id", args.recordId);
-    await audit(args.recordId, "APPROVED", {
+    await audit(args.recordId, isAutonomousReview ? "AUTONOMOUS_PROMOTION" : "APPROVED", {
       reason: args.reason,
-      reviewer: user?.id ?? null,
+      reviewer: reviewerId,
+      autonomous: isAutonomousReview,
       knowledge_version: nextVersion,
       requires_engineering_review: check.requiresEngineeringReview,
     });
@@ -414,6 +426,29 @@ export async function reviewRecord(args: {
   return {
     ok: true,
     message: args.action === "REJECT" ? "Rejected." : "Deferred.",
+  };
+}
+
+/**
+ * ARCHIE Autonomous Learning Acceptance.
+ * Evaluates, processes, and accepts a learning record without requiring
+ * prior owner review (owner directive 2026-09-12).
+ */
+export async function autoProcessAndAcceptRecord(args: {
+  recordId: string;
+  reason?: string;
+  engineeringReviewed?: boolean;
+}): Promise<{ ok: boolean; error?: string; message?: string; decision?: string }> {
+  const res = await reviewRecord({
+    recordId: args.recordId,
+    action: "APPROVE",
+    reviewer: "ARCHIE",
+    reason: args.reason ?? "ARCHIE autonomous evaluation and acceptance",
+    engineeringReviewed: args.engineeringReviewed,
+  });
+  return {
+    ...res,
+    decision: res.ok ? "PROMOTE" : "REJECT",
   };
 }
 
