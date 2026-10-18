@@ -56,6 +56,10 @@ import { ToolIntelligenceEngine } from "./tool-intelligence.ts";
 import { CreationEngine, makeProposal } from "./creation.ts";
 import { SecurityIntegrityEngine } from "./security-integrity.ts";
 import { orchestrate } from "./orchestrator.ts";
+import {
+  buildWorldEvidence,
+  renderEvidenceLines,
+} from "./world-evidence.ts";
 import { WorldModel } from "./world-model.ts";
 import { getOwnerModel } from "./user-model.ts";
 import {
@@ -451,15 +455,14 @@ export class CognitiveKernel implements ArchieRuntime {
     const seen = new Set<string>();
     const lines: string[] = [];
     for (const t of terms) {
-      for (const rel of this.world.query({ about: t, depth: 1 })) {
-        const key = `${rel.subject}|${rel.relation}|${rel.object}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        lines.push(
-          `- ${rel.subject} —[${rel.relation}]→ ${rel.object} (observed ` +
-            `${rel.observedAt ? rel.observedAt.slice(0, 10) : "unknown date"}, ` +
-            `confidence ${(rel.confidence ?? 0).toFixed(2)})`,
-        );
+      const ev = buildWorldEvidence(this.world, t, {
+        depth: 1,
+        maxRelations: 4,
+      });
+      for (const line of renderEvidenceLines(ev)) {
+        if (seen.has(line)) continue;
+        seen.add(line);
+        lines.push(line);
         if (lines.length >= 8) break;
       }
       if (lines.length >= 8) break;
