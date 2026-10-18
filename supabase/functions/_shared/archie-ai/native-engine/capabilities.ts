@@ -292,6 +292,13 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
       measuredBy: "code-author.test.ts, cognitive-engine.test.ts",
     },
     {
+      id: "unified-memory-engine",
+      description:
+        "Advanced Unified Memory Engine: interconnected Working, Episodic, Semantic, and Long-Term memory systems with intelligent formation, explicit remember/forget directives, historical version tracking, contradiction arbitration, cross-session continuity, and multi-factor hybrid retrieval",
+      maturity: "OPERATIONAL",
+      measuredBy: "unified-memory-engine.test.ts, associative-memory.test.ts",
+    },
+    {
       id: "associative-memory",
       description:
         "Episodic and long-term associative memory: temporal episode clustering, deterministic Ebbinghaus retention and stability curves, Hebbian link reinforcement, multi-hop spreading activation, and bidirectional bridging with verified long-term FactStore",

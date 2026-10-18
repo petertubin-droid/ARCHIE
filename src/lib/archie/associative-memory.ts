@@ -1,12 +1,26 @@
 // =========================================================
-// ARCHIE ASSOCIATIVE MEMORY ENGINE — FRONTEND & SHARED EXPORT
+// ARCHIE ASSOCIATIVE & UNIFIED MEMORY ENGINE — FRONTEND & SHARED EXPORT
 // src/lib/archie/associative-memory.ts
 //
 // Client facade and direct exports for the Episodic & Long-Term
-// Associative Memory Engine.
+// Associative Memory Engine and the Unified Memory Engine.
 // =========================================================
 
 export {
+  ArchieUnifiedMemoryEngine,
+  WorkingMemoryEngine,
+  EpisodicMemoryEngine,
+  SemanticMemoryEngine,
+  LongTermMemoryEngine,
+  MemoryFormationEngine,
+  MemoryVersioningEngine,
+  MemoryContradictionEngine,
+  SessionContinuityEngine,
+  MemoryLearningBridge,
+  SemanticMemoryBridge,
+  HybridMemoryRetriever,
+  MemoryConsolidationEngine,
+  MemoryObservabilityEngine,
   EpisodicLongTermAssociativeMemoryEngine,
   AssociativeNetwork,
   DEFAULT_SPREADING_CONFIG,
