@@ -216,7 +216,7 @@ function RoutePanel() {
         type="button"
         disabled={busy || !action.trim()}
         onClick={run}
-        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50"
+        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50 archie-focusable"
       >
         {busy ? "Routing…" : "Route request"}
       </button>
@@ -353,7 +353,7 @@ function FramePanel() {
         type="button"
         disabled={!subject.trim()}
         onClick={build}
-        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50"
+        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50 archie-focusable"
       >
         Build frame
       </button>
@@ -386,7 +386,7 @@ function FramePanel() {
           <button
             type="button"
             onClick={recordGaps}
-            className="rounded-md border border-border px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5"
+            className="rounded-md border border-border px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5 archie-focusable"
           >
             Record unanswered lenses as domain gaps
           </button>
@@ -512,7 +512,7 @@ function WeatherPanel() {
         type="button"
         disabled={works.length === 0}
         onClick={run}
-        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50"
+        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50 archie-focusable"
       >
         Assess plan
       </button>
@@ -683,7 +683,7 @@ function PricesPanel() {
         type="button"
         disabled={!item.trim() || !configuredValue.trim()}
         onClick={run}
-        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50"
+        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50 archie-focusable"
       >
         Build price intelligence
       </button>
@@ -856,7 +856,7 @@ function AudiencePanel() {
         <button
           type="button"
           onClick={runSocial}
-          className="mt-1.5 rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25"
+          className="mt-1.5 rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 archie-focusable"
         >
           Build insight report
         </button>
@@ -912,7 +912,7 @@ function AudiencePanel() {
         <button
           type="button"
           onClick={runAd}
-          className="mt-1.5 rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25"
+          className="mt-1.5 rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 archie-focusable"
         >
           Prepare recommendation
         </button>
@@ -952,7 +952,7 @@ function AudiencePanel() {
           <button
             type="button"
             onClick={runContext}
-            className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25"
+            className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 archie-focusable"
           >
             Resolve
           </button>
@@ -1050,7 +1050,7 @@ function PlanPanel() {
         type="button"
         disabled={!title.trim() || !goals.trim()}
         onClick={run}
-        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50"
+        className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-400/25 disabled:opacity-50 archie-focusable"
       >
         Build proposal
       </button>

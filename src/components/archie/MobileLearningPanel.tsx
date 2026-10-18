@@ -666,7 +666,7 @@ function FreeGenerationCard() {
       <button
         type="button"
         onClick={generate}
-        className="mt-2 rounded-md bg-primary px-2 py-1 font-semibold text-primary-foreground"
+        className="mt-2 rounded-md bg-primary px-2 py-1 font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         Generate on-device
       </button>

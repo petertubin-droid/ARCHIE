@@ -59,7 +59,7 @@ export function CoreSystemsProof() {
           type="button"
           onClick={run}
           disabled={running}
-          className="rounded-lg px-3 py-1 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200 disabled:opacity-50"
+          className="rounded-lg px-3 py-1 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200 disabled:opacity-50 archie-focusable"
         >
           {running ? "Verifying…" : "Re-verify"}
         </button>

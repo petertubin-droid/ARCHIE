@@ -866,8 +866,10 @@ export default function Assistant() {
     <div className="mx-auto max-w-md px-4 pb-24 pt-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Brain className="h-6 w-6 text-primary" />
-          <h1 className="text-lg font-bold">ARCHIE</h1>
+          <Brain className="h-6 w-6 text-primary" aria-hidden="true" />
+          <h1 className="bg-gradient-to-r from-primary via-primary/85 to-primary/60 bg-clip-text text-lg font-bold text-transparent">
+            ARCHIE
+          </h1>
         </div>
         <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
           {isPrivileged ? "Family PWA" : "FRELUX assistant"}
@@ -1090,7 +1092,7 @@ export default function Assistant() {
               />
               <button
                 onClick={handleSend}
-                className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground"
+                className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Send"
               >
                 <ExternalLink className="hidden" /> Send
@@ -1108,13 +1110,13 @@ export default function Assistant() {
             ref={photoInputRef}
             type="file"
             accept="image/*"
-            className="hidden"
+            className="hidden focus:outline-none focus:ring-2 focus:ring-ring"
             onChange={(e) => handlePhotoSelected(e.target.files?.[0])}
           />
           <input
             ref={fileInputRef}
             type="file"
-            className="hidden"
+            className="hidden focus:outline-none focus:ring-2 focus:ring-ring"
             onChange={(e) => handleFileSelected(e.target.files?.[0])}
           />
         </div>
@@ -1227,7 +1229,7 @@ export default function Assistant() {
             <button
               onClick={handleProtect}
               disabled={busy}
-              className="mt-2 w-full rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground"
+              className="mt-2 w-full rounded-lg bg-primary py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               Encrypt & back up
             </button>
@@ -1350,7 +1352,7 @@ export default function Assistant() {
             <button
               onClick={handleRevokeAll}
               disabled={busy}
-              className="mt-2 w-full rounded-lg bg-destructive py-2 text-xs font-semibold text-destructive-foreground"
+              className="mt-2 w-full rounded-lg bg-destructive py-2 text-xs font-semibold text-destructive-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               Stolen phone? Revoke ALL other sessions
             </button>
@@ -1445,7 +1447,7 @@ export default function Assistant() {
                 />
                 <button
                   onClick={handleSetOwnerSecret}
-                  className="mt-2 w-full rounded-lg bg-primary py-2 text-xs font-semibold text-primary-foreground"
+                  className="mt-2 w-full rounded-lg bg-primary py-2 text-xs font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   Set owner credential
                 </button>
@@ -1529,7 +1531,7 @@ export default function Assistant() {
                 <button
                   onClick={handleAuthorize}
                   disabled={busy}
-                  className="w-full rounded-lg bg-primary py-2 text-xs font-semibold text-primary-foreground"
+                  className="w-full rounded-lg bg-primary py-2 text-xs font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   Authorize change (server-side verification)
                 </button>

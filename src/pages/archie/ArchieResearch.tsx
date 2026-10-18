@@ -100,7 +100,7 @@ export default function ArchieResearch() {
           className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"
         >
           {error}{" "}
-          <button className="underline" onClick={() => void load()}>
+          <button className="underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => void load()}>
             Retry
           </button>
         </div>
@@ -147,7 +147,7 @@ export default function ArchieResearch() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <button
-                    className="min-w-0 flex-1 text-left"
+                    className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() =>
                       setOpenId((id) => (id === f.id ? null : f.id))
                     }
