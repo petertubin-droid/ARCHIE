@@ -292,6 +292,13 @@ export function nativeEngineCapabilityManifest(): CapabilityReport[] {
       measuredBy: "code-author.test.ts, cognitive-engine.test.ts",
     },
     {
+      id: "adaptive-planning-engine",
+      description:
+        "Adaptive Planning Engine: Directed Acyclic Graph (DAG) scheduling, PERT critical path analysis, hierarchical task networks (HTN), dynamic contingency fallback branches, adaptive telemetry learning and cost/reliability calibration, checkpoint-preserving partial plan repair, and deep Unified Memory integration with non-negotiable owner authorization gates",
+      maturity: "OPERATIONAL",
+      measuredBy: "adaptive-planning-engine.test.ts",
+    },
+    {
       id: "unified-memory-engine",
       description:
         "Advanced Unified Memory Engine: interconnected Working, Episodic, Semantic, and Long-Term memory systems with intelligent formation, explicit remember/forget directives, historical version tracking, contradiction arbitration, cross-session continuity, and multi-factor hybrid retrieval",
