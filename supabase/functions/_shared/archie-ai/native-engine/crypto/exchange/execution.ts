@@ -207,8 +207,27 @@ export function executeDecision(
       detail: `venue ${adapter.venue} (${adapter.mode}) validated ${req.symbol} ${order.side} qty ${quantity} (dry-run, not executed)`,
     });
 
-    // 5c — place for real
+    // 5c — place for real. EA-01 defense in depth: even an
+    // ok:true placement is only executed when the venue
+    // explicitly reported FILLED — partial/pending/unknown
+    // statuses never open a full-size position.
     const placement = await adapter.placeMarketOrder(order);
+    if (placement.ok && placement.status !== "FILLED") {
+      return {
+        executed: false,
+        position: null,
+        reason: `venue placement returned ok but status "${placement.status}" — an incomplete/unknown fill NEVER opens a position. The venue's raw response is attached; reconcile the partial fill on the venue directly.`,
+        venueRaw: placement.raw,
+        events: [
+          ...events,
+          {
+            atMs: nowMs,
+            id: "EXECUTION_REJECTED",
+            detail: `venue ${adapter.venue} (${adapter.mode}) reported status "${placement.status}" for ${req.symbol} ${order.side} — no position opened`,
+          },
+        ],
+      } satisfies ExecutionResult;
+    }
     if (!placement.ok || placement.orderId === null) {
       return {
         executed: false,

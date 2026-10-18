@@ -197,28 +197,118 @@ export class BinanceSpotAdapter implements VenueAdapter {
       ["quantity", trimQuantity(request.quantity)],
     ]);
     const payload = res.payload as Record<string, unknown> | null;
-    const fills = (payload?.fills ?? []) as Array<{
-      price: string;
-    }>;
-    let filledPrice: number | null = null;
-    if (Array.isArray(fills) && fills.length > 0) {
-      // volume-weighted average fill — honest, computed
-      // from what the venue actually reported
-      let quoted = 0;
-      let based = 0;
-      for (const f of fills) {
-        const p = Number(f.price);
-        if (!Number.isFinite(p)) continue;
-        quoted += p;
-        based += 1;
-      }
-      filledPrice = based > 0 ? quoted / based : null;
+    if (!res.ok) {
+      return {
+        ok: false,
+        orderId: null,
+        filledPrice: null,
+        status: "REJECTED",
+        raw: res.payload,
+      };
     }
+
+    // ---- EA-01 closure: validate what the venue actually
+    // said before claiming a fill. HTTP 200 is NOT a fill.
+    const venueStatus =
+      typeof payload?.status === "string" ? payload.status : null;
+    const executedQty = toPositiveFinite(payload?.executedQty);
+    const quoteQty = toPositiveFinite(payload?.cummulativeFillQuoteQty);
+
+    if (venueStatus === null) {
+      // no venue status field at all — we cannot verify the
+      // order completed; refusing beats guessing "FILLED"
+      return {
+        ok: false,
+        orderId: payload?.orderId != null ? String(payload.orderId) : null,
+        filledPrice: null,
+        status: "MALFORMED_RESPONSE (venue status missing)",
+        raw: res.payload,
+      };
+    }
+
+    // volume-weighted average fill from VALIDATED fills:
+    // price and qty must both be positive finite; any fill
+    // failing validation is excluded, never averaged in.
+    let fillQuote = 0;
+    let fillBase = 0;
+    let validFills = 0;
+    if (Array.isArray(payload?.fills)) {
+      for (const f of payload.fills as Array<{ price?: unknown; qty?: unknown }>) {
+        const p = toPositiveFinite(f?.price);
+        const q = toPositiveFinite(f?.qty);
+        if (p === null || q === null) continue;
+        fillQuote += p * q;
+        fillBase += q;
+        validFills += 1;
+      }
+    }
+    // fallback: the venue's own cumulative quote qty over
+    // executed qty (validated above), else no price claim
+    let filledPrice: number | null =
+      validFills > 0 && fillBase > 0 ? fillQuote / fillBase : null;
+    if (filledPrice === null && quoteQty !== null && executedQty !== null) {
+      filledPrice = quoteQty / executedQty;
+    }
+
+    if (venueStatus === "EXPIRED" || venueStatus === "CANCELED" || venueStatus === "REJECTED") {
+      return {
+        ok: false,
+        orderId: payload?.orderId != null ? String(payload.orderId) : null,
+        filledPrice: null,
+        status: venueStatus,
+        raw: res.payload,
+      };
+    }
+    if (venueStatus === "NEW" || venueStatus === "PENDING" || venueStatus === "PARTIALLY_FILLED") {
+      return {
+        ok: false,
+        orderId: payload?.orderId != null ? String(payload.orderId) : null,
+        filledPrice,
+        status: venueStatus === "PARTIALLY_FILLED"
+          ? "PARTIALLY_FILLED (incomplete — no full position may open)"
+          : venueStatus,
+        raw: res.payload,
+      };
+    }
+    if (venueStatus !== "FILLED") {
+      // unknown venue status string — represented distinctly,
+      // never normalized into FILLED
+      return {
+        ok: false,
+        orderId: payload?.orderId != null ? String(payload.orderId) : null,
+        filledPrice: null,
+        status: `UNKNOWN_VENUE_STATUS (${venueStatus})`,
+        raw: res.payload,
+      };
+    }
+
+    // venue says FILLED — verify executed quantity against
+    // the requested quantity before believing it
+    if (executedQty === null) {
+      return {
+        ok: false,
+        orderId: payload?.orderId != null ? String(payload.orderId) : null,
+        filledPrice: null,
+        status: "MALFORMED_RESPONSE (executedQty missing/invalid)",
+        raw: res.payload,
+      };
+    }
+    const QTY_EPSILON = 1e-8;
+    if (executedQty < request.quantity - QTY_EPSILON) {
+      return {
+        ok: false,
+        orderId: payload?.orderId != null ? String(payload.orderId) : null,
+        filledPrice,
+        status: `PARTIALLY_FILLED (venue said FILLED but executed ${executedQty} of ${request.quantity})`,
+        raw: res.payload,
+      };
+    }
+
     return {
-      ok: res.ok,
+      ok: true,
       orderId: payload?.orderId != null ? String(payload.orderId) : null,
       filledPrice,
-      status: res.ok ? "FILLED" : "REJECTED",
+      status: "FILLED",
       raw: res.payload,
     };
   }
@@ -248,6 +338,13 @@ export class BinanceSpotAdapter implements VenueAdapter {
       locked: Number(b.locked),
     }));
   }
+}
+
+/** Venue numeric fields arrive as strings; accept only
+ *  positive finite values, else null — never NaN into math. */
+function toPositiveFinite(v: unknown): number | null {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** Trim to 6 decimals — the venue's LOT_SIZE filter remains

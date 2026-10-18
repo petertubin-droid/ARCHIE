@@ -287,6 +287,10 @@ describe("BinanceSpotAdapter signed requests", () => {
           status: 200,
           body: {
             orderId: 46666,
+            // EA-01: realistic venue response carries status and
+            // executedQty — HTTP 200 alone is no longer a fill
+            status: "FILLED",
+            executedQty: "1",
             fills: [
               { price: "100.5", qty: "0.5" },
               { price: "101.5", qty: "0.5" },
@@ -310,6 +314,251 @@ describe("BinanceSpotAdapter signed requests", () => {
         "https://testnet.binance.vision/api/v3/order?",
       ),
     ).toBe(true);
+  });
+
+  // -------------------------------------------------------
+  // EA-01 regression suite — fills are validated, statuses
+  // are distinct, and partial fills never open a position.
+  // -------------------------------------------------------
+
+  it("EA-01: unequal-quantity fills average VOLUME-weighted, not by count", async () => {
+    // 1 BTC @ 100 + 3 BTC @ 110 → VWAP = (100 + 330)/4 = 107.5
+    // (the old count-average bug reported 105)
+    const adapter = testnetAdapter(
+      [
+        {
+          status: 200,
+          body: {
+            orderId: 46667,
+            status: "FILLED",
+            executedQty: "4",
+            fills: [
+              { price: "100", qty: "1" },
+              { price: "110", qty: "3" },
+            ],
+          },
+        },
+      ],
+      [],
+    );
+    const res = await adapter.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 4,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res.ok).toBe(true);
+    expect(res.status).toBe("FILLED");
+    expect(res.filledPrice).toBeCloseTo(107.5, 10);
+  });
+
+  it("EA-01: invalid fill entries are excluded, never averaged in", async () => {
+    const adapter = testnetAdapter(
+      [
+        {
+          status: 200,
+          body: {
+            orderId: 1,
+            status: "FILLED",
+            executedQty: "1",
+            cummulativeFillQuoteQty: "105",
+            fills: [
+              { price: "not-a-number", qty: "0.5" },
+              { price: "100", qty: "0.5" },
+              { price: "110", qty: "invalid-qty" },
+              { price: "-5", qty: "0.5" }, // negative price: refused
+              { price: "0", qty: "0.5" }, // zero price: refused
+            ],
+          },
+        },
+      ],
+      [],
+    );
+    const res = await adapter.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 1,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res.ok).toBe(true);
+    // only the one valid fill counts
+    expect(res.filledPrice).toBeCloseTo(100, 10);
+  });
+
+  it("EA-01: no valid fills → venue cumulative quote/qty fallback", async () => {
+    const adapter = testnetAdapter(
+      [
+        {
+          status: 200,
+          body: {
+            orderId: 1,
+            status: "FILLED",
+            executedQty: "2",
+            cummulativeFillQuoteQty: "210",
+            fills: [{ price: "bad", qty: "bad" }],
+          },
+        },
+      ],
+      [],
+    );
+    const res = await adapter.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 2,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res.ok).toBe(true);
+    expect(res.filledPrice).toBeCloseTo(105, 10);
+  });
+
+  it("EA-01: venue PARTIALLY_FILLED never reported as executed", async () => {
+    const adapter = testnetAdapter(
+      [
+        {
+          status: 200,
+          body: {
+            orderId: 1,
+            status: "PARTIALLY_FILLED",
+            executedQty: "0.5",
+            fills: [{ price: "100", qty: "0.5" }],
+          },
+        },
+      ],
+      [],
+    );
+    const res = await adapter.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 1,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.status).toContain("PARTIALLY_FILLED");
+    // the partial VWAP is still reported honestly, but never
+    // treated as a full fill
+    expect(res.filledPrice).toBeCloseTo(100, 10);
+  });
+
+  it("EA-01: venue says FILLED but executedQty short of request → partial, not executed", async () => {
+    const adapter = testnetAdapter(
+      [
+        {
+          status: 200,
+          body: {
+            orderId: 1,
+            status: "FILLED",
+            executedQty: "0.25", // of 1 requested
+            fills: [{ price: "100", qty: "0.25" }],
+          },
+        },
+      ],
+      [],
+    );
+    const res = await adapter.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 1,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.status).toContain("executed 0.25 of 1");
+  });
+
+  it("EA-01: zero-fill / missing executedQty refused as malformed, never FILLED", async () => {
+    const zeroFill = testnetAdapter(
+      [
+        {
+          status: 200,
+          body: { orderId: 1, status: "FILLED", executedQty: "0" },
+        },
+      ],
+      [],
+    );
+    const res = await zeroFill.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 1,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.status).toContain("MALFORMED_RESPONSE");
+
+    const missingStatus = testnetAdapter(
+      [{ status: 200, body: { orderId: 2, fills: [{ price: "1", qty: "1" }] } }],
+      [],
+    );
+    const res2 = await missingStatus.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 1,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res2.ok).toBe(false);
+    expect(res2.status).toContain("venue status missing");
+  });
+
+  it("EA-01: pending and unknown venue statuses represented distinctly", async () => {
+    const pending = testnetAdapter(
+      [{ status: 200, body: { orderId: 1, status: "NEW", executedQty: "0" } }],
+      [],
+    );
+    const res = await pending.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 1,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("NEW");
+
+    const weird = testnetAdapter(
+      [{ status: 200, body: { orderId: 1, status: "SOMETHING_ELSE", executedQty: "1" } }],
+      [],
+    );
+    const res2 = await weird.placeMarketOrder({
+      symbol: "BTC-USDT",
+      side: "BUY",
+      quantity: 1,
+      authorizedByDecisionId: "d1",
+    });
+    expect(res2.ok).toBe(false);
+    expect(res2.status).toContain("UNKNOWN_VENUE_STATUS (SOMETHING_ELSE)");
+  });
+
+  it("EA-01 propagation: ok-with-non-FILLED status opens NO position in the execution engine", async () => {
+    // defense in depth at the engine: even if an adapter
+    // returned ok:true with a non-FILLED status, the engine
+    // refuses — no full-size position from an unknown fill.
+    const adapter = new FakeAdapter({ placeOk: true, filledPrice: 100 });
+    adapter.placeMarketOrder = async (request: VenueOrderRequest): Promise<VenueOrderResult> => ({
+      ok: true,
+      orderId: "42",
+      filledPrice: 100,
+      status: "PARTIALLY_FILLED",
+      raw: { request, partial: true },
+    });
+    const result = await executeDecision(
+      freshEligibleDecision(),
+      limits(),
+      adapter,
+      Date.now(),
+    );
+    expect(result.executed).toBe(false);
+    expect(result.position).toBeNull();
+    expect(result.reason).toContain("NEVER opens a position");
+    expect(result.reason).toContain("PARTIALLY_FILLED");
+  });
+
+  it("EA-01 propagation: a genuinely FILLED placement still opens at the actual fill price", async () => {
+    const adapter = new FakeAdapter({ placeOk: true, filledPrice: 101.5 });
+    const result = await executeDecision(
+      freshEligibleDecision(),
+      limits(),
+      adapter,
+      Date.now(),
+    );
+    expect(result.executed).toBe(true);
+    expect(result.position?.entryPrice).toBe(101.5);
   });
 
   it("surfaces a venue rejection verbatim — ok false, raw attached", async () => {
