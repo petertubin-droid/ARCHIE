@@ -75,11 +75,30 @@ export class WorldModel {
     string,
     { subjectKind: string; objectKind: string }
   >();
+  /** Every version id ever issued or hydrated. A version id is
+   *  unique per OBSERVATION (not per semantic triple): a relation
+   *  that is superseded and later re-observed gets a new id, so
+   *  its earlier row is never overwritten (audit fix, 2026-10-18). */
+  private usedIds = new Set<string>();
   private db: SupabaseLike | null;
   private hydrated = false;
 
   constructor(db?: SupabaseLike) {
     this.db = db ?? null;
+  }
+
+  /** Issue a version id for a new observation of a semantic
+   *  triple. The first version keeps the triple's id (backward
+   *  compatible with existing rows); later versions get a suffix. */
+  private nextVersionId(semanticKey: string): string {
+    let candidate = semanticKey;
+    let n = 1;
+    while (this.usedIds.has(candidate)) {
+      candidate = `${semanticKey}::v${n}`;
+      n += 1;
+    }
+    this.usedIds.add(candidate);
+    return candidate;
   }
 
   /** Load persisted world relations (subject/relation/object
@@ -123,14 +142,19 @@ export class WorldModel {
             row.observed_at ?? row.created_at ?? new Date().toISOString(),
           supersededBy: row.superseded_by ?? null,
         };
+        this.usedIds.add(row.id);
         this.kinds.set(row.id, {
           subjectKind: row.subject_kind || "Concept",
           objectKind: row.object_kind || "Concept",
         });
         this.observations.push(versioned);
-        // Superseded versions are history, not the present.
+        // Superseded versions are history, not the present. The
+        // current view is keyed by the semantic triple.
         if (!versioned.supersededBy) {
-          this.relations.set(row.id, versioned);
+          this.relations.set(
+            idFor(row.subject, row.relation, row.object),
+            versioned,
+          );
         }
       }
       return this.relations.size;
@@ -181,7 +205,7 @@ export class WorldModel {
         existing.confidence + 0.5 * (1 - existing.confidence),
       );
       existing.observedAt = observedAt;
-      const kind = this.kinds.get(id) ?? {
+      const kind = this.kinds.get(existing.id) ?? {
         subjectKind: "Concept",
         objectKind: "Concept",
       };
@@ -191,7 +215,7 @@ export class WorldModel {
           // keeps the kinds and provenance of the stored
           // relation and stamps the new observation time.
           await this.db.from(WORLD_MODEL_TABLE).upsert({
-            id,
+            id: existing.id,
             subject: existing.subject,
             relation: existing.relation,
             object: existing.object,
@@ -213,20 +237,21 @@ export class WorldModel {
     // subject+relation pair replaces the old version in the
     // current view; the old version is retained in the
     // observation log, pointing at its replacement.
+    const versionId = this.nextVersionId(id);
     const supersededIds: string[] = [];
-    for (const rel of this.relations.values()) {
+    for (const [key, rel] of [...this.relations.entries()]) {
       if (
         rel.subject.toLowerCase() === input.subject.toLowerCase() &&
         rel.relation.toLowerCase() === input.relation.toLowerCase() &&
         rel.object.toLowerCase() !== input.object.toLowerCase()
       ) {
-        rel.supersededBy = id;
+        rel.supersededBy = versionId;
         supersededIds.push(rel.id);
-        this.relations.delete(rel.id);
+        this.relations.delete(key);
       }
     }
     const relation: WorldRelation = {
-      id,
+      id: versionId,
       subject: input.subject,
       relation: input.relation,
       object: input.object,
@@ -252,7 +277,7 @@ export class WorldModel {
         });
       }
     }
-    this.kinds.set(id, {
+    this.kinds.set(versionId, {
       subjectKind: input.subjectKind ?? "Concept",
       objectKind: input.objectKind ?? "Concept",
     });
@@ -264,11 +289,11 @@ export class WorldModel {
         for (const oldId of supersededIds) {
           await this.db
             .from(WORLD_MODEL_TABLE)
-            .update({ superseded_by: id })
+            .update({ superseded_by: versionId })
             .eq("id", oldId);
         }
         await this.db.from(WORLD_MODEL_TABLE).upsert({
-          id,
+          id: versionId,
           subject: input.subject,
           relation: input.relation,
           object: input.object,
@@ -397,8 +422,10 @@ export class WorldModel {
     for (const obs of this.observations) {
       const oms = at(obs);
       if (oms > tms) continue;
-      const key =
-        `${obs.subject}::${obs.relation}::${obs.object}`.toLowerCase();
+      // One state slot per subject+relation: supersession only
+      // lets one object be current per slot, so a superseded
+      // object must not stay alive alongside its replacement.
+      const key = `${obs.subject}::${obs.relation}`.toLowerCase();
       const cur = latest.get(key);
       if (!cur || oms > at(cur)) latest.set(key, obs);
     }
