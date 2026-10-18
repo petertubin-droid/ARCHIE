@@ -275,14 +275,21 @@ describe("perception engine", () => {
     const report = PerceptionEngine.supportReport();
     expect(report.supported).toContain("text");
     expect(report.supported).toContain("code");
-    // Native eyes (2026-09-11): image is now SUPPORTED but
-    // bounded — audio stays honestly unsupported.
+    // Native eyes (2026-09-11): image SUPPORTED but bounded.
+    // Multimodal perception (2026-10-18): audio is now SUPPORTED
+    // too (speech transcripts + PCM segmentation, bounded).
     expect(report.supported).toContain("image");
+    expect(report.supported).toContain("audio");
     expect(
       report.unsupported.find((m) => m.modality === "image"),
     ).toBeUndefined();
     expect(
       report.unsupported.find((m) => m.modality === "audio"),
+    ).toBeUndefined();
+    // The honest refusals that REMAIN must stay listed: biometric
+    // voice ID can never authorize privileged actions.
+    expect(
+      report.unsupported.find((m) => m.modality === "biometric_voice_id"),
     ).toBeDefined();
     // The honest bound is stated, and ingestImage refuses
     // garbage instead of faking a percept.
