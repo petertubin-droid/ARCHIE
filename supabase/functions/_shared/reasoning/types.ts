@@ -454,3 +454,226 @@ export const DEFAULT_REASONING_LIMITS: ReasoningLimits = {
   maxEngineInvocations: 2,
   maxBlockChars: 1800,
 };
+
+// =========================================================
+// ADVANCED UNIFIED REASONING ENGINE — EXPANDED TYPES
+// Spec Sections 3, 4, 8, 9, 10
+// =========================================================
+
+/** 1. Analytical Reasoning Types */
+export interface ProblemVariable {
+  name: string;
+  type: "QUANTITATIVE" | "QUALITATIVE" | "BOOLEAN" | "CATEGORICAL";
+  currentValue?: string | number | boolean;
+  domain?: string;
+  dependencies: string[];
+}
+
+export interface RootCauseFactor {
+  factor: string;
+  isRootCause: boolean;
+  confidence: number;
+  evidence: string[];
+  symptoms: string[];
+}
+
+export interface AnalyticalResult {
+  problemSummary: string;
+  variables: ProblemVariable[];
+  dependencies: Array<{ from: string; to: string; relation: string }>;
+  rootCauses: RootCauseFactor[];
+  symptoms: string[];
+  correlationVsCausationNotes: string[];
+  conclusion: string;
+}
+
+/** 2. Deductive Reasoning Types */
+export type DeductiveRuleForm =
+  | "MODUS_PONENS"
+  | "MODUS_TOLLENS"
+  | "HYPOTHETICAL_SYLLOGISM"
+  | "DISJUNCTIVE_SYLLOGISM"
+  | "UNIVERSAL_INSTANTIATION"
+  | "CUSTOM_RULE";
+
+export interface DeductiveRule {
+  id: string;
+  form: DeductiveRuleForm;
+  antecedent: string;
+  consequent: string;
+  statement: string;
+  source: string;
+  weight?: number;
+}
+
+export interface DeductiveDeduction {
+  conclusion: string;
+  ruleId: string;
+  premiseIds: string[];
+  assumptionsUsed: string[];
+  isValid: boolean;
+  isSound: boolean;
+  qualification?: string;
+}
+
+/** 3. Inductive Reasoning Types */
+export interface Observation {
+  id: string;
+  statement: string;
+  timestamp?: string;
+  source: string;
+  verified: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface InductiveGeneralization {
+  hypothesis: string;
+  patternDetected: string;
+  observationCount: number;
+  supportingObservations: string[];
+  counterExamples: string[];
+  sampleSizeAdequate: boolean;
+  potentialBiases: string[];
+  confidenceScore: number;
+  qualification: string;
+}
+
+/** 4. Abductive Reasoning Types */
+export interface AbductiveHypothesis {
+  id: string;
+  explanation: string;
+  explanatoryCoverage: number;
+  assumptionsRequired: string[];
+  contradictoryEvidence: string[];
+  supportingEvidence: string[];
+  plausibilityScore: number;
+  isProven: boolean;
+  discriminatingTest?: string;
+}
+
+export interface AbductiveResult {
+  observedPhenomenon: string;
+  hypotheses: AbductiveHypothesis[];
+  mostPlausibleHypothesisId: string | null;
+  competingAlternatives: string[];
+  missingEvidenceNeeded: string[];
+  recommendedInvestigation: string[];
+}
+
+/** 5. Causal Reasoning Types */
+export interface CausalRelationship {
+  cause: string;
+  effect: string;
+  type: "DIRECT" | "INDIRECT" | "CONTRIBUTING" | "COINCIDENTAL";
+  necessary: boolean;
+  sufficient: boolean;
+  confoundingVariables: string[];
+  evidenceWeight: number;
+}
+
+export interface CausalIntervention {
+  variable: string;
+  proposedChange: string;
+  predictedDirectEffects: string[];
+  predictedSideEffects: string[];
+  reversibility: "REVERSIBLE" | "PARTIALLY_REVERSIBLE" | "IRREVERSIBLE";
+  confidence: number;
+}
+
+export interface CausalResult {
+  graphNodes: string[];
+  relationships: CausalRelationship[];
+  rootCauses: string[];
+  feedbackLoops: Array<{ variables: string[]; loopType: "REINFORCING" | "BALANCING" }>;
+  interventions: CausalIntervention[];
+  caveats: string[];
+}
+
+/** 6. Comparative and Decision Reasoning Types */
+export interface DecisionCriterion {
+  id: string;
+  name: string;
+  weight: number;
+  isHardConstraint: boolean;
+  minThreshold?: number;
+  maxThreshold?: number;
+}
+
+export interface AlternativeOption {
+  id: string;
+  name: string;
+  description: string;
+  scores: Record<string, number>;
+  hardConstraintCompliant: boolean;
+  estimatedCost?: Quantity;
+  estimatedRisk: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  reversibility: "REVERSIBLE" | "ONE_WAY_DOOR";
+  shortTermConsequences: string[];
+  longTermConsequences: string[];
+  opportunityCost: string[];
+}
+
+export interface ComparativeResult {
+  criteria: DecisionCriterion[];
+  alternatives: AlternativeOption[];
+  recommendedOptionId: string | null;
+  tradeOffSummary: string;
+  paretoOptimalSet: string[];
+  sensitivityToWeights: string[];
+  uncertainties: string[];
+}
+
+/** 7. Probabilistic and Uncertainty Reasoning Types */
+export interface ProbabilisticAssessment {
+  uncertaintyType: "ALEATORIC" | "EPISTEMIC" | "MIXED";
+  priorProbability?: number;
+  posteriorProbability?: number;
+  evidenceStrength?: "STRONG" | "MODERATE" | "WEAK" | "ANECDOTAL";
+  confidenceInterval?: { low: number; high: number };
+  scenarioAnalysis: {
+    bestCase: { description: string; likelihood: string };
+    expectedCase: { description: string; likelihood: string };
+    worstCase: { description: string; likelihood: string };
+  };
+  assumptionsDependencies: string[];
+  calibrationHonestyStatement: string;
+}
+
+/** 8. Bounded Recursive Review and Self-Correction Types */
+export interface ReviewIteration {
+  iteration: number;
+  candidateSummary: string;
+  checksExecuted: Array<{ checkName: string; passed: boolean; message: string }>;
+  flawsIdentified: string[];
+  correctionsApplied: string[];
+  converged: boolean;
+}
+
+export interface RecursiveReviewReport {
+  totalIterations: number;
+  maxIterationsAllowed: number;
+  converged: boolean;
+  initialCandidate: string;
+  finalCandidate: string;
+  flawsFixed: string[];
+  remainingUnresolvedFlaws: string[];
+  iterations: ReviewIteration[];
+}
+
+/** 9. Owner Authority Operational Protection */
+export type OwnerAuthorityStage =
+  | "ANALYZE"
+  | "DESIGN"
+  | "PREPARE_PATCH"
+  | "MODIFY_LOCAL"
+  | "CHANGE_PRODUCTION"
+  | "MIGRATE_PRODUCTION"
+  | "DEPLOY_RELEASE";
+
+export interface ProtectedSystemCheck {
+  target: string;
+  stage: OwnerAuthorityStage;
+  requiresOwnerApproval: boolean;
+  isAllowedAutonomously: boolean;
+  rationale: string;
+}

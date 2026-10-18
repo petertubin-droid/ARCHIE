@@ -25,7 +25,48 @@
 import {
   classifyProblem,
   problemIsComplex,
+  selectAdaptiveStrategy,
 } from "./classify.ts";
+import {
+  solveLinearEquation,
+  computeTolerance,
+} from "./math.ts";
+import {
+  runStructuredSelfCheck,
+} from "./validate.ts";
+import {
+  performAnalyticalReasoning,
+} from "./analytical.ts";
+import {
+  evaluateDeductiveInference,
+  checkDeductiveConsistency,
+} from "./deductive.ts";
+import {
+  evaluateInductiveGeneralization,
+  detectObservationTrend,
+} from "./inductive.ts";
+import {
+  evaluateAbductiveExplanations,
+} from "./abductive.ts";
+import {
+  evaluateCausalModel,
+  checkNecessaryAndSufficient,
+} from "./causal.ts";
+import {
+  performComparativeAnalysis,
+} from "./comparative.ts";
+import {
+  assessProblemUncertainty,
+  computeBayesianUpdate,
+  propagateUncertainty,
+} from "./probabilistic.ts";
+import {
+  executeRecursiveReview,
+} from "./review.ts";
+import {
+  checkOwnerAuthority,
+  classifyOperationalStage,
+} from "./authority.ts";
 import {
   attachConstraints,
   chainStep,
@@ -107,6 +148,9 @@ export interface ReasoningRunRecord {
  *  knowledge questions stay OUT (spec §6: do not decompose
  *  simple questions). */
 export function reasoningApplicable(input: ReasoningTurnInput): boolean {
+  if (["greeting", "social", "goodbye"].includes(input.intent)) {
+    return false;
+  }
   if (
     ["math_question", "construction_calc", "task_planning", "problem_solving"].includes(
       input.intent,
@@ -120,6 +164,10 @@ export function reasoningApplicable(input: ReasoningTurnInput): boolean {
   }
   if (containsMathExpression(message) !== null) return true;
   if (detectConversion(message) !== null) return true;
+  if (message.includes("=") && solveLinearEquation(message).ok) return true;
+  if (/\b(?:analytical|deduce|deductive|inductive|abductive|causal|cause and effect|root cause|compare|pareto|what-?if|hypothesis|probabilistic|bayes|tolerance)\b/i.test(message)) {
+    return true;
+  }
   // inference-layer contradictions on this turn mean a
   // conflict the reasoning layer must surface, not hide
   if (input.contradictions.length > 0) return true;
@@ -146,6 +194,8 @@ export async function reasoningGroundTruth(
   const message = input.message ?? "";
   const classification = classifyProblem(message);
   gt.category = classification.primary;
+
+
 
   // ---- problem representation (spec §4) ----
   const knownFacts: ReasoningPremise[] = input.facts.map((f) => ({
@@ -220,6 +270,27 @@ export async function reasoningGroundTruth(
   // ---- decomposition (spec §§6–7) ----
   let subproblems: SubProblem[] = [];
   const complex = problemIsComplex(message, classification);
+
+  // Adaptive Strategy Selection (§4.A)
+  const strategy = selectAdaptiveStrategy(
+    classification.primary,
+    complex ? "COMPLEX" : "MODERATE",
+    input.facts.length,
+    input.contradictions.length,
+  );
+
+  // Owner Authority Boundary (§8)
+  const opStage = classifyOperationalStage(message);
+  const authCheck = checkOwnerAuthority(message, false);
+  if (authCheck.isProtected && !authCheck.allowed) {
+    gt.failure = {
+      kind: "UNSUPPORTED_PREMISE",
+      statement: "PROTECTED OPERATION REQUIRING OWNER APPROVAL: " + authCheck.reason,
+      blocking: [authCheck.reason, "Operational Stage: " + opStage],
+      neededToUnblock: ["Obtain explicit Owner approval before modifying protected production systems."],
+    };
+    gt.metrics.unresolvedProblems = 1;
+  }
   if (complex) {
     const decomp = decomposeProblem(message);
     subproblems = decomp.subproblems;
@@ -449,6 +520,195 @@ export async function reasoningGroundTruth(
     candidates.push(candidate);
     solutionQuantities.push(quantity);
   }
+  // 5. Algebraic linear equation solver (§3.H)
+  const linearEq = message.includes("=") ? solveLinearEquation(message) : null;
+  if (linearEq && linearEq.ok) {
+    const quantity: Quantity = {
+      value: roundTo(linearEq.value, 4),
+      unit: "",
+      dimension: "DIMENSIONLESS",
+    };
+    const step = chainStep({
+      fromIds: [],
+      operation: "ALGEBRAIC_SOLUTION",
+      statement: message + " => " + linearEq.variable + " = " + quantity.value,
+      quantity,
+      source: "CALCULATION",
+      ref: message,
+    });
+    steps.push(step);
+    let candidate: CandidateSolution = {
+      id: "candidate-algebra",
+      description: linearEq.variable + " = " + quantity.value + " (algebraic solution for " + message + ")",
+      premiseIds: [step.produces.id],
+      assumptions: assumptions.map((a) => a.statement),
+      constraintsSatisfied: [],
+      constraintsViolated: [],
+      evidenceState: "EVIDENCED",
+      risks: [],
+      validationState: "PENDING",
+      final: false,
+      hypothetical: false,
+      freluxEngineId: null,
+    };
+    candidate = attachConstraints(candidate, constraints, [quantity]);
+    candidates.push(candidate);
+    solutionQuantities.push(quantity);
+  }
+
+  // 6. Tolerance calculation (§3.H)
+  const tolMatch = /(-?\d+(?:\.\d+)?)\s*(?:±|\+\/-)\s*(\d+(?:\.\d+)?)\s*(%?)/i.exec(message);
+  if (tolMatch) {
+    const nom = parseFloat(tolMatch[1]);
+    const tolVal = parseFloat(tolMatch[2]);
+    const isPct = tolMatch[3] === "%";
+    const tol = computeTolerance(nom, tolVal, isPct);
+    const step = chainStep({
+      fromIds: [],
+      operation: "TOLERANCE_ANALYSIS",
+      statement: tol.nominal + " ± " + tol.toleranceDelta + " (" + (tol.isPercentage ? tolVal + "%" : "absolute") + ") => [" + roundTo(tol.lowerBound, 4) + ", " + roundTo(tol.upperBound, 4) + "]",
+      source: "CALCULATION",
+      ref: "tolerance",
+    });
+    steps.push(step);
+  }
+
+  // 7. Analytical & Diagnostic reasoning (§3.A)
+  if (classification.primary === "ANALYTICAL" || classification.primary === "DIAGNOSTIC") {
+    const analyticalRes = performAnalyticalReasoning(message, knownFacts, constraints);
+    if (analyticalRes.variables.length > 0 || analyticalRes.rootCauses.length > 0) {
+      const step = chainStep({
+        fromIds: knownFacts.map((f) => f.id),
+        operation: "ANALYTICAL_SYNTHESIS",
+        statement: analyticalRes.synthesizedConclusion || ("Identified " + analyticalRes.variables.length + " variables and " + analyticalRes.rootCauses.length + " candidate root causes."),
+        source: "INFERENCE",
+      });
+      steps.push(step);
+      let candidate: CandidateSolution = {
+        id: "candidate-analytical",
+        description: analyticalRes.synthesizedConclusion,
+        premiseIds: knownFacts.map((f) => f.id),
+        assumptions: assumptions.map((a) => a.statement),
+        constraintsSatisfied: [],
+        constraintsViolated: [],
+        evidenceState: analyticalRes.validated ? "EVIDENCED" : "UNSUPPORTED",
+        risks: analyticalRes.rootCauses.map((rc) => rc.factor + " (likelihood: " + rc.likelihood + ")"),
+        validationState: "PENDING",
+        final: false,
+        hypothetical: false,
+        freluxEngineId: null,
+      };
+      candidate = attachConstraints(candidate, constraints, []);
+      candidates.push(candidate);
+    }
+  }
+
+  // 8. Deductive reasoning (§3.B)
+  if (classification.primary === "DEDUCTIVE") {
+    const dedRes = evaluateDeductiveInference(userPremises.length ? userPremises : knownFacts, []);
+    if (dedRes.steps.length > 0) {
+      for (const dStep of dedRes.steps) {
+        steps.push(chainStep({
+          fromIds: dStep.appliedRuleIds,
+          operation: "DEDUCTIVE:" + dStep.type,
+          statement: dStep.conclusion,
+          source: "INFERENCE",
+        }));
+      }
+      if (dedRes.conclusions.length > 0) {
+        let candidate: CandidateSolution = {
+          id: "candidate-deductive",
+          description: dedRes.conclusions.join("; "),
+          premiseIds: dedRes.sound ? knownFacts.map((f) => f.id) : [],
+          assumptions: assumptions.map((a) => a.statement),
+          constraintsSatisfied: [],
+          constraintsViolated: [],
+          evidenceState: dedRes.sound ? "EVIDENCED" : "HYPOTHETICAL",
+          risks: dedRes.valid ? [] : ["Deductive inference lacks complete formal soundness"],
+          validationState: "PENDING",
+          final: false,
+          hypothetical: !dedRes.sound,
+          freluxEngineId: null,
+        };
+        candidates.push(candidate);
+      }
+    }
+  }
+
+  // 9. Inductive reasoning (§3.C)
+  if (classification.primary === "INDUCTIVE") {
+    const numbersInMsg = (message.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    if (numbersInMsg.length >= 3) {
+      const trend = detectObservationTrend(numbersInMsg);
+      const step = chainStep({
+        fromIds: [],
+        operation: "INDUCTIVE_TREND",
+        statement: "Observed trend direction: " + trend.direction + " (slope ~ " + roundTo(trend.slope, 3) + ", R² ~ " + roundTo(trend.rSquared, 3) + ")",
+        source: "INFERENCE",
+      });
+      steps.push(step);
+      let candidate: CandidateSolution = {
+        id: "candidate-inductive",
+        description: "Trend analysis: " + trend.direction + " trend with slope " + roundTo(trend.slope, 3) + " and projected next value ~ " + roundTo(trend.projectedNext, 3) + ".",
+        premiseIds: [],
+        assumptions: assumptions.map((a) => a.statement),
+        constraintsSatisfied: [],
+        constraintsViolated: [],
+        evidenceState: trend.sampleSizeAdequate ? "EVIDENCED" : "UNSUPPORTED",
+        risks: trend.sampleSizeAdequate ? [] : ["Sample size is small for reliable induction"],
+        validationState: "PENDING",
+        final: false,
+        hypothetical: false,
+        freluxEngineId: null,
+      };
+      candidates.push(candidate);
+    }
+  }
+
+  // 10. Comparative reasoning (§3.F)
+  if (classification.primary === "COMPARATIVE") {
+    const compOptions = (message.match(/(?:option|alternative|choice)\s+([a-zA-Z0-9_-]+)/gi) ?? []).map((s, idx) => ({
+      id: "alt-" + (idx + 1),
+      name: s.trim(),
+      scores: { quality: 0.8, cost: 0.7, risk: 0.3 },
+      isReversible: true,
+    }));
+    if (compOptions.length >= 2) {
+      const compRes = performComparativeAnalysis(
+        compOptions,
+        [
+          { name: "quality", weight: 0.5, direction: "MAXIMIZE" as const },
+          { name: "cost", weight: 0.3, direction: "MINIMIZE" as const },
+          { name: "risk", weight: 0.2, direction: "MINIMIZE" as const },
+        ],
+      );
+      if (compRes.rankedAlternatives.length > 0) {
+        const top = compRes.rankedAlternatives[0];
+        const step = chainStep({
+          fromIds: [],
+          operation: "COMPARATIVE_EVALUATION",
+          statement: "Evaluated alternatives: top ranking is " + top.alternative.name + " with score " + top.score + ". Trade-offs: " + top.tradeOffs.join(", "),
+          source: "INFERENCE",
+        });
+        steps.push(step);
+        let candidate: CandidateSolution = {
+          id: "candidate-comparative",
+          description: "Recommended option: " + top.alternative.name + " (rank 1, Pareto optimal: " + top.paretoOptimal + "). Trade-offs: " + (top.tradeOffs.join("; ") || "balanced") + ".",
+          premiseIds: [],
+          assumptions: assumptions.map((a) => a.statement),
+          constraintsSatisfied: [],
+          constraintsViolated: [],
+          evidenceState: "EVIDENCED",
+          risks: top.tradeOffs,
+          validationState: "PENDING",
+          final: false,
+          hypothetical: false,
+          freluxEngineId: null,
+        };
+        candidates.push(candidate);
+      }
+    }
+  }
   if (candidates.length > limits.maxCandidates) {
     candidates.length = limits.maxCandidates;
   }
@@ -544,8 +804,24 @@ export async function reasoningGroundTruth(
     gt.metrics.unresolvedProblems = 1;
   }
 
-  // ---- finalize best candidate ----
+  // ---- finalize best candidate & recursive review / self-check ----
   if (best && validationReport && validationReport.state !== "FAILED") {
+    // Bounded recursive review and self-correction (§4.G)
+    const reviewResult = executeRecursiveReview({
+      candidate: best,
+      premises: knownFacts,
+      constraints,
+      maxIterations: 3,
+    });
+    if (reviewResult.converged && reviewResult.finalCandidate) {
+      best.description = reviewResult.finalCandidate;
+    }
+    // 11-question structured self-check (§4.G, §12)
+    const selfCheckReport = runStructuredSelfCheck(best, problem as any, validationReport);
+    if (selfCheckReport.passed) {
+      gt.metrics.solutionsValidated = 1;
+    }
+
     best.final = true;
     best.validationState = validationReport.state;
     gt.solution = best.description;

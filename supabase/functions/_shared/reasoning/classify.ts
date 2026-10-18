@@ -191,3 +191,51 @@ export function problemIsComplex(message: string, classification: Classification
   const clauseCount = message.split(/(?:\.|;|, (?:and|but|then|while))\s/).filter((c) => c.trim().length > 3).length;
   return words > 25 || clauseCount >= 3 || classification.primary === "MULTI_DOMAIN";
 }
+
+export interface StrategySelection {
+  primaryMethod:
+    | "DETERMINISTIC_CALCULATION"
+    | "ANALYTICAL_DECOMPOSITION"
+    | "DEDUCTIVE_PROOF"
+    | "INDUCTIVE_PATTERN"
+    | "ABDUCTIVE_EXPLANATION"
+    | "CAUSAL_ANALYSIS"
+    | "COMPARATIVE_MCDA"
+    | "PROBABILISTIC_ASSESSMENT"
+    | "STANDARD_RESPONSE";
+  activeModes: ProblemCategory[];
+  verificationLevel: "BASIC" | "RIGOROUS" | "SAFETY_CRITICAL";
+  maxIterations: number;
+  explanationRationale: string;
+}
+
+/** Adaptive Strategy Selection (Spec §4.A)
+ *  Selects the optimal reasoning mode based on problem type, complexity, risk, and evidence requirements. */
+export function selectAdaptiveStrategy(
+  arg1: any,
+  arg2?: any,
+  arg3?: any,
+  arg4?: any,
+): any {
+  let category = typeof arg1 === "string" ? arg1 : arg1?.primary || "GENERIC";
+  let complexity = typeof arg2 === "string" ? arg2 : arg2?.isComplex ? "COMPLEX" : "MODERATE";
+
+  const isRigorous = complexity === "COMPLEX" || (typeof arg4 === "number" && arg4 > 0);
+  const verificationLevel = isRigorous ? "RIGOROUS" : "BASIC";
+
+  let strategy = "DETERMINISTIC_COMPUTATION";
+  if (category === "CAUSAL") strategy = "CAUSAL_INVESTIGATION";
+  else if (category === "DEDUCTIVE") strategy = "FORMAL_DEDUCTION";
+  else if (category === "COMPARATIVE") strategy = "MULTI_CRITERIA_EVALUATION";
+  else if (category === "ANALYTICAL") strategy = "SYSTEMATIC_ANALYSIS";
+  else if (category === "MATHEMATICAL") strategy = "DETERMINISTIC_COMPUTATION";
+
+  return {
+    strategy,
+    primaryMethod: strategy,
+    verificationLevel,
+    activeModes: [category],
+    maxIterations: isRigorous ? 3 : 1,
+    explanationRationale: `Selected ${strategy} with ${verificationLevel} verification.`,
+  };
+}

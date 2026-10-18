@@ -244,11 +244,15 @@ export function findQuantities(text: string): Array<{
   index: number;
 }> {
   const out: Array<{ value: number; unit: string; dimension: Dimension | null; index: number }> = [];
+  const ignoredTokens = new Set(["x", "y", "z"]);
   const re = /(-?\d+(?:\.\d+)?)\s*(m²|m³|°|%|[A-Za-z][A-Za-z²³°]{0,11})?/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const unit = match[2];
     if (!match[1]) continue;
+    if (unit && ignoredTokens.has(unit.toLowerCase()) && /[a-zA-Z]/.test(text.slice(Math.max(0, match.index - 2), match.index))) {
+      continue;
+    }
     out.push({
       value: Number(match[1]),
       unit: unit ? unit.toLowerCase() : "",

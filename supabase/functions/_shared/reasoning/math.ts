@@ -327,3 +327,97 @@ export function roundTo(value: number, decimals = 4): number {
   const f = Math.pow(10, decimals);
   return Math.round(value * f + Number.EPSILON * Math.sign(value)) / f;
 }
+
+/** Solve single-variable linear equations of form: ax + b = c or a*x - b = c */
+export function solveLinearEquation(
+  equation: string,
+): { ok: boolean; variable: string; value: number; steps: string[]; error?: string; equation: string } {
+  const eqMatch = /(-?\d*(?:\.\d+)?\s*\*?\s*[a-zA-Z]\s*(?:[+-]\s*\d+(?:\.\d+)?)?\s*=\s*-?\d+(?:\.\d+)?)/.exec(equation);
+  const eqStr = eqMatch ? eqMatch[1] : equation;
+
+  const parts = eqStr.split("=");
+  if (parts.length !== 2) {
+    return { ok: false, variable: "", value: NaN, steps: [], error: "Equation must have exactly one '=' sign", equation: eqStr };
+  }
+
+  const lhs = parts[0].trim();
+  const rhs = parts[1].trim();
+  const rhsVal = Number(rhs);
+  if (isNaN(rhsVal)) {
+    return { ok: false, variable: "", value: NaN, steps: [], error: "Right-hand side must evaluate to a number", equation: eqStr };
+  }
+
+  // Find variable character
+  const varMatch = /[a-zA-Z]/.exec(lhs);
+  if (!varMatch) {
+    return { ok: false, variable: "", value: NaN, steps: [], error: "No variable found on left-hand side", equation: eqStr };
+  }
+  const variable = varMatch[0];
+
+  const regex = new RegExp(`^\\s*(-?\\d*(?:\\.\\d+)?)?\\s*\\*?\\s*${variable}\\s*(?:([+-])\\s*(\\d+(?:\\.\\d+)?))?\\s*$`);
+  const m = regex.exec(lhs);
+
+  if (!m) {
+    return { ok: false, variable, value: NaN, steps: [], error: `Could not parse linear form for variable '${variable}'`, equation: eqStr };
+  }
+
+  const coeffStr = m[1];
+  const a = (coeffStr === undefined || coeffStr === "" || coeffStr === "+") ? 1 : (coeffStr === "-" ? -1 : Number(coeffStr));
+  const sign = m[2] || "+";
+  const b = m[3] ? (sign === "-" ? -Number(m[3]) : Number(m[3])) : 0;
+
+  if (a === 0) {
+    return { ok: false, variable, value: NaN, steps: [], error: "Coefficient of variable cannot be zero", equation: eqStr };
+  }
+
+  // Steps: ax + b = c => ax = c - b => x = (c - b) / a
+  const cMinusB = rhsVal - b;
+  const solution = cMinusB / a;
+
+  const steps = [
+    `Original equation: ${eqStr}`,
+    b !== 0 ? `Isolate term: ${a !== 1 ? a : ""}${variable} = ${rhsVal} - (${b}) = ${cMinusB}` : `Term isolated: ${a !== 1 ? a : ""}${variable} = ${cMinusB}`,
+    a !== 1 ? `Divide by coefficient: ${variable} = ${cMinusB} / ${a} = ${solution}` : `Solution: ${variable} = ${solution}`,
+  ];
+
+  return {
+    ok: true,
+    variable,
+    value: solution,
+    steps,
+    equation: eqStr,
+  };
+}
+
+export function computeTolerance(
+  nominal: number,
+  toleranceVal: number,
+  isPercentage = false,
+): {
+  nominal: number;
+  lowerBound: number;
+  upperBound: number;
+  min: number;
+  max: number;
+  toleranceDelta: number;
+  toleranceRange: number;
+  isPercentage: boolean;
+  formatted: string;
+} {
+  const delta = isPercentage ? Math.abs(nominal * (toleranceVal / 100)) : Math.abs(toleranceVal);
+  const min = roundTo(nominal - delta, 4);
+  const max = roundTo(nominal + delta, 4);
+  const toleranceRange = roundTo(2 * delta, 4);
+
+  return {
+    nominal,
+    lowerBound: min,
+    upperBound: max,
+    min,
+    max,
+    toleranceDelta: delta,
+    toleranceRange,
+    isPercentage,
+    formatted: `${nominal} ± ${toleranceVal}${isPercentage ? "%" : ""} [${min} to ${max}]`,
+  };
+}
