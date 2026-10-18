@@ -14,11 +14,19 @@ import {
   analyzeSource,
   generateUnitTestScaffold,
 } from "../native-engine/coding.ts";
+import { authorCode, type AuthorSpec } from "../native-engine/code-author.ts";
 import { redactSecrets } from "./security-integrity.ts";
 import type { ImprovementProposal } from "./types.ts";
 
 export type CreationKind =
-  "unit-test-scaffold" | "document" | "calculation" | "plan";
+  | "unit-test-scaffold"
+  | "document"
+  | "calculation"
+  | "plan"
+  // A-3: bounded code authoring from a structured spec —
+  // deterministic composition + self-verification, never
+  // open-ended prose→app generation.
+  | "code-artifact";
 
 export interface CreationRequest {
   kind: CreationKind;
@@ -34,6 +42,8 @@ export interface CreationRequest {
   computedValue?: string;
   /** For plan: step list already produced by the Planner. */
   planSteps?: string[];
+  /** For code-artifact: the structured authoring spec. */
+  authorSpec?: AuthorSpec;
 }
 
 export interface CreationResult {
@@ -145,6 +155,36 @@ export class CreationEngine {
           note: "creation kind not implemented — reported honestly, never faked",
         };
       }
+      case "code-artifact": {
+        if (!req.authorSpec) {
+          this.refused += 1;
+          return {
+            kind: req.kind,
+            ok: false,
+            artifact: "",
+            isCode: false,
+            note: "code-artifact requires a structured authorSpec — prose is not a spec. Refused honestly.",
+          };
+        }
+        const authored = authorCode(req.authorSpec);
+        if (!authored.ok) {
+          this.refused += 1;
+          return {
+            kind: req.kind,
+            ok: false,
+            artifact: "",
+            isCode: false,
+            note: authored.note,
+          };
+        }
+        return {
+          kind: req.kind,
+          ok: true,
+          artifact: authored.code,
+          isCode: true,
+          note: authored.note,
+        };
+      }
     }
   }
 
@@ -154,10 +194,16 @@ export class CreationEngine {
     notImplemented: string[];
   } {
     return {
-      implemented: ["unit-test-scaffold", "document", "calculation", "plan"],
+      implemented: [
+        "unit-test-scaffold",
+        "document",
+        "calculation",
+        "plan",
+        "code-artifact",
+      ],
       notImplemented: [
-        "open-ended generative code authoring (full applications from prose) — requires owner-gated evolution of the coding engine",
-        "image/design generation — no visual synthesis component exists",
+        "open-ended code authoring (full applications from raw prose) — the spec grammar bounds what can be authored; outside it, refused honestly",
+        "image/design generation — no visual synthesis component exists (see B-4 roadmap)",
       ],
     };
   }
