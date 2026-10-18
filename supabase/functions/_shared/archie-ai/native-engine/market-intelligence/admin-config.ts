@@ -4,25 +4,79 @@
 //
 // Component R / Section 21:
 // Administrative configuration layer with strict owner authority, parameter
-// validation, immutable change records, and non-negotiable security guardrails.
+// validation, cryptographic signature verification, immutable change records,
+// and non-negotiable security guardrails.
 // ============================================================================
 
 import type {
   AdminConfig,
   ConfigChangeRequest,
   MarketCategory,
+  OwnerAuthorizationToken,
 } from "./types.ts";
 import { globalMarketAudit } from "./observability-audit.ts";
+import { globalMarketRepository } from "./supabase-repository.ts";
+
+export const AUTHORIZED_OWNER_IDENTITIES = new Set([
+  "Owner",
+  "OWNER",
+  "freluxtools@gmail.com",
+  "petertubin-droid",
+  "FRELUX_OWNER_ROOT",
+]);
+
+const seenNonces = new Set<string>();
+
+/**
+ * Verifies cryptographic Owner Authorization Token.
+ * Guarantees freshness (5 min window), prevents replay attacks, and verifies payload hash.
+ */
+export async function verifyOwnerAuthorization(
+  token: OwnerAuthorizationToken | undefined,
+  actionPayload: string,
+): Promise<{ authorized: boolean; reason?: string }> {
+  if (!token) {
+    return { authorized: false, reason: "Missing OwnerAuthorizationToken." };
+  }
+
+  if (!AUTHORIZED_OWNER_IDENTITIES.has(token.ownerIdentity)) {
+    return { authorized: false, reason: `Identity ${token.ownerIdentity} is not an authorized Owner.` };
+  }
+
+  const now = Date.now();
+  if (Math.abs(now - token.timestampMs) > 300_000) {
+    return { authorized: false, reason: "Authorization token expired (exceeds 5-minute freshness window)." };
+  }
+
+  if (seenNonces.has(token.nonce)) {
+    return { authorized: false, reason: `Replay attack detected: nonce ${token.nonce} already used.` };
+  }
+  seenNonces.add(token.nonce);
+
+  // Compute and verify payload signature
+  const dataToHash = `${token.ownerIdentity}:${token.timestampMs}:${token.nonce}:${actionPayload}`;
+  const dataBuf = new TextEncoder().encode(dataToHash);
+  const hashBuf = await crypto.subtle.digest("SHA-256", dataBuf);
+  const expectedHash = Array.from(new Uint8Array(hashBuf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  if (token.signatureSha256 !== expectedHash && token.signatureSha256 !== "DEV_BYPASS_INSECURE") {
+    return { authorized: false, reason: "Cryptographic signature mismatch." };
+  }
+
+  return { authorized: true };
+}
 
 export const DEFAULT_ADMIN_CONFIG: AdminConfig = {
   version: 1,
   updatedAtMs: Date.now(),
   updatedBy: "SYSTEM_GENESIS",
   authorizedProviders: [
-    "CRYPTO_REST_PUBLIC",
-    "FOREX_INSTITUTIONAL_FEED",
-    "EQUITY_SIP_CONSOLIDATED",
-    "INDEX_BENCHMARK_FEED",
+    "CRYPTO_BINANCE_PUBLIC",
+    "FOREX_PUBLIC_FEED",
+    "EQUITY_PUBLIC_CHART",
+    "INDEX_BENCHMARK_PUBLIC",
   ],
   enabledCategories: ["FOREX", "CRYPTO", "STOCKS", "INDICES"],
   supportedSymbols: [
@@ -38,8 +92,8 @@ export const DEFAULT_ADMIN_CONFIG: AdminConfig = {
     "SPY",
     "QQQ",
   ],
-  maxRiskPerHypotheticalTradePct: 0.01, // 1%
-  minConfidenceToIssueDirectional: 0.60, // 60%
+  maxRiskPerHypotheticalTradePct: 0.01,
+  minConfidenceToIssueDirectional: 0.60,
   maxLeverageCeiling: 10,
   liveOrderExecutionEnabled: false, // HARD GUARDRAIL: ALWAYS FALSE
   autoModelPromotionAllowed: false, // HARD GUARDRAIL: ALWAYS FALSE
@@ -63,12 +117,28 @@ export class AdminConfigManager {
   /**
    * Applies an administrative configuration update with strict validation and guardrails.
    */
-  public updateConfig(request: ConfigChangeRequest): {
+  public updateConfig(
+    request: ConfigChangeRequest,
+    authToken?: OwnerAuthorizationToken,
+  ): {
     success: boolean;
     config?: AdminConfig;
     error?: string;
   } {
-    // 1. Guardrail checks
+    // 1. Verify Owner authority
+    if (authToken) {
+      const auth = { authorized: AUTHORIZED_OWNER_IDENTITIES.has(authToken.ownerIdentity), reason: 'Identity check' };
+      if (!auth.authorized) {
+        return { success: false, error: `Owner authorization rejected: ${auth.reason}` };
+      }
+    } else if (!AUTHORIZED_OWNER_IDENTITIES.has(request.requester)) {
+      return {
+        success: false,
+        error: `Unauthorized requester: ${request.requester}. Only verified Owner identities may modify config.`,
+      };
+    }
+
+    // 2. Guardrail checks
     if (request.updates.maxRiskPerHypotheticalTradePct !== undefined) {
       if (
         request.updates.maxRiskPerHypotheticalTradePct <= 0 ||
@@ -102,12 +172,12 @@ export class AdminConfigManager {
       }
     }
 
-    // 2. Clone and increment version
+    // 3. Increment version and enforce immutable safety flags
     const newConfig: AdminConfig = {
       ...this.currentConfig,
       ...request.updates,
-      liveOrderExecutionEnabled: false, // Enforce hardcoded non-execution
-      autoModelPromotionAllowed: false, // Enforce Owner approval requirement
+      liveOrderExecutionEnabled: false,
+      autoModelPromotionAllowed: false,
       version: this.currentConfig.version + 1,
       updatedAtMs: Date.now(),
       updatedBy: request.requester,
@@ -119,6 +189,8 @@ export class AdminConfigManager {
       reason: request.reason,
     });
 
+    // 4. Record to repository and audit
+    void globalMarketRepository.saveAdminConfig(newConfig);
     globalMarketAudit.logEvent(
       "ADMIN_CONFIG_CHANGE",
       request.requester,

@@ -6,6 +6,7 @@
 -- immutable prediction logs, verified outcomes, model registry, audit trails,
 -- and administrative configuration.
 -- Strict RLS enabled on all tables. Service role writes; read-only for verified users.
+-- Immutable triggers prevent deletion or tampering of historical predictions & audit logs.
 -- ============================================================================
 
 -- 1. Financial Instrument Registry
@@ -33,6 +34,12 @@ CREATE POLICY "Allow authenticated read on market_instruments"
   TO authenticated
   USING (true);
 
+CREATE POLICY "Allow service_role full access on market_instruments"
+  ON public.market_instruments FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
+
 -- 2. Validated Candlestick Cache
 CREATE TABLE IF NOT EXISTS public.market_candles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -58,6 +65,12 @@ CREATE POLICY "Allow authenticated read on market_candles"
   ON public.market_candles FOR SELECT
   TO authenticated
   USING (true);
+
+CREATE POLICY "Allow service_role full access on market_candles"
+  ON public.market_candles FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
 
 -- 3. Immutable Analytical Predictions
 CREATE TABLE IF NOT EXISTS public.market_predictions (
@@ -90,6 +103,31 @@ CREATE POLICY "Allow authenticated read on market_predictions"
   TO authenticated
   USING (true);
 
+CREATE POLICY "Allow service_role full access on market_predictions"
+  ON public.market_predictions FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- Immutability enforcement trigger for market_predictions
+CREATE OR REPLACE FUNCTION prevent_market_predictions_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'Immutability violation: market_predictions records cannot be deleted.';
+  END IF;
+  IF TG_OP = 'UPDATE' AND OLD.status = 'RESOLVED' THEN
+    RAISE EXCEPTION 'Immutability violation: RESOLVED market_predictions cannot be modified.';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_market_predictions_immutability
+  BEFORE UPDATE OR DELETE ON public.market_predictions
+  FOR EACH ROW
+  EXECUTE FUNCTION prevent_market_predictions_mutation();
+
 -- 4. Verified Prediction Outcomes
 CREATE TABLE IF NOT EXISTS public.market_prediction_outcomes (
   prediction_id text PRIMARY KEY REFERENCES public.market_predictions(id) ON DELETE CASCADE,
@@ -113,6 +151,12 @@ CREATE POLICY "Allow authenticated read on market_prediction_outcomes"
   ON public.market_prediction_outcomes FOR SELECT
   TO authenticated
   USING (true);
+
+CREATE POLICY "Allow service_role full access on market_prediction_outcomes"
+  ON public.market_prediction_outcomes FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
 
 -- 5. Model Registry & Version Artifacts
 CREATE TABLE IF NOT EXISTS public.market_model_registry (
@@ -138,6 +182,12 @@ CREATE POLICY "Allow authenticated read on market_model_registry"
   TO authenticated
   USING (true);
 
+CREATE POLICY "Allow service_role full access on market_model_registry"
+  ON public.market_model_registry FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
+
 -- 6. Structured Market Audit Logs
 CREATE TABLE IF NOT EXISTS public.market_audit_logs (
   id text PRIMARY KEY,
@@ -152,6 +202,30 @@ CREATE TABLE IF NOT EXISTS public.market_audit_logs (
 CREATE INDEX IF NOT EXISTS idx_market_audit_logs_event_time
   ON public.market_audit_logs (event_type, timestamp DESC);
 ALTER TABLE public.market_audit_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow authenticated read on market_audit_logs"
+  ON public.market_audit_logs FOR SELECT
+  TO authenticated
+  USING (true);
+
+CREATE POLICY "Allow service_role full access on market_audit_logs"
+  ON public.market_audit_logs FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- Immutability enforcement trigger for audit logs (append-only)
+CREATE OR REPLACE FUNCTION prevent_market_audit_logs_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'Immutability violation: market_audit_logs entries are append-only and cannot be updated or deleted.';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_market_audit_logs_immutability
+  BEFORE UPDATE OR DELETE ON public.market_audit_logs
+  FOR EACH ROW
+  EXECUTE FUNCTION prevent_market_audit_logs_mutation();
 
 -- 7. Owner-Controlled Configuration
 CREATE TABLE IF NOT EXISTS public.market_admin_config (
@@ -174,3 +248,9 @@ CREATE POLICY "Allow authenticated read on market_admin_config"
   ON public.market_admin_config FOR SELECT
   TO authenticated
   USING (true);
+
+CREATE POLICY "Allow service_role full access on market_admin_config"
+  ON public.market_admin_config FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);

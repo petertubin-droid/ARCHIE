@@ -18,6 +18,13 @@ export type CandleInterval =
   | "1d"
   | "1w";
 
+export type CandleSourceType =
+  | "provider_live"
+  | "provider_historical"
+  | "replayed"
+  | "manual"
+  | "synthetic_test";
+
 export type DataFreshnessClass =
   | "LIVE"
   | "DELAYED"
@@ -36,6 +43,8 @@ export interface MarketCandle {
   quoteVolume?: number;
   tradesCount?: number;
   isFinalized: boolean;
+  source?: CandleSourceType;
+  dataQualityFlags?: string[];
 }
 
 export interface InstrumentSpec {
@@ -392,6 +401,7 @@ export interface MarketDataRequest {
   interval: CandleInterval;
   limit: number;
   sinceMs?: number;
+  allowOfflineFallback?: boolean;
 }
 
 export interface IngestionResult {
@@ -636,4 +646,46 @@ export interface BlueLineReconstructionReport {
   allEvaluations: BlueLineCandidateEvaluation[];
   isDefinitivelyIdentified: boolean;
   uncertaintyNotes: string[];
+}
+
+
+// ----------------------------------------------------------------------------
+// Market Sessions, Calibration & Persistence Types
+// ----------------------------------------------------------------------------
+
+export type MarketSessionState =
+  | "REGULAR_HOURS"
+  | "PRE_MARKET"
+  | "POST_MARKET"
+  | "WEEKEND_CLOSED"
+  | "HOLIDAY_CLOSED";
+
+export interface ReliabilityBin {
+  binIndex: number;
+  binStart: number;
+  binEnd: number;
+  meanConfidence: number;
+  empiricalAccuracy: number;
+  sampleCount: number;
+}
+
+export interface CalibrationEvaluation {
+  brierScore: number;
+  brierSkillScore: number;
+  expectedCalibrationError: number;
+  logLoss: number;
+  reliabilityBins: ReliabilityBin[];
+}
+
+export interface OwnerAuthorizationToken {
+  ownerIdentity: string;
+  timestampMs: number;
+  nonce: string;
+  signatureSha256: string;
+}
+
+export interface PersistenceEngineStatus {
+  storageEngine: "supabase_postgres" | "in_memory_fallback";
+  isDatabaseConnected: boolean;
+  lastSyncTimestampMs?: number;
 }

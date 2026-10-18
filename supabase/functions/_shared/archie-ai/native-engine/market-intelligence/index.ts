@@ -32,3 +32,4 @@ export * from "./observability-audit.ts";
 export * from "./admin-config.ts";
 export * from "./blue-line-investigation.ts";
 export * from "./market-api.ts";
+export * from "./supabase-repository.ts";

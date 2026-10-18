@@ -2,18 +2,23 @@
 // ARCHIE MARKET INTELLIGENCE — STATISTICAL MACHINE LEARNING ENGINE
 // supabase/functions/_shared/archie-ai/native-engine/market-intelligence/machine-learning.ts
 //
-// Interpretable statistical and machine learning models.
-// Features:
+// Interpretable statistical and machine learning models:
 // - Logistic regression with L2 regularization (Ridge) and Gradient Descent
-// - Platt Scaling / Isotonic probability calibration
-// - Brier score, Log-Loss, and ROC-AUC evaluation metrics
-// - Decision Stump baseline classifier for benchmark comparison
+// - True Platt Scaling probability calibration with parameter optimization
+// - Expected Calibration Error (ECE) and reliability binning (Section 12)
+// - Brier score, Log-Loss, ROC-AUC, and Brier Skill Score (BSS) benchmarks
+// - Out-of-Distribution (OOD) detection
 // - Chronological validation without random shuffling
 // ============================================================================
 
-import type { FeatureVector, ModelPrediction } from "./types.ts";
+import type {
+  FeatureVector,
+  ModelPrediction,
+  CalibrationEvaluation,
+  ReliabilityBin,
+} from "./types.ts";
 
-export const MODEL_ARTIFACT_VERSION = "v1.1.0-archie-logistic-calibrated";
+export const MODEL_ARTIFACT_VERSION = "v1.2.0-archie-logistic-calibrated";
 
 export interface LogisticWeights {
   bias: number;
@@ -28,21 +33,25 @@ export interface LogisticWeights {
 export const DEFAULT_LOGISTIC_WEIGHTS: LogisticWeights = {
   bias: 0.02,
   w_returnLag1: 1.25,
-  w_rsiNormalized: -0.45, // Mean reversion component
+  w_rsiNormalized: -0.45,
   w_macdHistToAtr: 0.85,
   w_distFromEma21Atr: 0.40,
   w_bbPercentB: -0.30,
-  w_regimeEncoding: 0.75, // Trend following component
+  w_regimeEncoding: 0.75,
 };
 
 export interface PlattCalibrator {
   scaleA: number;
   biasB: number;
+  isFitted: boolean;
+  trainingSamplesCount: number;
 }
 
-export const DEFAULT_PLATT_CALIBRATOR: PlattCalibrator = {
+export const UNCALIBRATED_PLATT: PlattCalibrator = {
   scaleA: -1.0,
   biasB: 0.0,
+  isFitted: false,
+  trainingSamplesCount: 0,
 };
 
 export function sigmoid(z: number): number {
@@ -62,30 +71,125 @@ export function computeRawLogit(features: FeatureVector, weights: LogisticWeight
 }
 
 /**
- * Computes raw logit and calibrated probabilities from feature vector.
+ * Fits Platt scaling parameters (A, B) via Gradient Descent with Bayesian target smoothing
+ * P(y=1 | z) = 1 / (1 + exp(A*z + B))
+ * Platt (1999) target smoothing: y_pos = (N_pos + 1) / (N_pos + 2), y_neg = 1 / (N_neg + 2)
+ */
+export function fitPlattCalibration(
+  validationSamples: Array<{ logit: number; label: 0 | 1 }>,
+  options: { epochs?: number; lr?: number } = {},
+): PlattCalibrator {
+  if (validationSamples.length < 5) {
+    return { ...UNCALIBRATED_PLATT };
+  }
+
+  const epochs = options.epochs ?? 250;
+  const lr = options.lr ?? 0.05;
+
+  const nPos = validationSamples.filter((s) => s.label === 1).length;
+  const nNeg = validationSamples.length - nPos;
+  const tPos = (nPos + 1) / (nPos + 2);
+  const tNeg = 1 / (nNeg + 2);
+
+  let A = 0.0;
+  let B = Math.log((nNeg + 1) / (nPos + 1));
+
+  const N = validationSamples.length;
+
+  for (let epoch = 0; epoch < epochs; epoch++) {
+    let gradA = 0;
+    let gradB = 0;
+
+    for (const sample of validationSamples) {
+      const target = sample.label === 1 ? tPos : tNeg;
+      const fApB = sample.logit * A + B;
+      const p = sigmoid(fApB);
+      const err = p - target;
+
+      gradA += err * sample.logit;
+      gradB += err;
+    }
+
+    A -= lr * (gradA / N);
+    B -= lr * (gradB / N);
+  }
+
+  return {
+    scaleA: A,
+    biasB: B,
+    isFitted: true,
+    trainingSamplesCount: validationSamples.length,
+  };
+}
+
+/**
+ * Detects whether a feature vector is Out-of-Distribution (OOD).
+ */
+export function detectOutOfDistribution(
+  features: FeatureVector,
+  bounds: {
+    maxAbsReturnLag1?: number;
+    maxAbsDistAtr?: number;
+  } = {},
+): {
+  isOod: boolean;
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  const maxReturn = bounds.maxAbsReturnLag1 ?? 0.15; // 15% 1-candle jump
+  const maxDistAtr = bounds.maxAbsDistAtr ?? 6.0; // 6 ATR distance from EMA
+
+  if (Math.abs(features.returnLag1) > maxReturn) {
+    reasons.push(`Return lag 1 (${(features.returnLag1 * 100).toFixed(2)}%) exceeds OOD bound.`);
+  }
+
+  if (Math.abs(features.distFromEma21Atr) > maxDistAtr) {
+    reasons.push(`Distance from EMA (${features.distFromEma21Atr.toFixed(2)} ATR) exceeds OOD bound.`);
+  }
+
+  if (features.rsiNormalized < 0 || features.rsiNormalized > 1) {
+    reasons.push(`RSI normalized (${features.rsiNormalized}) outside valid [0, 1] range.`);
+  }
+
+  return {
+    isOod: reasons.length > 0,
+    reasons,
+  };
+}
+
+/**
+ * Computes raw logit, calibrated probabilities, and OOD assessment.
  */
 export function predictProbabilities(
   features: FeatureVector,
   weights = DEFAULT_LOGISTIC_WEIGHTS,
-  calibrator = DEFAULT_PLATT_CALIBRATOR,
+  calibrator = UNCALIBRATED_PLATT,
   horizonCandles = 5,
 ): ModelPrediction {
   const z = computeRawLogit(features, weights);
+  const ood = detectOutOfDistribution(features);
 
-  // Platt scaling: P(y=1 | z) = sigmoid(-(A*z + B))
-  const calibratedP = sigmoid(-(calibrator.scaleA * z + calibrator.biasB));
+  // If calibrated: P(y=1 | z) = sigmoid(A*z + B). If uncalibrated: sigmoid(z).
+  const probRaw = calibrator.isFitted
+    ? sigmoid(calibrator.scaleA * z + calibrator.biasB)
+    : sigmoid(z);
 
   let probBullish = 0;
   let probBearish = 0;
   let probNeutral = 0;
 
-  if (calibratedP > 0.55) {
-    probBullish = Math.min(0.85, calibratedP);
-    probBearish = Math.max(0.05, 1 - calibratedP);
+  if (ood.isOod) {
+    // Widened uncertainty on OOD
+    probNeutral = 0.80;
+    probBullish = 0.10;
+    probBearish = 0.10;
+  } else if (probRaw > 0.55) {
+    probBullish = Math.min(0.85, probRaw);
+    probBearish = Math.max(0.05, 1 - probRaw);
     probNeutral = Math.max(0, 1 - probBullish - probBearish);
-  } else if (calibratedP < 0.45) {
-    probBearish = Math.min(0.85, 1 - calibratedP);
-    probBullish = Math.max(0.05, calibratedP);
+  } else if (probRaw < 0.45) {
+    probBearish = Math.min(0.85, 1 - probRaw);
+    probBullish = Math.max(0.05, probRaw);
     probNeutral = Math.max(0, 1 - probBullish - probBearish);
   } else {
     probNeutral = 0.60;
@@ -93,7 +197,6 @@ export function predictProbabilities(
     probBearish = 0.20;
   }
 
-  // Normalize to guarantee sum == 1.0
   const sum = probBullish + probBearish + probNeutral;
   probBullish /= sum;
   probBearish /= sum;
@@ -108,9 +211,8 @@ export function predictProbabilities(
     probBearish: Math.round(probBearish * 1000) / 1000,
     probNeutral: Math.round(probNeutral * 1000) / 1000,
     expectedReturnMean: Math.round((probBullish - probBearish) * 0.015 * 10000) / 10000,
-    expectedReturnStd: 0.02,
-    isCalibrated: true,
-    brierScoreEstimate: 0.18,
+    expectedReturnStd: ood.isOod ? 0.05 : 0.02,
+    isCalibrated: calibrator.isFitted,
     invalidationPrice: 0,
   };
 }
@@ -180,8 +282,124 @@ export function trainLogisticRegression(
 }
 
 /**
- * Calculates Area Under the Receiver Operating Characteristic Curve (ROC-AUC).
- * Uses Wilcoxon-Mann-Whitney rank-sum statistic.
+ * Calculates Expected Calibration Error (ECE) and reliability diagram bins.
+ */
+export function calculateExpectedCalibrationError(
+  predictions: Array<{ prob: number; label: 0 | 1 }>,
+  numBins = 10,
+): { ece: number; bins: ReliabilityBin[] } {
+  if (predictions.length === 0) {
+    return { ece: 0, bins: [] };
+  }
+
+  const binStep = 1.0 / numBins;
+  const bins: ReliabilityBin[] = [];
+  let totalWeightedError = 0;
+  const N = predictions.length;
+
+  for (let b = 0; b < numBins; b++) {
+    const binStart = b * binStep;
+    const binEnd = (b + 1) * binStep;
+
+    const inBin = predictions.filter(
+      (p) => p.prob >= binStart && (b === numBins - 1 ? p.prob <= binEnd : p.prob < binEnd),
+    );
+
+    if (inBin.length === 0) {
+      bins.push({
+        binIndex: b,
+        binStart,
+        binEnd,
+        meanConfidence: (binStart + binEnd) / 2,
+        empiricalAccuracy: 0,
+        sampleCount: 0,
+      });
+      continue;
+    }
+
+    const meanConf = inBin.reduce((acc, p) => acc + p.prob, 0) / inBin.length;
+    const accuracy = inBin.reduce((acc, p) => acc + p.label, 0) / inBin.length;
+    const binError = Math.abs(accuracy - meanConf);
+
+    totalWeightedError += (inBin.length / N) * binError;
+
+    bins.push({
+      binIndex: b,
+      binStart,
+      binEnd,
+      meanConfidence: Math.round(meanConf * 1000) / 1000,
+      empiricalAccuracy: Math.round(accuracy * 1000) / 1000,
+      sampleCount: inBin.length,
+    });
+  }
+
+  return {
+    ece: Math.round(totalWeightedError * 1000) / 1000,
+    bins,
+  };
+}
+
+/**
+ * Calculates Brier Score for a series of probabilistic predictions.
+ */
+export function calculateBrierScore(
+  predictions: Array<{ prob: number; outcome: 0 | 1 }>,
+): number {
+  if (predictions.length === 0) return 0;
+  const sum = predictions.reduce((acc, p) => acc + (p.prob - p.outcome) ** 2, 0);
+  return sum / predictions.length;
+}
+
+/**
+ * Calculates Brier Skill Score (BSS) against a benchmark.
+ * BSS = 1 - (Brier_model / Brier_ref).
+ * BSS > 0 indicates superior skill over reference benchmark.
+ */
+export function calculateBrierSkillScore(modelBrier: number, referenceBrier: number): number {
+  if (referenceBrier <= 0) return 0;
+  return Math.round((1 - modelBrier / referenceBrier) * 1000) / 1000;
+}
+
+/**
+ * Evaluates full calibration metrics against empirical labels.
+ */
+export function evaluateCalibration(
+  predictions: Array<{ prob: number; label: 0 | 1 }>,
+): CalibrationEvaluation {
+  const brier = calculateBrierScore(predictions.map((p) => ({ prob: p.prob, outcome: p.label })));
+  const logLoss = calculateLogLoss(predictions);
+  const { ece, bins } = calculateExpectedCalibrationError(predictions, 10);
+
+  // Reference: constant class prior baseline
+  const posCount = predictions.filter((p) => p.label === 1).length;
+  const prior = predictions.length > 0 ? posCount / predictions.length : 0.5;
+  const refBrier = calculateBrierScore(predictions.map((p) => ({ prob: prior, outcome: p.label })));
+  const bss = calculateBrierSkillScore(brier, refBrier);
+
+  return {
+    brierScore: Math.round(brier * 1000) / 1000,
+    brierSkillScore: bss,
+    expectedCalibrationError: ece,
+    logLoss: Math.round(logLoss * 1000) / 1000,
+    reliabilityBins: bins,
+  };
+}
+
+/**
+ * Calculates Binary Log-Loss (Cross-Entropy).
+ */
+export function calculateLogLoss(predictions: Array<{ prob: number; label: 0 | 1 }>): number {
+  if (predictions.length === 0) return 0;
+  const eps = 1e-6;
+  const sum = predictions.reduce((acc, item) => {
+    const p = Math.max(eps, Math.min(1 - eps, item.prob));
+    return acc - (item.label * Math.log(p) + (1 - item.label) * Math.log(1 - p));
+  }, 0);
+  return sum / predictions.length;
+}
+
+/**
+ * Calculates Area Under the ROC Curve (ROC-AUC).
  */
 export function calculateRocAuc(predictions: Array<{ prob: number; label: 0 | 1 }>): number {
   if (predictions.length === 0) return 0.5;
@@ -204,33 +422,7 @@ export function calculateRocAuc(predictions: Array<{ prob: number; label: 0 | 1 
 }
 
 /**
- * Calculates Brier Score for a series of probabilistic predictions.
- * Lower is better (0.0 is perfect, 0.25 is random binary guess).
- */
-export function calculateBrierScore(
-  predictions: Array<{ prob: number; outcome: 0 | 1 }>,
-): number {
-  if (predictions.length === 0) return 0;
-  const sum = predictions.reduce((acc, p) => acc + (p.prob - p.outcome) ** 2, 0);
-  return sum / predictions.length;
-}
-
-/**
- * Calculates Binary Log-Loss (Cross-Entropy).
- */
-export function calculateLogLoss(predictions: Array<{ prob: number; label: 0 | 1 }>): number {
-  if (predictions.length === 0) return 0;
-  const eps = 1e-6;
-  const sum = predictions.reduce((acc, item) => {
-    const p = Math.max(eps, Math.min(1 - eps, item.prob));
-    return acc - (item.label * Math.log(p) + (1 - item.label) * Math.log(1 - p));
-  }, 0);
-  return sum / predictions.length;
-}
-
-/**
  * Chronological Out-of-Sample Train/Validation Split.
- * Strictly forbids random shuffling of time series observations.
  */
 export function chronologicalSplit<T>(
   data: T[],

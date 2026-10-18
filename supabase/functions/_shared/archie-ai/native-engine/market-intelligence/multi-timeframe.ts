@@ -4,12 +4,15 @@
 //
 // Section 10 Multi-Timeframe Analysis:
 // Resampling, synchronization, causal non-lookahead alignment,
-// conflicting timeframe detection, and explicit disagreement reporting.
+// session and trading hours engine, conflicting timeframe detection,
+// and explicit disagreement reporting.
 // ============================================================================
 
 import type {
   MarketCandle,
   CandleInterval,
+  MarketCategory,
+  MarketSessionState,
   TimeframeAnalysisResult,
   MultiTimeframeAssessment,
 } from "./types.ts";
@@ -30,13 +33,87 @@ export function intervalToMilliseconds(interval: CandleInterval): number {
   }
 }
 
+// ----------------------------------------------------------------------------
+// Market Session and Calendar Engine
+// ----------------------------------------------------------------------------
+
+export class MarketSessionEngine {
+  /**
+   * Evaluates the market session state for a given category and UTC timestamp.
+   */
+  public static getSessionState(
+    category: MarketCategory,
+    timestampMs: number,
+  ): MarketSessionState {
+    const d = new Date(timestampMs);
+    const day = d.getUTCDay(); // 0 is Sun, 6 is Sat
+    const hour = d.getUTCHours();
+    const minute = d.getUTCMinutes();
+    const totalMinutes = hour * 60 + minute;
+
+    if (category === "CRYPTO") {
+      return "REGULAR_HOURS"; // 24/7 continuous
+    }
+
+    if (category === "FOREX") {
+      // Forex closes Friday 21:00 UTC through Sunday 21:00 UTC
+      if (day === 5 && totalMinutes >= 21 * 60) return "WEEKEND_CLOSED";
+      if (day === 6) return "WEEKEND_CLOSED";
+      if (day === 0 && totalMinutes < 21 * 60) return "WEEKEND_CLOSED";
+      return "REGULAR_HOURS";
+    }
+
+    if (category === "STOCKS" || category === "INDICES") {
+      // Weekend closed
+      if (day === 0 || day === 6) return "WEEKEND_CLOSED";
+
+      // US Regular Trading Hours: 09:30 - 16:00 EST (14:30 - 21:00 UTC)
+      const rthOpen = 14 * 60 + 30; // 14:30 UTC
+      const rthClose = 21 * 60; // 21:00 UTC
+      const preMarketOpen = 9 * 60; // 09:00 UTC (04:00 EST)
+      const postMarketClose = 25 * 60; // 01:00 UTC next day (20:00 EST)
+
+      if (totalMinutes >= rthOpen && totalMinutes < rthClose) {
+        return "REGULAR_HOURS";
+      } else if (totalMinutes >= preMarketOpen && totalMinutes < rthOpen) {
+        return "PRE_MARKET";
+      } else if (totalMinutes >= rthClose || totalMinutes < 1 * 60) {
+        return "POST_MARKET";
+      }
+      return "WEEKEND_CLOSED";
+    }
+
+    return "REGULAR_HOURS";
+  }
+
+  /**
+   * Distinguishes scheduled session closures (weekends/holidays) from anomalous data feed drops.
+   */
+  public static classifyGap(
+    category: MarketCategory,
+    gapStartMs: number,
+    gapEndMs: number,
+  ): "SCHEDULED_SESSION_CLOSE" | "ANOMALOUS_FEED_GAP" {
+    if (category === "CRYPTO") {
+      return "ANOMALOUS_FEED_GAP"; // Crypto never closes
+    }
+    const stateStart = this.getSessionState(category, gapStartMs);
+    const stateEnd = this.getSessionState(category, gapEndMs);
+    if (stateStart === "WEEKEND_CLOSED" || stateEnd === "WEEKEND_CLOSED") {
+      return "SCHEDULED_SESSION_CLOSE";
+    }
+    return "ANOMALOUS_FEED_GAP";
+  }
+}
+
 /**
  * Resamples lower timeframe finalized candles into higher timeframe bars.
- * Guaranteed no lookahead: only full periods with all underlying lower bars are finalized.
+ * Session-aware and guaranteed no lookahead.
  */
 export function resampleCandles(
   baseCandles: MarketCandle[],
   targetInterval: CandleInterval,
+  category: MarketCategory = "CRYPTO",
 ): MarketCandle[] {
   if (baseCandles.length === 0) return [];
 
@@ -81,6 +158,7 @@ export function resampleCandles(
       close,
       volume,
       isFinalized: true,
+      source: list[0].source ?? "provider_historical",
     });
   }
 
@@ -120,7 +198,8 @@ export function analyzeSingleTimeframe(
   const indicators = computeIndicatorSuite(candles);
   const structure = analyzeMarketStructure(candles);
   const patterns = detectCandlePatterns(candles);
-  const adxRes = adx(candles); const adxVal = adxRes ? adxRes.adx : 0;
+  const adxRes = adx(candles);
+  const adxVal = adxRes ? adxRes.adx : 0;
 
   let trendDirection: "BULLISH" | "BEARISH" | "SIDEWAYS" | "UNCERTAIN" = "UNCERTAIN";
   if (indicators.ema9 !== null && indicators.ema21 !== null) {
@@ -175,7 +254,9 @@ export function evaluateMultiTimeframeAlignment(
     (htf.trendDirection === "BULLISH" && ltf.trendDirection === "BEARISH") ||
     (htf.trendDirection === "BEARISH" && ltf.trendDirection === "BULLISH")
   ) {
-    conflicts.push(`Trend direction conflict: HTF (${htf.interval}) is ${htf.trendDirection} while LTF (${ltf.interval}) is ${ltf.trendDirection}.`);
+    conflicts.push(
+      `Trend direction conflict: HTF (${htf.interval}) is ${htf.trendDirection} while LTF (${ltf.interval}) is ${ltf.trendDirection}.`,
+    );
     score -= 0.30;
   }
 
