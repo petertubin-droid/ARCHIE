@@ -12,6 +12,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { AuthProvider } from "@/lib/auth";
 import Assistant from "@/pages/Assistant";
 import ArchieTrading from "@/pages/archie/ArchieTrading";
 import ArchieDevices from "@/pages/archie/ArchieDevices";
@@ -23,6 +24,7 @@ import "@/styles/animations.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
+    <AuthProvider>
     <BrowserRouter>
       <Routes>
         {/* The conversational front door — home is the owner
@@ -40,5 +42,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route path="*" element={<Assistant />} />
       </Routes>
     </BrowserRouter>
+    </AuthProvider>
   </React.StrictMode>,
 );
