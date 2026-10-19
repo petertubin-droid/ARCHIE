@@ -341,6 +341,29 @@ export interface OwnerAutomationSettings {
 // Risk Governance
 // ---------------------------------------------------------
 
+/**
+ * Hard risk limits enforced by the risk governance engine.
+ * All monetary fields are in the account quote currency.
+ */
+export interface RiskLimits {
+  /** Absolute monetary cap of risk (stop distance) per trade. */
+  maxRiskPerTradeQuote: number;
+  /** Max risk per trade as a percentage of account equity. */
+  maxRiskPerTradePct: number;
+  /** Max aggregate notional exposure across open positions. */
+  maxTotalExposureQuote: number;
+  /** Max leverage the margin calculation may assume. */
+  maxLeverage: number;
+  /** Max cumulative daily drawdown as a percentage of equity. */
+  maxDailyDrawdownPct: number;
+  /** Max simultaneous open positions. */
+  maxOpenPositions: number;
+  /** Max tolerated spread in pips at entry. */
+  maxSpreadPips: number;
+  /** Owner emergency kill switch: blocks all new entries. */
+  killSwitchEngaged: boolean;
+}
+
 export interface RiskEvaluationRequest {
   symbol: string;
   side: "BUY" | "SELL";

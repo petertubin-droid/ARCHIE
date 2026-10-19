@@ -67,6 +67,7 @@ import {
   type DryRunResult,
   type ExecuteResult,
 } from "@/lib/archie/trading-client";
+import { getBrokerRegistry } from "@/lib/archie/trading/broker-center";
 
 export type MarketCategory = "ALL" | "CRYPTO" | "FOREX" | "COMMODITIES" | "INDICES" | "STOCKS";
 export type Timeframe = "1s" | "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1D" | "1W";
