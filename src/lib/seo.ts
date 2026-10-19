@@ -12,7 +12,13 @@ export interface SeoMeta {
   structuredDataArray?: object[];
 }
 
-const SITE_URL = import.meta.env.VITE_SITE_URL ?? 'https://freluxtools.netlify.app';
+// VITE_SITE_URL wins when set (e.g. a custom domain); otherwise
+// the DEPLOYED origin is the truth — never a hardcoded FRELUX URL.
+const SITE_URL =
+  import.meta.env.VITE_SITE_URL ??
+  (typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'https://archie.netlify.app');
 const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.png`;
 
 function setMeta(attr: 'name' | 'property', key: string, content: string) {
