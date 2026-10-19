@@ -292,3 +292,34 @@ export function evaluateMultiTimeframeAlignment(
     synthesis,
   };
 }
+
+
+export interface MultiTimeframeSummary {
+  macroTrend: "BULLISH" | "BEARISH" | "SIDEWAYS" | "UNCERTAIN";
+  executionTrend: "BULLISH" | "BEARISH" | "SIDEWAYS" | "UNCERTAIN";
+  hasConflict: boolean;
+  confluenceScore: number;
+  assessment: MultiTimeframeAssessment;
+}
+
+export function analyzeMultiTimeframeConfluence(input: {
+  symbol: string;
+  category: MarketCategory;
+  baseCandles1m: MarketCandle[];
+}): MultiTimeframeSummary {
+  const ltf = analyzeSingleTimeframe(input.baseCandles1m, "1m");
+  const itfCandles = resampleCandles(input.baseCandles1m, "15m");
+  const itf = analyzeSingleTimeframe(itfCandles, "15m");
+  const htfCandles = resampleCandles(input.baseCandles1m, "1h");
+  const htf = analyzeSingleTimeframe(htfCandles, "1h");
+
+  const assessment = evaluateMultiTimeframeAlignment(htf, itf, ltf);
+
+  return {
+    macroTrend: htf.trendDirection,
+    executionTrend: ltf.trendDirection,
+    hasConflict: assessment.conflicts.length > 0,
+    confluenceScore: Math.round(assessment.confluenceScore * 100),
+    assessment,
+  };
+}

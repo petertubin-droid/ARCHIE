@@ -16,6 +16,11 @@ import type {
   ModelPrediction,
   CalibrationEvaluation,
   ReliabilityBin,
+  DecisionStump,
+  DecisionTreeEnsemble,
+  HMMRegimeModel,
+  VolatilityForecast,
+  MarketRegimeType,
 } from "./types.ts";
 
 export const MODEL_ARTIFACT_VERSION = "v1.2.0-archie-logistic-calibrated";
@@ -432,5 +437,322 @@ export function chronologicalSplit<T>(
   return {
     train: data.slice(0, cutoff),
     test: data.slice(cutoff),
+  };
+}
+
+
+// ----------------------------------------------------------------------------
+// Decision Tree / Stump Ensemble (Section 11 Model Family Diversity)
+// ----------------------------------------------------------------------------
+
+export function trainDecisionStumpEnsemble(
+  samples: Array<{ features: FeatureVector; label: 0 | 1 }>,
+  options: { numStumps?: number; learningRate?: number } = {},
+): DecisionTreeEnsemble {
+  const numStumps = options.numStumps ?? 5;
+  const lr = options.learningRate ?? 0.2;
+  const stumps: DecisionStump[] = [];
+
+  const featureKeys: Array<keyof FeatureVector> = [
+    "rsiNormalized",
+    "returnLag1",
+    "macdHistToAtr",
+    "distFromEma21Atr",
+    "bbPercentB",
+    "adxNormalized",
+  ];
+
+  // Initialize sample weights uniformly
+  const N = samples.length;
+  if (N === 0) {
+    return {
+      modelId: "decision-stump-ensemble-v1",
+      stumps: [],
+      learningRate: lr,
+      targetClass: "BULLISH_CONTINUATION",
+    };
+  }
+
+  let sampleWeights = new Array(N).fill(1 / N);
+
+  for (let s = 0; s < numStumps; s++) {
+    let bestError = Infinity;
+    let bestStump: DecisionStump = {
+      featureIndex: 0,
+      featureName: featureKeys[0],
+      threshold: 0,
+      leftValue: 0.5,
+      rightValue: 0.5,
+      weight: 1.0,
+      error: 0.5,
+    };
+
+    for (let f = 0; f < featureKeys.length; f++) {
+      const key = featureKeys[f];
+      const values = samples.map((sample) => Number(sample.features[key]));
+      const sortedValues = [...values].sort((a, b) => a - b);
+      const step = Math.max(1, Math.floor(sortedValues.length / 5));
+
+      for (let i = 0; i < sortedValues.length; i += step) {
+        const threshold = sortedValues[i];
+
+        // Evaluate predictions
+        let weightedErr = 0;
+        let leftSum = 0;
+        let leftCount = 0;
+        let rightSum = 0;
+        let rightCount = 0;
+
+        for (let j = 0; j < N; j++) {
+          const val = Number(samples[j].features[key]);
+          const lbl = samples[j].label;
+          if (val <= threshold) {
+            leftSum += lbl;
+            leftCount++;
+          } else {
+            rightSum += lbl;
+            rightCount++;
+          }
+        }
+
+        const leftVal = leftCount > 0 ? leftSum / leftCount : 0.5;
+        const rightVal = rightCount > 0 ? rightSum / rightCount : 0.5;
+
+        for (let j = 0; j < N; j++) {
+          const val = Number(samples[j].features[key]);
+          const pred = val <= threshold ? (leftVal >= 0.5 ? 1 : 0) : (rightVal >= 0.5 ? 1 : 0);
+          if (pred !== samples[j].label) {
+            weightedErr += sampleWeights[j];
+          }
+        }
+
+        if (weightedErr < bestError) {
+          bestError = weightedErr;
+          bestStump = {
+            featureIndex: f,
+            featureName: key,
+            threshold,
+            leftValue: leftVal,
+            rightValue: rightVal,
+            weight: 1.0,
+            error: weightedErr,
+          };
+        }
+      }
+    }
+
+    const clampedError = Math.max(0.001, Math.min(0.999, bestError));
+    const alpha = 0.5 * Math.log((1 - clampedError) / clampedError);
+    bestStump.weight = alpha;
+    stumps.push(bestStump);
+
+    // Update sample weights
+    let weightSum = 0;
+    for (let j = 0; j < N; j++) {
+      const val = Number(samples[j].features[bestStump.featureName as keyof FeatureVector]);
+      const pred = val <= bestStump.threshold ? bestStump.leftValue : bestStump.rightValue;
+      const binPred = pred >= 0.5 ? 1 : 0;
+      const factor = binPred === samples[j].label ? Math.exp(-alpha) : Math.exp(alpha);
+      sampleWeights[j] *= factor;
+      weightSum += sampleWeights[j];
+    }
+    if (weightSum > 0) {
+      sampleWeights = sampleWeights.map((w) => w / weightSum);
+    }
+  }
+
+  return {
+    modelId: `decision-stump-ensemble-${Date.now()}`,
+    stumps,
+    learningRate: lr,
+    targetClass: "BULLISH_CONTINUATION",
+  };
+}
+
+export function predictDecisionStumpEnsemble(
+  features: FeatureVector,
+  ensemble: DecisionTreeEnsemble,
+): number {
+  if (ensemble.stumps.length === 0) return 0.5;
+
+  let totalScore = 0;
+  let totalWeight = 0;
+
+  for (const stump of ensemble.stumps) {
+    const val = Number(features[stump.featureName as keyof FeatureVector]);
+    const pred = val <= stump.threshold ? stump.leftValue : stump.rightValue;
+    totalScore += pred * stump.weight;
+    totalWeight += Math.abs(stump.weight);
+  }
+
+  return totalWeight > 0 ? Math.max(0.01, Math.min(0.99, totalScore / totalWeight)) : 0.5;
+}
+
+// ----------------------------------------------------------------------------
+// Hidden Markov Model (HMM) Market Regime Classifier (Section 11)
+// ----------------------------------------------------------------------------
+
+export function classifyMarketRegimeHMM(returns: number[], currentVolatility: number): HMMRegimeModel {
+  // 3-state Gaussian emissions:
+  // State 0: TRENDING_BULL (positive mean, low-medium vol)
+  // State 1: TRENDING_BEAR (negative mean, elevated vol)
+  // State 2: RANGING / CHOPPY (near-zero mean, low vol)
+
+  if (returns.length < 5) {
+    return {
+      states: [
+        { stateIndex: 0, name: "TRENDING_BULL", meanReturn: 0.002, varianceReturn: 0.0001, posteriorProbability: 0.33 },
+        { stateIndex: 1, name: "TRENDING_BEAR", meanReturn: -0.002, varianceReturn: 0.0002, posteriorProbability: 0.33 },
+        { stateIndex: 2, name: "RANGING", meanReturn: 0.0, varianceReturn: 0.00005, posteriorProbability: 0.34 },
+      ],
+      transitionMatrix: [
+        [0.85, 0.05, 0.10],
+        [0.05, 0.85, 0.10],
+        [0.10, 0.10, 0.80],
+      ],
+      mostLikelyRegime: "RANGING",
+      entropy: 1.09,
+    };
+  }
+
+  const recentReturns = returns.slice(-30);
+  const mean = recentReturns.reduce((a, b) => a + b, 0) / recentReturns.length;
+  const variance = recentReturns.reduce((acc, r) => acc + (r - mean) ** 2, 0) / recentReturns.length || 0.0001;
+
+  // Gaussian densities
+  const gBull = Math.exp(-((mean - 0.003) ** 2) / (2 * variance));
+  const gBear = Math.exp(-((mean - (-0.003)) ** 2) / (2 * variance));
+  const gRange = Math.exp(-((mean - 0.0) ** 2) / (2 * variance));
+
+  const sumG = gBull + gBear + gRange || 1;
+  const pBull = gBull / sumG;
+  const pBear = gBear / sumG;
+  const pRange = gRange / sumG;
+
+  const states = [
+    { stateIndex: 0, name: "TRENDING_BULL" as MarketRegimeType, meanReturn: 0.003, varianceReturn: variance, posteriorProbability: pBull },
+    { stateIndex: 1, name: "TRENDING_BEAR" as MarketRegimeType, meanReturn: -0.003, varianceReturn: variance * 1.5, posteriorProbability: pBear },
+    { stateIndex: 2, name: "RANGING" as MarketRegimeType, meanReturn: 0.0, varianceReturn: variance * 0.8, posteriorProbability: pRange },
+  ];
+
+  let bestState = states[0];
+  for (const s of states) {
+    if (s.posteriorProbability > bestState.posteriorProbability) {
+      bestState = s;
+    }
+  }
+
+  // Entropy H(X) = -sum(p * log(p))
+  const entropy = -[pBull, pBear, pRange].reduce((acc, p) => (p > 0 ? acc + p * Math.log(p) : acc), 0);
+
+  return {
+    states,
+    transitionMatrix: [
+      [0.85, 0.05, 0.10],
+      [0.05, 0.85, 0.10],
+      [0.10, 0.10, 0.80],
+    ],
+    mostLikelyRegime: bestState.name,
+    entropy: Math.round(entropy * 100) / 100,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// GARCH(1,1) & Volatility Surface Forecaster (Section 12)
+// ----------------------------------------------------------------------------
+
+export function forecastVolatilityGarch(
+  returns: number[],
+  currentClose: number,
+  atr14: number,
+  horizonCandles = 10,
+): VolatilityForecast {
+  if (returns.length < 5) {
+    const defaultVol = 0.18;
+    const band = currentClose * (defaultVol / Math.sqrt(252)) * Math.sqrt(horizonCandles);
+    return {
+      currentAtr: atr14,
+      annualizedHistoricalVolPct: defaultVol * 100,
+      garchConditionalVolPct: defaultVol * 100,
+      forecastHorizonCandles: horizonCandles,
+      upperExpectedBand: currentClose + band,
+      lowerExpectedBand: currentClose - band,
+    };
+  }
+
+  // Standard GARCH(1,1) parameters: omega + alpha * eps^2 + beta * sigma^2
+  const omega = 0.000002;
+  const alpha = 0.10;
+  const beta = 0.85;
+
+  let sigmaSq = returns.slice(0, 10).reduce((acc, r) => acc + r * r, 0) / 10 || 0.0001;
+
+  for (let i = 1; i < returns.length; i++) {
+    const epsSq = returns[i - 1] * returns[i - 1];
+    sigmaSq = omega + alpha * epsSq + beta * sigmaSq;
+  }
+
+  const dailyVol = Math.sqrt(sigmaSq);
+  const annualizedVolPct = dailyVol * Math.sqrt(252) * 100;
+
+  // Expected move over horizon H: sigma_H = dailyVol * sqrt(H)
+  const expectedMove = currentClose * dailyVol * Math.sqrt(horizonCandles);
+
+  return {
+    currentAtr: Math.round(atr14 * 1000) / 1000,
+    annualizedHistoricalVolPct: Math.round(annualizedVolPct * 10) / 10,
+    garchConditionalVolPct: Math.round(annualizedVolPct * 10) / 10,
+    forecastHorizonCandles: horizonCandles,
+    upperExpectedBand: Math.round((currentClose + expectedMove) * 100) / 100,
+    lowerExpectedBand: Math.round((currentClose - expectedMove) * 100) / 100,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Multi-Model Ensemble Predictor (Section 11 & 12)
+// ----------------------------------------------------------------------------
+
+export function predictUnifiedEnsembleProbabilities(
+  features: FeatureVector,
+  returnsHistory: number[],
+  weights = DEFAULT_LOGISTIC_WEIGHTS,
+  calibrator = UNCALIBRATED_PLATT,
+  treeEnsemble?: DecisionTreeEnsemble,
+): ModelPrediction {
+  // 1. Logistic Regression Model with Platt Calibration
+  const basePred = predictProbabilities(features, weights, calibrator);
+
+  // 2. Decision Tree Ensemble Model
+  let treeProb = 0.5;
+  if (treeEnsemble && treeEnsemble.stumps.length > 0) {
+    treeProb = predictDecisionStumpEnsemble(features, treeEnsemble);
+  }
+
+  // 3. HMM Regime Prior
+  const hmm = classifyMarketRegimeHMM(returnsHistory, features.rangeToAtr);
+
+  // Synthesize weighted probabilities (50% Calibrated Logistic, 30% Tree Ensemble, 20% HMM Prior)
+  let probBullish = basePred.probBullish * 0.50 + treeProb * 0.30;
+  let probBearish = basePred.probBearish * 0.50 + (1 - treeProb) * 0.30;
+
+  if (hmm.mostLikelyRegime === "TRENDING_BULL") {
+    probBullish += 0.20 * hmm.states[0].posteriorProbability;
+  } else if (hmm.mostLikelyRegime === "TRENDING_BEAR") {
+    probBearish += 0.20 * hmm.states[1].posteriorProbability;
+  }
+
+  let probNeutral = Math.max(0.05, 1.0 - probBullish - probBearish);
+  const total = probBullish + probBearish + probNeutral;
+
+  probBullish /= total;
+  probBearish /= total;
+  probNeutral /= total;
+
+  return {
+    ...basePred,
+    modelVersion: "v1.3.0-archie-multi-model-ensemble",
+    probBullish: Math.round(probBullish * 1000) / 1000,
+    probBearish: Math.round(probBearish * 1000) / 1000,
+    probNeutral: Math.round(probNeutral * 1000) / 1000,
   };
 }

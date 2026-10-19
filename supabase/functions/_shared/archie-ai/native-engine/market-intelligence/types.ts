@@ -45,6 +45,7 @@ export interface MarketCandle {
   isFinalized: boolean;
   source?: CandleSourceType;
   dataQualityFlags?: string[];
+  isSyntheticMock?: boolean;
 }
 
 export interface InstrumentSpec {
@@ -688,4 +689,73 @@ export interface PersistenceEngineStatus {
   storageEngine: "supabase_postgres" | "in_memory_fallback";
   isDatabaseConnected: boolean;
   lastSyncTimestampMs?: number;
+}
+
+// ----------------------------------------------------------------------------
+// Advanced ML Ensembles, HMM & Microstructure Types (Sections 11, 12, 13)
+// ----------------------------------------------------------------------------
+
+export interface DecisionStump {
+  featureIndex: number;
+  featureName: string;
+  threshold: number;
+  leftValue: number;
+  rightValue: number;
+  weight: number;
+  error: number;
+}
+
+export interface DecisionTreeEnsemble {
+  modelId: string;
+  stumps: DecisionStump[];
+  learningRate: number;
+  targetClass: string;
+}
+
+export interface HMMRegimeState {
+  stateIndex: number;
+  name: MarketRegimeType;
+  meanReturn: number;
+  varianceReturn: number;
+  posteriorProbability: number;
+}
+
+export interface HMMRegimeModel {
+  states: HMMRegimeState[];
+  transitionMatrix: number[][];
+  mostLikelyRegime: MarketRegimeType;
+  entropy: number;
+}
+
+export interface VolatilityForecast {
+  currentAtr: number;
+  annualizedHistoricalVolPct: number;
+  garchConditionalVolPct: number;
+  forecastHorizonCandles: number;
+  upperExpectedBand: number;
+  lowerExpectedBand: number;
+}
+
+export interface MarketImpactEstimate {
+  participationRate: number;
+  permanentImpactBps: number;
+  temporaryImpactBps: number;
+  totalEstimatedSlippageQuote: number;
+}
+
+export interface StreamingCandleUpdate {
+  symbol: string;
+  category: MarketCategory;
+  candle: MarketCandle;
+  sequenceNumber: number;
+  timestampMs: number;
+}
+
+export interface StreamSubscription {
+  subscriptionId: string;
+  symbol: string;
+  category: MarketCategory;
+  interval: CandleInterval;
+  active: boolean;
+  lastHeartbeatMs: number;
 }

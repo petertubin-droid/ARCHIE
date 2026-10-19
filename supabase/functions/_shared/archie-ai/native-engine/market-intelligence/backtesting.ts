@@ -20,6 +20,10 @@ export interface BacktestOptions {
   slippagePct: number; // e.g. 0.0005 (5 bps)
   commissionPerTradeQuote: number;
   spreadQuote: number; // e.g. 0.0001
+  useMarketImpact?: boolean;
+  averageDailyVolume?: number;
+  dailyVolatilityPct?: number;
+  annualSwapRatePct?: number;
 }
 
 export const DEFAULT_BACKTEST_OPTIONS: BacktestOptions = {
@@ -28,7 +32,37 @@ export const DEFAULT_BACKTEST_OPTIONS: BacktestOptions = {
   slippagePct: 0.0005,
   commissionPerTradeQuote: 1.0,
   spreadQuote: 0.0001,
+  useMarketImpact: false,
+  averageDailyVolume: 1_000_000,
+  dailyVolatilityPct: 0.02,
+  annualSwapRatePct: 0.02,
 };
+
+/**
+ * Calculates square-root law market impact (Almgren-Chriss model).
+ */
+export function calculateSquareRootMarketImpact(
+  quantityUnits: number,
+  averageDailyVolume: number,
+  dailyVolatilityPct = 0.02,
+  gamma = 0.5,
+): number {
+  if (averageDailyVolume <= 0 || quantityUnits <= 0) return 0;
+  const participation = quantityUnits / averageDailyVolume;
+  return gamma * dailyVolatilityPct * Math.sqrt(Math.min(participation, 1.0));
+}
+
+/**
+ * Calculates overnight swap or funding fee.
+ */
+export function calculateOvernightSwapFee(
+  quoteInvested: number,
+  holdingDays: number,
+  annualSwapRatePct = 0.02,
+): number {
+  if (quoteInvested <= 0 || holdingDays <= 0) return 0;
+  return quoteInvested * (annualSwapRatePct / 365) * holdingDays;
+}
 
 export type SignalGenerator = (
   candlesSlice: MarketCandle[],
@@ -56,6 +90,9 @@ export function runBacktest(
   let currentEquity = options.initialEquityQuote;
 
   let activePosition: BacktestPosition | null = null;
+  let activeEntryIndex = 0;
+  const holdingCandlesList: number[] = [];
+  let totalCostAccumulated = 0;
 
   for (let i = 30; i < candles.length; i++) {
     const candle = candles[i];
@@ -104,7 +141,17 @@ export function runBacktest(
           ? (finalExitPrice - activePosition.entryPrice) * activePosition.quantityUnits
           : (activePosition.entryPrice - finalExitPrice) * activePosition.quantityUnits;
 
-        const netPnl = grossPnl - activePosition.commissionCost;
+        const holdingCount = Math.max(1, i - activeEntryIndex);
+        holdingCandlesList.push(holdingCount);
+
+        const holdingDays = (candle.closeTimeMs - activePosition.entryTimestamp) / 86_400_000;
+        const swapCost = calculateOvernightSwapFee(
+          activePosition.quoteInvested,
+          holdingDays,
+          options.annualSwapRatePct ?? 0.02,
+        );
+
+        const netPnl = grossPnl - activePosition.commissionCost - swapCost;
 
         activePosition.exitTimestamp = candle.closeTimeMs;
         activePosition.exitPrice = finalExitPrice;
@@ -112,6 +159,8 @@ export function runBacktest(
         activePosition.netPnl = netPnl;
         activePosition.returnPct = (netPnl / activePosition.quoteInvested) * 100;
         activePosition.exitReason = exitReason;
+
+        totalCostAccumulated += activePosition.commissionCost + activePosition.slippageCost + swapCost;
 
         currentEquity += netPnl;
         positions.push(activePosition);
@@ -143,6 +192,17 @@ export function runBacktest(
           stopDistance > 0 ? options.fixedRiskPerTradeQuote / stopDistance : 1;
         const quoteInvested = quantityUnits * entryPrice;
 
+        const dynamicImpact = options.useMarketImpact
+          ? calculateSquareRootMarketImpact(
+              quantityUnits,
+              options.averageDailyVolume ?? 1_000_000,
+              options.dailyVolatilityPct ?? 0.02,
+            )
+          : 0;
+
+        const effectiveSlippagePct = options.slippagePct + dynamicImpact;
+
+        activeEntryIndex = i;
         activePosition = {
           id: `trade-${positions.length + 1}`,
           entryTimestamp: candle.closeTimeMs,
@@ -154,7 +214,7 @@ export function runBacktest(
           quantityUnits,
           quoteInvested,
           grossPnl: 0,
-          slippageCost: entryBasePrice * options.slippagePct * quantityUnits * 2,
+          slippageCost: entryBasePrice * effectiveSlippagePct * quantityUnits * 2,
           commissionCost: options.commissionPerTradeQuote * 2,
           netPnl: 0,
           returnPct: 0,
@@ -163,6 +223,37 @@ export function runBacktest(
     }
 
     equityCurve.push(currentEquity);
+  }
+
+  // Close any position still open at end of data (HORIZON_EXPIRY)
+  if (activePosition && candles.length > 0) {
+    const lastCandle = candles[candles.length - 1];
+    const isLong = activePosition.direction === "LONG";
+    const slipFactor = isLong ? 1 - options.slippagePct : 1 + options.slippagePct;
+    const finalExitPrice = lastCandle.close * slipFactor;
+    const grossPnl = isLong
+      ? (finalExitPrice - activePosition.entryPrice) * activePosition.quantityUnits
+      : (activePosition.entryPrice - finalExitPrice) * activePosition.quantityUnits;
+    const holdingCount = Math.max(1, candles.length - 1 - activeEntryIndex);
+    holdingCandlesList.push(holdingCount);
+    const holdingDays = Math.max(0.01, (lastCandle.closeTimeMs - activePosition.entryTimestamp) / 86_400_000);
+    const swapCost = calculateOvernightSwapFee(
+      activePosition.quoteInvested,
+      holdingDays,
+      options.annualSwapRatePct ?? 0.02,
+    );
+    const netPnl = grossPnl - activePosition.commissionCost - swapCost;
+    activePosition.exitTimestamp = lastCandle.closeTimeMs;
+    activePosition.exitPrice = finalExitPrice;
+    activePosition.grossPnl = grossPnl;
+    activePosition.netPnl = netPnl;
+    activePosition.returnPct = (netPnl / activePosition.quoteInvested) * 100;
+    activePosition.exitReason = "HORIZON_EXPIRY";
+
+    totalCostAccumulated += activePosition.commissionCost + activePosition.slippageCost + swapCost;
+    currentEquity += netPnl;
+    positions.push(activePosition);
+    activePosition = null;
   }
 
   // 3. Compute Metrics
@@ -224,8 +315,10 @@ export function runBacktest(
       maxDrawdownPct: maxDd,
       sharpeRatio,
       sortinoRatio,
-      avgHoldingCandles: 4.2,
-      totalCostPaid: totalTrades * options.commissionPerTradeQuote * 2,
+      avgHoldingCandles: holdingCandlesList.length > 0
+        ? Math.round((holdingCandlesList.reduce((a, b) => a + b, 0) / holdingCandlesList.length) * 10) / 10
+        : 0,
+      totalCostPaid: Math.round(totalCostAccumulated * 100) / 100,
     },
   };
 }
