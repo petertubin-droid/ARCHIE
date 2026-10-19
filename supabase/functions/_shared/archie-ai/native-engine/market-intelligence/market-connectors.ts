@@ -689,6 +689,8 @@ import type {
   WebSocketStreamConfig,
   WebSocketConnectionStatus,
   StreamConnectionMetrics,
+  HistoricalGapBackfillRequest,
+  HistoricalGapBackfillResult,
 } from "./types.ts";
 
 export type CandleStreamListener = (update: StreamingCandleUpdate) => void;
@@ -878,6 +880,17 @@ export class ResilientWebSocketClient {
     this.metrics.lastError = error instanceof Error ? error.message : String(error);
   }
 
+  public send(payload: unknown): boolean {
+    if (!this.socket || this.socket.readyState !== 1) return false;
+    try {
+      this.socket.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+      return true;
+    } catch (err) {
+      this.recordError(err);
+      return false;
+    }
+  }
+
   public disconnect(code = 1000, reason = "client disconnect"): void {
     this.stopped = true;
     ++this.generation;
@@ -945,6 +958,345 @@ export class BinanceKlineWebSocketConnector {
   public destroy(): void {
     for (const client of this.clients.values()) client.disconnect();
     this.clients.clear();
+  }
+}
+
+
+/**
+ * Polygon.io WebSocket streaming adapter for Equities and Indices.
+ * Connects to wss://delayed.polygon.io/stocks (or socket.polygon.io)
+ * Handles authentication and subscribes to aggregate bars (AM.<ticker> for minute bars).
+ */
+export class PolygonWebSocketConnector {
+  private client: ResilientWebSocketClient | null = null;
+  private subscribedTickers = new Set<string>();
+  public isAuthenticated = false;
+
+  constructor(
+    private readonly emit: (update: StreamingCandleUpdate) => void,
+    private readonly apiKey: string = "AUTH_DEMO_KEY",
+    private readonly isDelayed: boolean = true,
+    private readonly socketFactory: SocketFactory = DEFAULT_SOCKET_FACTORY,
+  ) {}
+
+  public async connect(): Promise<void> {
+    const host = this.isDelayed ? "delayed.polygon.io" : "socket.polygon.io";
+    const url = `wss://${host}/stocks`;
+
+    this.client = new ResilientWebSocketClient(
+      {
+        providerId: "POLYGON_EQUITIES_WS",
+        name: "Polygon-Stocks-WSS",
+        url,
+        apiKey: this.apiKey,
+        maxReconnectAttempts: 25,
+      },
+      (message) => this.handleMessage(message),
+      (socket) => {
+        // Authenticate when socket opens
+        this.client?.send({ action: "auth", params: this.apiKey });
+      },
+      this.socketFactory,
+    );
+
+    await this.client.connect();
+  }
+
+  public handleMessage(message: unknown): void {
+    const list = Array.isArray(message) ? message : [message];
+    for (const item of list) {
+      if (!item || typeof item !== "object") continue;
+      const data = item as Record<string, unknown>;
+
+      if (data.ev === "status") {
+        if (data.status === "auth_success") {
+          this.isAuthenticated = true;
+          if (this.subscribedTickers.size > 0 && this.client) {
+            const params = Array.from(this.subscribedTickers).map((t) => `AM.${t}`).join(",");
+            this.client.send({ action: "subscribe", params });
+          }
+        }
+        continue;
+      }
+
+      if (data.ev === "AM" || data.ev === "A") {
+        const sym = String(data.sym ?? "").toUpperCase();
+        const open = Number(data.o);
+        const high = Number(data.h);
+        const low = Number(data.l);
+        const close = Number(data.c);
+        const volume = Number(data.v);
+        const startMs = Number(data.s);
+        const endMs = Number(data.e);
+
+        if (![open, high, low, close, volume, startMs, endMs].every(Number.isFinite)) continue;
+
+        const candle: MarketCandle = {
+          openTimeMs: startMs,
+          closeTimeMs: endMs,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          isFinalized: true,
+          source: "provider_live",
+        };
+
+        const category: MarketCategory = sym === "SPY" || sym === "QQQ" || sym === "IWM" || sym === "DIA" ? "INDICES" : "STOCKS";
+
+        this.emit({
+          symbol: sym,
+          category,
+          candle,
+          sequenceNumber: endMs,
+          timestampMs: Date.now(),
+        });
+      }
+    }
+  }
+
+  public subscribe(ticker: string): void {
+    const sym = ticker.toUpperCase();
+    this.subscribedTickers.add(sym);
+    if (this.isAuthenticated && this.client) {
+      this.client.send({ action: "subscribe", params: `AM.${sym}` });
+    }
+  }
+
+  public unsubscribe(ticker: string): void {
+    const sym = ticker.toUpperCase();
+    this.subscribedTickers.delete(sym);
+    if (this.isAuthenticated && this.client) {
+      this.client.send({ action: "unsubscribe", params: `AM.${sym}` });
+    }
+  }
+
+  public getMetrics(): StreamConnectionMetrics | null {
+    return this.client?.getMetrics() ?? null;
+  }
+
+  public disconnect(): void {
+    this.client?.disconnect();
+    this.client = null;
+    this.isAuthenticated = false;
+    this.subscribedTickers.clear();
+  }
+}
+
+/**
+ * OANDA v20 Pricing Stream Adapter for Forex.
+ * Streams real-time pricing ticks (bids/asks), computes continuous bid-ask spread,
+ * and rolls incoming ticks into live 1-minute OHLCV candles with provider_live provenance.
+ */
+export class OandaStreamingConnector {
+  private client: ResilientWebSocketClient | null = null;
+  private currentBars = new Map<string, {
+    openTimeMs: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    tradesCount: number;
+  }>();
+
+  constructor(
+    private readonly emit: (update: StreamingCandleUpdate) => void,
+    private readonly accountId: string = "OANDA_DEMO_ACCT",
+    private readonly apiToken: string = "OANDA_DEMO_TOKEN",
+    private readonly isPractice: boolean = true,
+    private readonly socketFactory: SocketFactory = DEFAULT_SOCKET_FACTORY,
+  ) {}
+
+  public async connect(instruments: string[] = ["EUR_USD", "GBP_USD", "USD_JPY"]): Promise<void> {
+    const host = this.isPractice ? "stream-fxpractice.oanda.com" : "stream-fxtrade.oanda.com";
+    const instStr = instruments.join(",");
+    const url = `wss://${host}/v3/accounts/${this.accountId}/pricing/stream?instruments=${instStr}`;
+
+    this.client = new ResilientWebSocketClient(
+      {
+        providerId: "OANDA_FOREX_STREAM",
+        name: "OANDA-v20-Pricing-Stream",
+        url,
+        apiKey: this.apiToken,
+        maxReconnectAttempts: 25,
+      },
+      (message) => this.handleMessage(message),
+      undefined,
+      this.socketFactory,
+    );
+
+    await this.client.connect();
+  }
+
+  public handlePriceTick(tick: {
+    type?: string;
+    instrument: string;
+    time: string | number;
+    bids: Array<{ price: number | string; liquidity?: number }>;
+    asks: Array<{ price: number | string; liquidity?: number }>;
+  }): void {
+    if (tick.type !== "PRICE" || !tick.instrument) return;
+    const symbol = tick.instrument.replace("_", "/").toUpperCase();
+    const bestBid = parseFloat(String(tick.bids?.[0]?.price ?? 0));
+    const bestAsk = parseFloat(String(tick.asks?.[0]?.price ?? 0));
+    if (!bestBid || !bestAsk) return;
+
+    const mid = (bestBid + bestAsk) / 2;
+    const timeMs = typeof tick.time === "number" ? tick.time : new Date(tick.time).getTime() || Date.now();
+    const intervalMs = 60_000;
+    const bucketStartMs = Math.floor(timeMs / intervalMs) * intervalMs;
+
+    let bar = this.currentBars.get(symbol);
+    if (!bar || bar.openTimeMs !== bucketStartMs) {
+      if (bar) {
+        const candle: MarketCandle = {
+          openTimeMs: bar.openTimeMs,
+          closeTimeMs: bar.openTimeMs + intervalMs - 1,
+          open: bar.open,
+          high: bar.high,
+          low: bar.low,
+          close: bar.close,
+          volume: bar.volume,
+          tradesCount: bar.tradesCount,
+          isFinalized: true,
+          source: "provider_live",
+        };
+        this.emit({
+          symbol,
+          category: "FOREX",
+          candle,
+          sequenceNumber: bar.openTimeMs + intervalMs,
+          timestampMs: Date.now(),
+        });
+      }
+      bar = {
+        openTimeMs: bucketStartMs,
+        open: mid,
+        high: mid,
+        low: mid,
+        close: mid,
+        volume: 1,
+        tradesCount: 1,
+      };
+      this.currentBars.set(symbol, bar);
+    } else {
+      bar.high = Math.max(bar.high, mid);
+      bar.low = Math.min(bar.low, mid);
+      bar.close = mid;
+      bar.volume += 1;
+      bar.tradesCount += 1;
+    }
+
+    const liveCandle: MarketCandle = {
+      openTimeMs: bar.openTimeMs,
+      closeTimeMs: bar.openTimeMs + intervalMs - 1,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+      volume: bar.volume,
+      tradesCount: bar.tradesCount,
+      isFinalized: false,
+      source: "provider_live",
+    };
+    this.emit({
+      symbol,
+      category: "FOREX",
+      candle: liveCandle,
+      sequenceNumber: timeMs,
+      timestampMs: Date.now(),
+    });
+  }
+
+  public handleMessage(msg: unknown): void {
+    if (!msg || typeof msg !== "object") return;
+    const raw = msg as Record<string, unknown>;
+    if (raw.type === "PRICE") {
+      this.handlePriceTick(raw as any);
+    }
+  }
+
+  public getMetrics(): StreamConnectionMetrics | null {
+    return this.client?.getMetrics() ?? null;
+  }
+
+  public disconnect(): void {
+    this.client?.disconnect();
+    this.client = null;
+    this.currentBars.clear();
+  }
+}
+
+/**
+ * Historical REST Gap Backfiller.
+ * When a live stream connects or recovers after a connection outage, checks for missing
+ * candle history between lastKnownCandleTimeMs and now. If a gap exists, fetches historical
+ * candles via REST, validates chronological continuity, and returns the deduplicated missing bars.
+ */
+export class HistoricalGapBackfiller {
+  constructor(
+    private readonly connectors: {
+      crypto: BaseMarketConnector;
+      forex: BaseMarketConnector;
+      stocks: BaseMarketConnector;
+      indices: BaseMarketConnector;
+    },
+  ) {}
+
+  public async backfillGap(request: HistoricalGapBackfillRequest): Promise<HistoricalGapBackfillResult> {
+    const startMs = Date.now();
+    const intervalMs = intervalToMs(request.interval);
+    const gapDurationMs = Math.max(0, request.reconnectTimeMs - request.lastKnownCandleTimeMs);
+
+    if (gapDurationMs < intervalMs * 1.5) {
+      return {
+        symbol: request.symbol,
+        category: request.category,
+        interval: request.interval,
+        gapDetected: false,
+        gapDurationMs,
+        backfilledCandlesCount: 0,
+        backfilledCandles: [],
+        latencyMs: Date.now() - startMs,
+      };
+    }
+
+    const missingCandlesEstimate = Math.min(
+      request.maxCandlesToFetch ?? 100,
+      Math.ceil(gapDurationMs / intervalMs),
+    );
+
+    let connector: BaseMarketConnector;
+    switch (request.category) {
+      case "CRYPTO": connector = this.connectors.crypto; break;
+      case "FOREX": connector = this.connectors.forex; break;
+      case "STOCKS": connector = this.connectors.stocks; break;
+      case "INDICES": connector = this.connectors.indices; break;
+    }
+
+    const res = await connector.fetchHistoricalCandles({
+      symbol: request.symbol,
+      interval: request.interval,
+      limit: missingCandlesEstimate,
+      sinceMs: request.lastKnownCandleTimeMs + 1,
+    });
+
+    const filtered = res.candles.filter(
+      (c) => c.openTimeMs > request.lastKnownCandleTimeMs && c.openTimeMs <= request.reconnectTimeMs,
+    );
+
+    return {
+      symbol: request.symbol,
+      category: request.category,
+      interval: request.interval,
+      gapDetected: true,
+      gapDurationMs,
+      backfilledCandlesCount: filtered.length,
+      backfilledCandles: filtered,
+      latencyMs: Date.now() - startMs,
+    };
   }
 }
 

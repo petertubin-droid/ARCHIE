@@ -191,3 +191,92 @@ export function analyzeMarketStructure(
     evidence,
   };
 }
+
+// ----------------------------------------------------------------------------
+// Microstructure & Order Book Analysis (Section 10 & 20)
+// ----------------------------------------------------------------------------
+
+import type { OrderBookSnapshot, OrderBookLevel, MicrostructureMetrics } from "./types.ts";
+
+export function analyzeOrderBook(
+  symbol: string,
+  bids: OrderBookLevel[],
+  asks: OrderBookLevel[],
+  timestampMs = Date.now(),
+): OrderBookSnapshot {
+  const sortedBids = [...bids].sort((a, b) => b.price - a.price);
+  const sortedAsks = [...asks].sort((a, b) => a.price - b.price);
+
+  const bestBid = sortedBids[0]?.price ?? 0;
+  const bestAsk = sortedAsks[0]?.price ?? 0;
+  const spread = Math.max(0, bestAsk - bestBid);
+  const mid = (bestBid + bestAsk) / 2 || 1;
+  const spreadBps = Math.round(((spread / mid) * 10_000) * 100) / 100;
+
+  const top10Bids = sortedBids.slice(0, 10);
+  const top10Asks = sortedAsks.slice(0, 10);
+  const totalBidVol = top10Bids.reduce((acc, b) => acc + b.quantity, 0);
+  const totalAskVol = top10Asks.reduce((acc, a) => acc + a.quantity, 0);
+
+  const denominator = Math.max(1e-8, totalBidVol + totalAskVol);
+  const depthImbalance = Math.round(((totalBidVol - totalAskVol) / denominator) * 1000) / 1000;
+
+  return {
+    symbol,
+    timestampMs,
+    bids: sortedBids,
+    asks: sortedAsks,
+    spread: Math.round(spread * 10000) / 10000,
+    spreadBps,
+    depthImbalance,
+  };
+}
+
+export function computeMicrostructureMetrics(
+  snapshot: OrderBookSnapshot,
+  volumeBuckets?: Array<{ buyVolume: number; sellVolume: number }>,
+): MicrostructureMetrics {
+  const bestBid = snapshot.bids[0]?.price ?? 0;
+  const bestAsk = snapshot.asks[0]?.price ?? 0;
+  const mid = (bestBid + bestAsk) / 2 || 1;
+  const spread = Math.max(0, bestAsk - bestBid);
+  const spreadBps = Math.round(((spread / mid) * 10_000) * 100) / 100;
+
+  // Calculate VPIN (Volume-Synchronized Probability of Toxicity)
+  let vpin = 0.20; // default baseline toxicity
+  if (volumeBuckets && volumeBuckets.length > 0) {
+    let totalImbalance = 0;
+    let totalVol = 0;
+    for (const b of volumeBuckets) {
+      const bucketVol = b.buyVolume + b.sellVolume;
+      if (bucketVol > 0) {
+        totalImbalance += Math.abs(b.buyVolume - b.sellVolume);
+        totalVol += bucketVol;
+      }
+    }
+    if (totalVol > 0) {
+      vpin = Math.min(1.0, Math.max(0.0, totalImbalance / totalVol));
+    }
+  } else {
+    // Estimate baseline VPIN from depth imbalance
+    vpin = Math.min(0.85, 0.20 + Math.abs(snapshot.depthImbalance) * 0.40);
+  }
+
+  let quality: "PRISTINE" | "ELEVATED_TOXICITY" | "ILLIQUID" = "PRISTINE";
+  if (spreadBps > 40 || snapshot.bids.length === 0 || snapshot.asks.length === 0) {
+    quality = "ILLIQUID";
+  } else if (vpin > 0.60 || spreadBps > 15) {
+    quality = "ELEVATED_TOXICITY";
+  }
+
+  return {
+    symbol: snapshot.symbol,
+    timestampMs: snapshot.timestampMs,
+    bidAskSpread: Math.round(spread * 10000) / 10000,
+    spreadBps,
+    depthImbalance: snapshot.depthImbalance,
+    vpinToxicity: Math.round(vpin * 1000) / 1000,
+    effectiveSpread: Math.round(spread * 1.2 * 10000) / 10000,
+    microstructureQuality: quality,
+  };
+}

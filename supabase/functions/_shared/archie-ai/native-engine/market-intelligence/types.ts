@@ -797,3 +797,82 @@ export interface StreamConnectionMetrics {
   sequenceGapsCount: number;
   lastError: string | null;
 }
+
+// ----------------------------------------------------------------------------
+// Microstructure & Order Book Analysis (Section 10 & 20)
+// ----------------------------------------------------------------------------
+
+export interface OrderBookLevel {
+  price: number;
+  quantity: number;
+}
+
+export interface OrderBookSnapshot {
+  symbol: string;
+  timestampMs: number;
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+  spread: number;
+  spreadBps: number;
+  depthImbalance: number; // (sum(bids) - sum(asks)) / (sum(bids) + sum(asks))
+}
+
+export interface MicrostructureMetrics {
+  symbol: string;
+  timestampMs: number;
+  bidAskSpread: number;
+  spreadBps: number;
+  depthImbalance: number;
+  vpinToxicity: number; // Volume-Synchronized Probability of Toxicity [0.0, 1.0]
+  effectiveSpread: number;
+  microstructureQuality: "PRISTINE" | "ELEVATED_TOXICITY" | "ILLIQUID";
+}
+
+// ----------------------------------------------------------------------------
+// Hardware WebAuthn & Multi-Signature Governance (Section 21 & Gate L)
+// ----------------------------------------------------------------------------
+
+export interface WebAuthnAssertion {
+  credentialId: string;
+  clientDataJson: string; // Base64URL string
+  authenticatorData: string; // Base64URL string
+  signature: string; // Hex or Base64URL signature
+  userHandle?: string;
+  publicKeyJwk?: JsonWebKey;
+}
+
+export interface MultiSigOwnerAuthorization {
+  signatures: Array<{
+    ownerIdentity: string;
+    timestampMs: number;
+    nonce: string;
+    signatureSha256: string;
+    webAuthn?: WebAuthnAssertion;
+  }>;
+  requiredSignatures: number;
+  actionPayload: string;
+}
+
+// ----------------------------------------------------------------------------
+// Historical REST Gap Backfill on Reconnect (Data Layer Resilience)
+// ----------------------------------------------------------------------------
+
+export interface HistoricalGapBackfillRequest {
+  symbol: string;
+  category: MarketCategory;
+  interval: CandleInterval;
+  lastKnownCandleTimeMs: number;
+  reconnectTimeMs: number;
+  maxCandlesToFetch?: number;
+}
+
+export interface HistoricalGapBackfillResult {
+  symbol: string;
+  category: MarketCategory;
+  interval: CandleInterval;
+  gapDetected: boolean;
+  gapDurationMs: number;
+  backfilledCandlesCount: number;
+  backfilledCandles: MarketCandle[];
+  latencyMs: number;
+}

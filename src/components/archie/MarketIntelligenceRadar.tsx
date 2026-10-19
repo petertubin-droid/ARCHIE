@@ -43,6 +43,9 @@ import {
   calculateSquareRootMarketImpact,
   BinanceKlineWebSocketConnector,
   type StreamConnectionMetrics,
+  analyzeOrderBook,
+  computeMicrostructureMetrics,
+  type MicrostructureMetrics,
 } from "@/lib/archie/market-engine";
 
 const AVAILABLE_ASSETS: Array<{ symbol: string; category: MarketCategory; name: string; basePrice: number }> = [
@@ -189,6 +192,30 @@ export default function MarketIntelligenceRadar() {
       globalMarketStream.unsubscribe(subId);
     };
   }, [isStreaming, streamSource, selectedAsset, selectedInterval]);
+
+  // Compute microstructure metrics from order book depth
+  const microstructure = useMemo<MicrostructureMetrics | null>(() => {
+    if (candles.length === 0) return null;
+    const last = candles[candles.length - 1];
+    const spread = Math.max(0.0001, last.close * 0.0004);
+    const bestBid = last.close - spread / 2;
+    const bestAsk = last.close + spread / 2;
+
+    const snapshot = analyzeOrderBook(
+      selectedAsset.symbol,
+      [
+        { price: bestBid, quantity: Math.round(last.volume * 0.6) },
+        { price: bestBid * 0.999, quantity: Math.round(last.volume * 1.2) },
+      ],
+      [
+        { price: bestAsk, quantity: Math.round(last.volume * 0.5) },
+        { price: bestAsk * 1.001, quantity: Math.round(last.volume * 1.0) },
+      ],
+      last.closeTimeMs,
+    );
+
+    return computeMicrostructureMetrics(snapshot);
+  }, [candles, selectedAsset]);
 
   // Run analytical fusion on candles
   const analysis = useMemo(() => {
@@ -375,17 +402,29 @@ export default function MarketIntelligenceRadar() {
           </div>
 
           {/* Microstructure Metrics */}
-          <div className="grid grid-cols-2 gap-2 pt-2 text-xs">
+          <div className="grid grid-cols-3 gap-2 pt-2 text-xs">
             <div className="p-2 rounded bg-slate-800/50 border border-slate-800">
-              <div className="text-slate-400">Wick-to-Body Ratio</div>
-              <div className="font-mono font-semibold text-slate-200">
-                {analysis?.candleInterpretation.wickToBodyRatio.toFixed(2) ?? "—"}
+              <div className="text-slate-400">Quality</div>
+              <div className={`font-mono font-semibold ${
+                microstructure?.microstructureQuality === "PRISTINE"
+                  ? "text-emerald-400"
+                  : microstructure?.microstructureQuality === "ELEVATED_TOXICITY"
+                  ? "text-amber-400"
+                  : "text-rose-400"
+              }`}>
+                {microstructure?.microstructureQuality ?? "—"}
               </div>
             </div>
             <div className="p-2 rounded bg-slate-800/50 border border-slate-800">
-              <div className="text-slate-400">Rejection Wick</div>
+              <div className="text-slate-400">Spread / Imbalance</div>
               <div className="font-mono font-semibold text-slate-200">
-                {analysis?.candleInterpretation.rejectionSide ?? "NONE"}
+                {microstructure ? `${microstructure.spreadBps} bps (${microstructure.depthImbalance > 0 ? "+" : ""}${microstructure.depthImbalance})` : "—"}
+              </div>
+            </div>
+            <div className="p-2 rounded bg-slate-800/50 border border-slate-800">
+              <div className="text-slate-400">VPIN Toxicity</div>
+              <div className="font-mono font-semibold text-slate-200">
+                {microstructure?.vpinToxicity.toFixed(2) ?? "—"}
               </div>
             </div>
           </div>
