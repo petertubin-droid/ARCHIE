@@ -221,3 +221,59 @@ export function validatePerceptualQuoteConsistency(params: {
     deviationPct,
   };
 }
+
+
+// ---------------------------------------------------------
+// Multi-Broker, Dynamic Stops & Signals API
+// ---------------------------------------------------------
+
+export interface BrokerConnectionRecord {
+  id: string;
+  name: string;
+  type: string;
+  status: string;
+  maskedAccountId: string;
+  accountCurrency: string;
+  balance: number;
+  equity: number;
+  marginAvailable: number;
+  dataConnectivityStatus: string;
+  tradingPermissions: string;
+  mode: string;
+  latencyMs: number;
+  supportedProducts: string[];
+  disclaimers: string[];
+  lastSyncIso: string;
+}
+
+export async function fetchBrokerConnections(): Promise<{
+  brokers: BrokerConnectionRecord[];
+}> {
+  return invokeTrading<{ brokers: BrokerConnectionRecord[] }>({
+    action: "broker_connections",
+  });
+}
+
+export async function fetchDynamicStops(): Promise<{
+  stops: Array<{
+    id: string;
+    symbol: string;
+    side: "BUY" | "SELL";
+    entryPrice: number;
+    currentPrice: number;
+    initialStopPrice: number;
+    currentStopPrice: number;
+    recommendedStopPrice: number;
+    breakEvenTriggered: boolean;
+    trailingMode: string;
+    lastEvaluatedIso: string;
+  }>;
+}> {
+  return invokeTrading({ action: "dynamic_stops" });
+}
+
+export async function fetchSignalsAudit(): Promise<{
+  signals: Array<Record<string, unknown>>;
+}> {
+  return invokeTrading({ action: "signals_audit" });
+}
