@@ -23,6 +23,8 @@ import {
   executeTrade,
   fetchTradingPositions,
   validatePerceptualQuoteConsistency,
+  fetchFeedConfig,
+  saveFeedApiKey,
   fetchTradingStatus,
   invokeTrading,
   setTradingState,
@@ -156,6 +158,32 @@ describe("trading client contracts", () => {
     expect(invoke.mock.calls[0][1].body).toEqual({ action: "positions" });
   });
 });
+
+
+  it("fetchFeedConfig sends action feed_config", async () => {
+    invoke.mockResolvedValue({
+      data: { feeds: {} },
+      error: null,
+    });
+    await fetchFeedConfig();
+    expect(invoke.mock.calls[0][1].body).toEqual({ action: "feed_config" });
+  });
+
+  it("saveFeedApiKey sends action save_feed_key with provider and apiKey", async () => {
+    invoke.mockResolvedValue({
+      data: { ok: true, message: "registered" },
+      error: null,
+    });
+    await saveFeedApiKey({
+      provider: "TWELVEDATA",
+      apiKey: "test-key-12345",
+    });
+    expect(invoke.mock.calls[0][1].body).toEqual({
+      action: "save_feed_key",
+      provider: "TWELVEDATA",
+      apiKey: "test-key-12345",
+    });
+  });
 
 describe("validatePerceptualQuoteConsistency", () => {
   it("approves quotes within tolerance", () => {

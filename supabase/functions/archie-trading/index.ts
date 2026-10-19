@@ -146,7 +146,8 @@ async function writeState(patch: Record<string, unknown>) {
 function limitsFor(state: TradingStateRow): TradingLimits {
   // Merge stored limits over defaults; unknown keys are
   // ignored by the spread of known structure.
-  const stored = state.limits ?? {};
+  const stored = { ...((state.limits as Record<string, unknown>) ?? {}) };
+  delete stored.feed_keys; // Prevent sensitive feed keys from leaking into client-visible limits
   const merged: TradingLimits = {
     ...DEFAULT_TRADING_LIMITS,
     ...stored,
@@ -795,8 +796,81 @@ serveWithCors(async (req: Request) => {
     return json(200, { signals: Array.isArray(signals) ? signals : [] });
   }
 
+
+  // ---- action: feed_config ----
+  if (action === "feed_config") {
+    const twelveDataEnv = Boolean(Deno.env.get("TWELVEDATA_API_KEY"));
+    const polygonEnv = Boolean(Deno.env.get("POLYGON_API_KEY"));
+    const finnhubEnv = Boolean(Deno.env.get("FINNHUB_API_KEY"));
+
+    // Check stored keys in frelux_archie_trading_state limits
+    const state = await readState();
+    const storedKeys = (state.limits as Record<string, unknown>)?.feed_keys as Record<string, string> | undefined;
+
+    return json(200, {
+      feeds: {
+        TWELVEDATA: {
+          provider: "TWELVEDATA",
+          apiKeyConfigured: twelveDataEnv || Boolean(storedKeys?.twelvedata),
+          status: (twelveDataEnv || Boolean(storedKeys?.twelvedata)) ? "ACTIVE" : "UNCONFIGURED",
+          streamingSupported: true,
+        },
+        POLYGON: {
+          provider: "POLYGON",
+          apiKeyConfigured: polygonEnv || Boolean(storedKeys?.polygon),
+          status: (polygonEnv || Boolean(storedKeys?.polygon)) ? "ACTIVE" : "UNCONFIGURED",
+          streamingSupported: true,
+        },
+        FINNHUB: {
+          provider: "FINNHUB",
+          apiKeyConfigured: finnhubEnv || Boolean(storedKeys?.finnhub),
+          status: (finnhubEnv || Boolean(storedKeys?.finnhub)) ? "ACTIVE" : "UNCONFIGURED",
+          streamingSupported: false,
+        },
+        BINANCE_WS: {
+          provider: "BINANCE_WS",
+          apiKeyConfigured: true,
+          status: "ACTIVE",
+          streamingSupported: true,
+        },
+      },
+    });
+  }
+
+  // ---- action: save_feed_key ----
+  if (action === "save_feed_key") {
+    const provider = String(payload.provider ?? "").toUpperCase();
+    const key = String(payload.apiKey ?? "").trim();
+    if (!key || key.length < 5) {
+      return json(400, { error: "A valid non-empty API key is required." });
+    }
+    if (!["TWELVEDATA", "POLYGON", "FINNHUB"].includes(provider)) {
+      return json(400, { error: "Unsupported feed provider." });
+    }
+
+    const state = await readState();
+    const currentLimits = (state.limits as Record<string, unknown>) ?? {};
+    const feedKeys = ((currentLimits.feed_keys as Record<string, string>) ?? {});
+    feedKeys[provider.toLowerCase()] = key;
+
+    const err = await writeState({
+      limits: {
+        ...currentLimits,
+        feed_keys: feedKeys,
+      },
+      updated_date: new Date().toISOString(),
+    });
+
+    if (err) return json(500, { error: `Failed to persist feed API key: ${err}` });
+
+    return json(200, {
+      ok: true,
+      message: `${provider} API key securely registered in ARCHIE trading state.`,
+    });
+  }
+
   return json(400, {
     error:
-      "Unknown action. Valid: status | set_state | dry_run | execute | emergency_cancel | positions | broker_connections | dynamic_stops | signals_audit.",
+      "Unknown action. Valid: status | set_state | dry_run | execute | emergency_cancel | positions | broker_connections | dynamic_stops | signals_audit | feed_config | save_feed_key.",
   });
 });

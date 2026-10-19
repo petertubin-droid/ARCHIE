@@ -59,6 +59,9 @@ import {
   executeTrade,
   emergencyCancel,
   validatePerceptualQuoteConsistency,
+  fetchFeedConfig,
+  saveFeedApiKey,
+  type MarketFeedConfig,
   type TradingStatus,
   type TradingPositionView,
   type DryRunResult,
@@ -363,7 +366,45 @@ export default function TradingConsole() {
   // Backend Integration & State
   const [tradingStatus, setTradingStatus] = useState<TradingStatus | null>(null);
   const [positions, setPositions] = useState<TradingPositionView[]>([]);
-  const [activeTab, setActiveTab] = useState<"positions" | "pending" | "history" | "gate" | "brokers" | "backtest" | "stops">("positions");
+  
+  // Live Feed Key Management State
+  const [feedConfigs, setFeedConfigs] = useState<Record<string, MarketFeedConfig>>({});
+  const [selectedFeedProvider, setSelectedFeedProvider] = useState<"TWELVEDATA" | "POLYGON" | "FINNHUB">("TWELVEDATA");
+  const [feedInputKey, setFeedInputKey] = useState("");
+  const [feedSaveStatus, setFeedSaveStatus] = useState<string | null>(null);
+  const [isSavingFeedKey, setIsSavingFeedKey] = useState(false);
+
+  useEffect(() => {
+    fetchFeedConfig().then((res) => {
+      if (res?.feeds) setFeedConfigs(res.feeds);
+    }).catch(() => {});
+  }, []);
+
+  const handleSaveFeedKey = async () => {
+    if (!feedInputKey.trim()) return;
+    setIsSavingFeedKey(true);
+    setFeedSaveStatus(null);
+    try {
+      const res = await saveFeedApiKey({
+        provider: selectedFeedProvider,
+        apiKey: feedInputKey.trim(),
+      });
+      if (res.ok) {
+        setFeedSaveStatus("✓ " + res.message);
+        setFeedInputKey("");
+        const refreshed = await fetchFeedConfig();
+        if (refreshed?.feeds) setFeedConfigs(refreshed.feeds);
+      } else {
+        setFeedSaveStatus("Error saving key");
+      }
+    } catch (err: any) {
+      setFeedSaveStatus("Failed: " + (err?.message || "Unknown error"));
+    } finally {
+      setIsSavingFeedKey(false);
+    }
+  };
+
+  const [activeTab, setActiveTab] = useState<"positions" | "pending" | "history" | "gate" | "brokers" | "backtest" | "stops" | "feed_keys">("positions");
   const [busy, setBusy] = useState(false);
   const [notification, setNotification] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const [dryRunEvidence, setDryRunEvidence] = useState<DryRunResult | null>(null);
@@ -1546,6 +1587,16 @@ export default function TradingConsole() {
             >
               Backtest Lab
             </button>
+            <button
+              onClick={() => setActiveTab("feed_keys")}
+              className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
+                activeTab === "feed_keys"
+                  ? "bg-emerald-400/20 text-emerald-300 border border-emerald-400/30"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Market Feed Keys
+            </button>
           </div>
 
           <button
@@ -1762,6 +1813,112 @@ export default function TradingConsole() {
             </div>
           </div>
         )}
+
+        {/* Market Feed Keys Configuration Tab */}
+        {activeTab === "feed_keys" && (
+          <div className="mt-2 space-y-3 text-xs">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h4 className="font-semibold text-slate-100 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                    Market Feed API Key Management
+                  </h4>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    Configure institutional market data providers (TwelveData, Polygon, Finnhub) directly from your ARCHIE admin console.
+                  </p>
+                </div>
+                <span className="rounded bg-slate-900 px-2 py-1 font-mono text-[10px] text-slate-400 border border-slate-800 self-start sm:self-auto">
+                  Owner-Authoritative Storage
+                </span>
+              </div>
+
+              {/* Feed Providers Grid */}
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                {[
+                  { id: "TWELVEDATA", name: "TwelveData", desc: "Forex, Indices & Metals Realtime" },
+                  { id: "POLYGON", name: "Polygon.io", desc: "US Equities, Options & Crypto WS" },
+                  { id: "FINNHUB", name: "Finnhub", desc: "Global Fundamentals & FX Quote REST" },
+                  { id: "BINANCE_WS", name: "Binance WS", desc: "Spot & Futures Multi-Stream (Built-in)" },
+                ].map((p) => {
+                  const cfg = feedConfigs[p.id];
+                  const isConfigured = cfg?.apiKeyConfigured ?? false;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`rounded-lg border p-3 flex flex-col justify-between ${
+                        isConfigured
+                          ? "border-emerald-500/30 bg-emerald-950/10"
+                          : "border-slate-800 bg-slate-900/40"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-white">{p.name}</span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                              isConfigured
+                                ? "bg-emerald-500/20 text-emerald-300"
+                                : "bg-amber-500/20 text-amber-300"
+                            }`}
+                          >
+                            {isConfigured ? "ACTIVE" : "UNCONFIGURED"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-400">{p.desc}</p>
+                      </div>
+                      <div className="mt-2 text-[10px] font-mono text-slate-500">
+                        {isConfigured ? "● Key Protected" : "○ Key Missing"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Key Registration Form */}
+              <div className="mt-4 rounded-lg bg-slate-900/60 p-3 border border-slate-800/80">
+                <div className="text-xs font-semibold text-slate-200">Register or Update Provider Key</div>
+                <div className="mt-2 flex flex-col sm:flex-row gap-2">
+                  <select
+                    value={selectedFeedProvider}
+                    onChange={(e) => setSelectedFeedProvider(e.target.value as any)}
+                    className="rounded bg-slate-950 border border-slate-700 px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                  >
+                    <option value="TWELVEDATA">TwelveData</option>
+                    <option value="POLYGON">Polygon.io</option>
+                    <option value="FINNHUB">Finnhub</option>
+                  </select>
+
+                  <input
+                    type="password"
+                    placeholder="Enter API key..."
+                    value={feedInputKey}
+                    onChange={(e) => setFeedInputKey(e.target.value)}
+                    className="flex-1 rounded bg-slate-950 border border-slate-700 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 font-mono"
+                  />
+
+                  <button
+                    onClick={handleSaveFeedKey}
+                    disabled={isSavingFeedKey || !feedInputKey.trim()}
+                    className="rounded bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border border-amber-400/40 px-4 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50"
+                  >
+                    {isSavingFeedKey ? "Saving..." : "Save Key"}
+                  </button>
+                </div>
+
+                {feedSaveStatus && (
+                  <div className={`mt-2 font-mono text-[11px] ${feedSaveStatus.startsWith("✓") ? "text-emerald-400" : "text-rose-400"}`}>
+                    {feedSaveStatus}
+                  </div>
+                )}
+                <div className="mt-2 text-[10px] text-slate-500">
+                  Keys are securely persisted in your ARCHIE owner configuration state and never exposed in client bundles.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </footer>
     </div>
   );

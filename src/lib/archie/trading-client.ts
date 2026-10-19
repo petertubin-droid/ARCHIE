@@ -277,3 +277,29 @@ export async function fetchSignalsAudit(): Promise<{
 }> {
   return invokeTrading({ action: "signals_audit" });
 }
+
+
+export interface MarketFeedConfig {
+  provider: "TWELVEDATA" | "POLYGON" | "FINNHUB" | "BINANCE_WS";
+  apiKeyConfigured: boolean;
+  status: "ACTIVE" | "UNCONFIGURED" | "RATE_LIMITED";
+  lastTestedIso?: string;
+  streamingSupported: boolean;
+}
+
+export async function fetchFeedConfig(): Promise<{
+  feeds: Record<string, MarketFeedConfig>;
+}> {
+  return invokeTrading({ action: "feed_config" });
+}
+
+export async function saveFeedApiKey(payload: {
+  provider: "TWELVEDATA" | "POLYGON" | "FINNHUB";
+  apiKey: string;
+}): Promise<{ ok: boolean; message: string }> {
+  return invokeTrading({
+    action: "save_feed_key",
+    provider: payload.provider,
+    apiKey: payload.apiKey,
+  });
+}
