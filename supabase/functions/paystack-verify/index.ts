@@ -53,6 +53,15 @@ serveWithCors(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  // METHOD GUARD (2026-10-19): GET fell through to the main path
+  // and 500'd (found in the all-function sweep) — POST only.
+  if (req.method !== "POST") {
+    return new Response(
+      JSON.stringify({ error: "Method not allowed" }),
+      { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+
   try {
     const { reference } = await req.json();
 

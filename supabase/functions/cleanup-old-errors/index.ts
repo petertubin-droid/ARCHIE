@@ -16,6 +16,27 @@ serveWithCors(async (req: Request): Promise<Response> => {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
+  // SECURITY FIX (2026-10-19): this destructive maintenance job
+  // had NO auth gate — an unauthenticated GET executed the
+  // cleanup (found live: HTTP 200 on GET). No pg_cron job calls
+  // it (verified: cron.job on the project only schedules FRELUX
+  // digests), so it is manually invoked — require the internal
+  // key and reject wrong methods.
+  if (req.method !== "POST") {
+    return new Response(
+      JSON.stringify({ error: "Method not allowed" }),
+      { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+  const authHeader = req.headers.get("Authorization") ?? "";
+  const internalKey = Deno.env.get("ARCHIE_INTERNAL_KEY") ?? "";
+  if (!internalKey || authHeader !== `Bearer ${internalKey}`) {
+    return new Response(
+      JSON.stringify({ error: "Authentication required." }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 

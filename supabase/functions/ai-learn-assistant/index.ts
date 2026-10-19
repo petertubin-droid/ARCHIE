@@ -189,6 +189,16 @@ serveWithCors(async (req: Request) => {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
+  // METHOD GUARD (2026-10-19): GET crashed the runtime (502,
+  // found in the all-function sweep) — this function only
+  // serves POSTs.
+  if (req.method !== "POST") {
+    return new Response(
+      JSON.stringify({ error: "Method not allowed" }),
+      { status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
