@@ -7,7 +7,7 @@ import { render, screen } from "@testing-library/react";
 
 const TradingConsole = vi.fn(() => <div data-testid="trading-console" />);
 vi.mock("@/components/archie/TradingConsole", () => ({
-  default: (...a: unknown[]) => TradingConsole(...a),
+  default: () => TradingConsole(),
 }));
 
 import ArchieTrading from "@/pages/archie/ArchieTrading";
