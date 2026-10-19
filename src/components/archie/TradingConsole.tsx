@@ -52,6 +52,12 @@ import {
   ChevronDown,
   X,
 } from "lucide-react";
+import MarketDataPanel from "./MarketDataPanel";
+import {
+  consoleSymbolToTicker,
+  fetchMarketHistory,
+  fetchMarketQuotes,
+} from "@/lib/archie/market-client";
 import {
   fetchTradingStatus,
   fetchTradingPositions,
@@ -90,6 +96,12 @@ export interface MarketInstrument {
   pipSize: number;
   baseCurrency: string;
   quoteCurrency: string;
+  /** Live feed metadata (real Massive daily bars) — null until
+   *  the first successful pull; liveError marks symbols whose
+   *  daily bar the plan does not carry. */
+  live?: boolean;
+  liveAsOf?: string | null;
+  liveError?: string | null;
 }
 
 export interface CandleData {
@@ -405,7 +417,7 @@ export default function TradingConsole() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"positions" | "pending" | "history" | "gate" | "brokers" | "backtest" | "stops" | "feed_keys">("positions");
+  const [activeTab, setActiveTab] = useState<"positions" | "pending" | "history" | "gate" | "brokers" | "backtest" | "stops" | "feed_keys" | "markets">("positions");
   const [busy, setBusy] = useState(false);
   const [notification, setNotification] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const [dryRunEvidence, setDryRunEvidence] = useState<DryRunResult | null>(null);
@@ -444,32 +456,108 @@ export default function TradingConsole() {
     loadBackend();
   }, [loadBackend]);
 
-  // Re-seed candles when symbol changes
-  useEffect(() => {
-    const inst = instruments.find((i) => i.symbol === selectedSymbol);
-    if (inst) {
-      setCandles(generateSeedCandles(inst.bid, 70));
-    }
-  }, [selectedSymbol]);
+  // =========================================================
+  // LIVE MARKET FEED (Massive.com daily bars, owner-gated).
+  // Replaces the former randomized price simulator: prices are
+  // REAL end-of-day aggregates, refreshed every 10 minutes —
+  // honest granularity, no synthetic ticks. Symbols the plan
+  // is not entitled to are flagged, never faked.
+  // =========================================================
+  const [feedAsOf, setFeedAsOf] = useState<string | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<"loading" | "ok" | "unavailable">("loading");
 
-  // Live market price pulsing ticker
-  useEffect(() => {
-    const interval = setInterval(() => {
+  const refreshLivePrices = useCallback(async () => {
+    try {
+      const symbols = instruments.map((i) => consoleSymbolToTicker(i.symbol));
+      const quotes = await fetchMarketQuotes(symbols);
       setInstruments((prev) =>
         prev.map((inst) => {
-          const shift = (Math.random() - 0.495) * inst.pipSize * 2.5;
-          const newBid = Math.max(inst.pipSize * 10, Number((inst.bid + shift).toFixed(inst.digits)));
-          const newAsk = Number((newBid + inst.spread * inst.pipSize).toFixed(inst.digits));
+          const q = quotes.find(
+            (x) => x.ticker === consoleSymbolToTicker(inst.symbol),
+          );
+          if (!q) {
+            return { ...inst, live: false, liveError: "no_quote" };
+          }
+          if (q.price === null) {
+            return {
+              ...inst,
+              live: false,
+              liveError: q.error?.kind ?? "no_data",
+            };
+          }
+          const half = (inst.spread * inst.pipSize) / 2;
+          const bid = Number((q.price - half).toFixed(inst.digits));
+          const ask = Number((q.price + half).toFixed(inst.digits));
           return {
             ...inst,
-            bid: newBid,
-            ask: newAsk,
+            bid: Math.max(inst.pipSize * 10, bid),
+            ask,
+            change24h: q.changePerc ?? inst.change24h,
+            high24h: q.high ?? inst.high24h,
+            low24h: q.low ?? inst.low24h,
+            volume24h: q.volume !== null ? Math.round(q.volume).toLocaleString() : inst.volume24h,
+            live: true,
+            liveAsOf: q.asOf,
+            liveError: null,
           };
-        })
+        }),
       );
-    }, 1200);
-    return () => clearInterval(interval);
-  }, []);
+      setFeedAsOf(quotes.find((x) => x.asOf)?.asOf ?? null);
+    } catch {
+      // Feed errors never break the console — instruments keep
+      // their last known state and are marked not-live.
+      setInstruments((prev) => prev.map((i) => ({ ...i, live: false })));
+    }
+  }, [instruments]);
+
+  useEffect(() => {
+    refreshLivePrices();
+    // EOD/daily data: a 10-minute cadence keeps the plan quota
+    // safe and never pretends to be an intraday tick stream.
+    const t = setInterval(refreshLivePrices, 10 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [refreshLivePrices]);
+
+  // Real daily candles for the selected instrument, replacing
+  // the synthetic seed generator. If the feed carries no
+  // history for the symbol the chart shows an honest empty
+  // state instead of a fabricated shape.
+  useEffect(() => {
+    let cancelled = false;
+    const inst = instruments.find((i) => i.symbol === selectedSymbol);
+    if (!inst) return;
+    setHistoryStatus("loading");
+    fetchMarketHistory(inst.symbol, 90)
+      .then((candles) => {
+        if (cancelled) return;
+        if (candles.length === 0) {
+          setCandles([]);
+          setHistoryStatus("unavailable");
+          return;
+        }
+        setCandles(
+          candles.map((c) => ({
+            time: c.time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+          })),
+        );
+        setHistoryStatus("ok");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCandles([]);
+        setHistoryStatus("unavailable");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // instruments intentionally excluded: only re-pull on symbol change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSymbol]);
 
   // Update latest candle with current tick
   useEffect(() => {
@@ -1202,6 +1290,15 @@ export default function TradingConsole() {
               <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-400">Spread: {currentInstrument.spread} pips</span>
             </div>
 
+            {/* Live feed provenance — granularity and asOf always honest */}
+            <span className="flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-300" data-testid="live-feed-badge">
+              <Activity className="h-3 w-3" />
+              {currentInstrument.live
+                ? `LIVE DAILY · Massive${currentInstrument.liveAsOf ? ` · ${new Date(currentInstrument.liveAsOf).toLocaleDateString()}` : ""}`
+                : currentInstrument.liveError
+                  ? "OFF-FEED"
+                  : "FEED…"}
+            </span>
             {/* Timeframe Selectors */}
             <div className="flex items-center gap-1 bg-slate-950/70 p-0.5 rounded-lg border border-slate-800">
               {(["1m", "5m", "15m", "1h", "4h", "1D"] as Timeframe[]).map((tf) => (
@@ -1325,6 +1422,19 @@ export default function TradingConsole() {
           {/* Interactive Chart Canvas Container */}
           <div ref={chartContainerRef} className="flex-1 w-full relative overflow-hidden bg-slate-950/40 rounded-lg">
             {renderChart()}
+            {historyStatus === "unavailable" && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-950/80 text-center">
+                <AlertTriangle className="h-5 w-5 text-amber-400" />
+                <div className="text-xs font-semibold text-slate-200">
+                  No live daily history for {currentInstrument.symbol}
+                </div>
+                <div className="max-w-sm text-[10px] text-slate-500">
+                  The Massive.com feed carries no daily bars for this instrument on
+                  the current plan. ARCHIE shows an honest empty chart rather than a
+                  simulated shape.
+                </div>
+              </div>
+            )}
           </div>
         </section>
 
@@ -1589,6 +1699,17 @@ export default function TradingConsole() {
               Backtest Lab
             </button>
             <button
+              onClick={() => setActiveTab("markets")}
+              data-testid="tab-markets"
+              className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
+                activeTab === "markets"
+                  ? "bg-amber-400/20 text-amber-300 border border-amber-400/30"
+                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+              }`}
+            >
+              Markets
+            </button>
+            <button
               onClick={() => setActiveTab("feed_keys")}
               className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
                 activeTab === "feed_keys"
@@ -1816,6 +1937,8 @@ export default function TradingConsole() {
         )}
 
         {/* Market Feed Keys Configuration Tab */}
+        {activeTab === "markets" && <MarketDataPanel />}
+
         {activeTab === "feed_keys" && (
           <div className="mt-2 space-y-3 text-xs">
             <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-4">

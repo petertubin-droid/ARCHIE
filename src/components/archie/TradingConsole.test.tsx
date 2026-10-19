@@ -18,6 +18,19 @@ const dryRunTrade = vi.fn();
 const executeTrade = vi.fn();
 const emergencyCancel = vi.fn();
 
+// Market-data client mock — the console pulls real Massive daily
+// bars through it; tests supply deterministic quotes + history.
+const fetchMarketQuotes = vi.fn();
+const fetchMarketHistory = vi.fn();
+vi.mock("@/lib/archie/market-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/archie/market-client")>();
+  return {
+    ...actual,
+    fetchMarketQuotes: (...args: unknown[]) => fetchMarketQuotes(...args),
+    fetchMarketHistory: (...args: unknown[]) => fetchMarketHistory(...args),
+  };
+});
+
 vi.mock("@/lib/archie/trading-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/archie/trading-client")>();
   return {
@@ -34,6 +47,28 @@ import TradingConsole from "./TradingConsole";
 
 beforeEach(() => {
   vi.clearAllMocks();
+
+  // Default live feed: real daily bars for every instrument.
+  fetchMarketQuotes.mockImplementation(async (symbols: string[]) =>
+    symbols.map((s: string) => ({
+      symbol: s,
+      ticker: s,
+      price: 100,
+      change: 1,
+      changePerc: 1.01,
+      open: 99,
+      high: 101,
+      low: 98,
+      volume: 1000,
+      asOf: "2026-10-18T00:00:00.000Z",
+      granularity: "daily" as const,
+      source: "massive" as const,
+    })),
+  );
+  fetchMarketHistory.mockResolvedValue([
+    { time: 1000, open: 95, high: 101, low: 94, close: 100, volume: 10 },
+    { time: 2000, open: 100, high: 102, low: 99, close: 101, volume: 12 },
+  ]);
   fetchTradingStatus.mockResolvedValue({
     venue: { configured: true, venue: "EXNESS_DMA", mode: "paper", reason: null },
     credentials: {
@@ -162,3 +197,73 @@ describe("TradingConsole Component", () => {
     });
   });
 });
+
+describe("TradingConsole — live Massive market feed", () => {
+  it("pulls REAL daily quotes through the market client and marks instruments live", async () => {
+    render(<TradingConsole />);
+    await waitFor(() => {
+      expect(fetchMarketQuotes).toHaveBeenCalled();
+    });
+    // One batched call for all instrument symbols
+    const symbols = fetchMarketQuotes.mock.calls[0][0] as string[];
+    expect(symbols.length).toBeGreaterThan(5);
+    expect(symbols).toContain("X:BTCUSD");
+    expect(symbols).toContain("C:EURUSD");
+    expect(symbols).toContain("NVDA");
+    // The provenance badge announces the live daily feed
+    await waitFor(() => {
+      expect(screen.getByTestId("live-feed-badge").textContent).toContain("LIVE DAILY");
+    });
+  });
+
+  it("renders REAL history candles instead of the synthetic seed generator", async () => {
+    render(<TradingConsole />);
+    await waitFor(() => {
+      expect(fetchMarketHistory).toHaveBeenCalled();
+    });
+    // The chart received the mocked real candles (historyStatus ok → no empty overlay)
+    await waitFor(() => {
+      expect(screen.queryByText(/No live daily history/i)).toBeNull();
+    });
+  });
+
+  it("shows an honest empty chart when the feed has no history for the symbol", async () => {
+    fetchMarketHistory.mockResolvedValue([]);
+    render(<TradingConsole />);
+    await waitFor(() => {
+      expect(screen.getByText(/No live daily history/i)).toBeInTheDocument();
+    });
+  });
+
+  it("marks symbols honestly as off-feed when the plan lacks entitlement", async () => {
+    fetchMarketQuotes.mockImplementation(async (symbols: string[]) =>
+      symbols.map((s: string) => ({
+        symbol: s,
+        ticker: s,
+        price: null,
+        change: null,
+        changePerc: null,
+        open: null,
+        high: null,
+        low: null,
+        volume: null,
+        asOf: null,
+        granularity: "daily" as const,
+        source: "massive" as const,
+        error: { kind: "not_entitled" },
+      })),
+    );
+    render(<TradingConsole />);
+    await waitFor(() => {
+      expect(screen.getByTestId("live-feed-badge").textContent).toContain("OFF-FEED");
+    });
+  });
+
+  it("opens the Markets panel with the all-markets live feed", async () => {
+    render(<TradingConsole />);
+    fireEvent.click(screen.getByTestId("tab-markets"));
+    // MarketDataPanel renders its search box
+    expect(await screen.findByTestId("market-search-input")).toBeInTheDocument();
+  });
+});
+

@@ -33,6 +33,21 @@
   publish = "dist"
 
 # ---------------------------------------------------------
+# Edge-function proxy (CORS FIX, Oct 19, 2026).
+# The Supabase functions gateway omits Access-Control-Allow-
+# Origin, so direct cross-origin invokes from the PWA are
+# killed by the browser preflight. Proxying keeps every
+# archie-* call same-origin; Netlify forwards Authorization +
+# apikey headers and passes response headers through.
+# MUST stay ABOVE the SPA catch-all below.
+# ---------------------------------------------------------
+[[redirects]]
+  from = "/archie-fn/*"
+  to = "https://hqhvlkunkdrxyuvziorm.supabase.co/functions/v1/:splat"
+  status = 200
+  force = true
+
+# ---------------------------------------------------------
 # SPA fallback — all routes serve index.html so React Router
 # handles /archie/* navigation (installed PWAs keep their
 # /archie/chat start_url working).

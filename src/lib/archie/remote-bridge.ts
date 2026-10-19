@@ -24,6 +24,21 @@
 
 const ARCHIE_PROJECT_URL =
   (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? '';
+
+// =========================================================
+// CORS FIX (Oct 19, 2026): the Supabase functions gateway —
+// unlike the auth/REST gateways — omits Access-Control-Allow-
+// Origin, so every DIRECT cross-origin functions/v1 call is
+// killed by the browser before it leaves the device. In the
+// production build, archie-* invocations go through a
+// same-origin Netlify proxy (/archie-fn/<fn>, netlify.toml).
+// Dev/test keep the direct URL (no proxy server there).
+// =========================================================
+const ARCHIE_FN_BASE =
+  (import.meta.env.VITE_ARCHIE_FN_BASE as string | undefined) ??
+  (import.meta.env.PROD && typeof window !== 'undefined'
+    ? window.location.origin + '/archie-fn'
+    : ARCHIE_PROJECT_URL + '/functions/v1');
 const ARCHIE_ANON_KEY =
   (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? '';
 
@@ -56,7 +71,7 @@ export function createArchieInvoker(
         options.body === undefined ? undefined : JSON.stringify(options.body);
 
       const res = await fetch(
-        ARCHIE_PROJECT_URL + '/functions/v1/' + functionName,
+        ARCHIE_FN_BASE + '/' + functionName,
         {
           method: 'POST',
           headers,
