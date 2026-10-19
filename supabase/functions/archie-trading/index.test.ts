@@ -26,11 +26,91 @@ const handler = getHandler();
 const OWNER = { id: "owner-1", email: "owner@frelux.test" };
 const AUTH = { Authorization: "Bearer token-owner-1" };
 
+// ---- Massive API stubbing (harness passes non-supabase URLs
+// to the real network, so we intercept api.massive.com here) ----
+const harnessFetch: any = globalThis.fetch;
+let massiveResponses: Record<string, { body?: unknown }> = {};
+
+function stubMassive() {
+  (globalThis as any).fetch = async (input: any, init?: any) => {
+    const url = typeof input === "string" ? input : input?.url ?? String(input);
+    if (url.includes("api.massive.com")) {
+      const decoded = decodeURIComponent(url);
+      const hit = Object.entries(massiveResponses).find(
+        ([k]) => decoded.includes(k),
+      )?.[1];
+      return new Response(JSON.stringify(hit?.body ?? { status: "OK" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return harnessFetch(input, init);
+  };
+}
+
+function unstubMassive() {
+  (globalThis as any).fetch = harnessFetch;
+}
+
+/** Build a deterministic synthetic daily-bar history: a gentle
+ * uptrend with wobble — enough for SMA/RSI/momentum features and
+ * >260 walk-forward samples. */
+function uptrendBars(n: number, startPrice = 100): { results: any[] } {
+  const results = [];
+  let c = startPrice;
+  const t0 = 1790000000000;
+  for (let i = 0; i < n; i++) {
+    c = c * (1 + 0.004 + 0.02 * Math.sin(i / 7));
+    results.push({
+      o: c - 0.5,
+      h: c + 2,
+      l: c - 2,
+      c: Number(c.toFixed(4)),
+      v: 1000 + (i % 100),
+      t: t0 + i * 86400000,
+    });
+  }
+  return { results };
+}
+
+/** Deterministic DEMO account row: enabled, stopped=false, $50k. */
+function demoAccountRow(patch: Record<string, unknown> = {}) {
+  givenRows("frelux_archie_trading_accounts", [
+    {
+      id: "demo",
+      type: "demo",
+      label: "ARCHIE Demo",
+      balance_quote: 50000,
+      starting_balance_quote: 50000,
+      currency: "USD",
+      trading_enabled: true,
+      emergency_stop: false,
+      venue_mode: "PAPER_SIMULATION",
+      ...patch,
+    },
+    {
+      id: "live",
+      type: "live",
+      label: "ARCHIE Live",
+      balance_quote: 0,
+      starting_balance_quote: 0,
+      currency: "USD",
+      trading_enabled: false,
+      emergency_stop: true,
+      venue_mode: null,
+    },
+  ]);
+}
+
 beforeEach(() => {
   givenUser(OWNER);
   givenRows("profiles", [{ id: "owner-1", role: "admin" }]);
   givenRows("frelux_archie_trading_state", []);
   givenRows("frelux_archie_trading_positions", []);
+  givenRows("frelux_archie_trading_accounts", []);
+  massiveResponses = {};
+  unstubMassive();
+  state.env.MARKET_DATA_API_KEY = "test-key";
   // No venue credentials by default — adapter refuses.
   delete state.env.BINANCE_API_KEY;
   delete state.env.BINANCE_API_SECRET;
@@ -262,7 +342,7 @@ describe("archie-trading — execute (financial action, hard-gated)", () => {
   it("409s without venue credentials — no adapter, no execution", async () => {
     ownerStateRow();
     const res = await handler(
-      req("POST", "", { action: "execute", ...ELIGIBLE }, AUTH),
+      req("POST", "", { action: "execute", account: "live", ...ELIGIBLE }, AUTH),
     );
     expect(res.status).toBe(409);
     const body = await res.json();
@@ -277,7 +357,7 @@ describe("archie-trading — execute (financial action, hard-gated)", () => {
     state.env.BINANCE_API_KEY = "test-key";
     state.env.BINANCE_API_SECRET = "test-secret";
     const res = await handler(
-      req("POST", "", { action: "execute", ...ELIGIBLE }, AUTH),
+      req("POST", "", { action: "execute", account: "live", ...ELIGIBLE }, AUTH),
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -297,7 +377,7 @@ describe("archie-trading — execute (financial action, hard-gated)", () => {
       req(
         "POST",
         "",
-        { action: "execute", ...ELIGIBLE, mainnet_execution_authorized: true },
+        { action: "execute", account: "live", ...ELIGIBLE, mainnet_execution_authorized: true },
         AUTH,
       ),
     );
@@ -358,5 +438,289 @@ describe("archie-trading — emergency_cancel + positions", () => {
     expect(body.positions[0].entryPrice).toBe(100);
     expect(body.stats).toBeTruthy();
     expect(body.exposure).toBeTruthy();
+  });
+});
+
+// =========================================================
+// TWO-ACCOUNT LAYER + ARCHIE MARKET INTELLIGENCE (batch 35)
+// =========================================================
+describe("archie-trading — two accounts", () => {
+  it("status returns BOTH account summaries with safe per-account defaults", async () => {
+    ownerStateRow();
+    const res = await handler(req("POST", "", { action: "status" }, AUTH));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.accounts)).toBe(true);
+    const demo = body.accounts.find((a: any) => a.id === "demo");
+    const live = body.accounts.find((a: any) => a.id === "live");
+    // Absent account rows → SAFE DEFAULTS: stopped + disabled.
+    expect(demo.trading_enabled).toBe(false);
+    expect(demo.emergency_stop).toBe(true);
+    expect(live.trading_enabled).toBe(false);
+    expect(live.emergency_stop).toBe(true);
+    // Per-account limits merge: global state row is enabled, but
+    // the account defaults disable it.
+    expect(demo.limits.tradingEnabled).toBe(false);
+  });
+
+  it("set_state routes switches to a specific account", async () => {
+    ownerStateRow();
+    demoAccountRow({ trading_enabled: false });
+    const res = await handler(
+      req("POST", "", {
+        action: "set_state",
+        account: "demo",
+        trading_enabled: true,
+        emergency_stop: false,
+      }, AUTH),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.account).toBe("demo");
+    expect(body.state.trading_enabled).toBe(true);
+  });
+
+  it("an account cannot loosen a GLOBAL emergency stop", async () => {
+    givenRows("frelux_archie_trading_state", [
+      { id: "owner", emergency_stop: true, trading_enabled: true, limits: null },
+    ]);
+    demoAccountRow();
+    const res = await handler(
+      req("POST", "", {
+        action: "set_state",
+        account: "demo",
+        emergency_stop: false,
+        trading_enabled: true,
+      }, AUTH),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.reason).toMatch(/GLOBAL emergency stop/i);
+  });
+
+  it("positions can be filtered per account", async () => {
+    givenRows("frelux_archie_trading_positions", [
+      { id: "p1", account: "demo", symbol: "BTCUSDT", direction: "long", entry_price: 100, stop_price: 95, target_price: 110, position_size_quote: 20, portfolio_value_quote: 1000, opened_at_ms: 1, state: "OPEN", status: "OPEN", exit_price: null, closed_at_ms: null, realized_pnl_quote: null, realized_pnl_pct: null, fees_paid_quote: 0.02 },
+      { id: "p2", account: "live", symbol: "ETHUSDT", direction: "short", entry_price: 50, stop_price: 55, target_price: 45, position_size_quote: 10, portfolio_value_quote: 1000, opened_at_ms: 2, state: "OPEN", status: "OPEN", exit_price: null, closed_at_ms: null, realized_pnl_quote: null, realized_pnl_pct: null, fees_paid_quote: 0.01 },
+    ]);
+    const res = await handler(
+      req("POST", "", { action: "positions", account: "live" }, AUTH),
+    );
+    const body = await res.json();
+    expect(body.positions).toHaveLength(1);
+    expect(body.positions[0].symbol).toBe("ETHUSDT");
+  });
+});
+
+describe("archie-trading — DEMO execution (simulated at real prices)", () => {
+  it("executes through the gate against the real daily close, locks the ledger, persists account=demo", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    // Real daily bar history: latest close 108.
+    massiveResponses["/range/1/day"] = { body: uptrendBars(40, 100) };
+    // Anchor the request geometry to the REAL fill the stub
+    // will return (the demo path re-evaluates the gate AT the
+    // real close, so stop/target must be geometric around it).
+    const fill = massiveResponses["/range/1/day"].body.results.slice(-1)[0].c;
+    const res = await handler(
+      req("POST", "", {
+        action: "execute",
+        account: "demo",
+        ...ELIGIBLE,
+        request: {
+          ...ELIGIBLE.request,
+          entryPrice: fill,
+          stopPrice: fill - 5,
+          targetPrice: fill + 10,
+        },
+      }, AUTH),
+    );
+    const body = await res.json();
+    expect(body.executed).toBe(true);
+    expect(body.account).toBe("demo");
+    expect(body.fill_price).toBeCloseTo(
+      massiveResponses["/range/1/day"].body.results.slice(-1)[0].c,
+      2,
+    );
+    expect(body.demo_balance_quote).toBeLessThan(50000); // notional + fee locked
+    expect(body.note).toMatch(/DEMO execution/i);
+  });
+
+  it("refuses when the demo ledger cannot cover the notional — honestly, no overdraft", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow({ balance_quote: 10 });
+    massiveResponses["/range/1/day"] = { body: uptrendBars(40, 100) };
+    const res = await handler(
+      req("POST", "", { action: "execute", account: "demo", ...ELIGIBLE }, AUTH),
+    );
+    const body = await res.json();
+    expect(body.executed).toBe(false);
+    expect(body.reason).toMatch(/insufficient demo cash/i);
+  });
+
+  it("503s honestly when the real price feed is down — never fabricates a fill", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    massiveResponses["/range/1/day"] = { body: { results: [] } };
+    const res = await handler(
+      req("POST", "", { action: "execute", account: "demo", ...ELIGIBLE }, AUTH),
+    );
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.error).toMatch(/unavailable/i);
+  });
+
+  it("demo execute re-runs the gate AT the real fill and refuses inconsistent geometry", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    massiveResponses["/range/1/day"] = { body: uptrendBars(40, 100) };
+    // Stop/target built around 100 while the real fill is ~117:
+    // the gate must refuse at the real price.
+    const res = await handler(
+      req("POST", "", { action: "execute", account: "demo", ...ELIGIBLE }, AUTH),
+    );
+    const body = await res.json();
+    expect(body.executed).toBe(false);
+    expect(body.reason ?? body.report).toMatch(/refused|TRADE INELIGIBLE/i);
+  });
+
+  it("closes a demo position at the real close and settles the ledger", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow({ balance_quote: 48000 });
+    givenRows("frelux_archie_trading_positions", [
+      { id: "pos_1", account: "demo", symbol: "BTCUSDT", direction: "long", entry_price: 100, stop_price: 95, target_price: 110, position_size_quote: 500, portfolio_value_quote: 50000, opened_at_ms: 1, state: "OPEN", status: "OPEN", exit_price: null, closed_at_ms: null, realized_pnl_quote: null, realized_pnl_pct: null, fees_paid_quote: 0.5 },
+    ]);
+    massiveResponses["/range/1/day"] = { body: uptrendBars(40, 100) };
+    const lastClose = massiveResponses["/range/1/day"].body.results.slice(-1)[0].c;
+    const res = await handler(
+      req("POST", "", { action: "close", position_id: "pos_1" }, AUTH),
+    );
+    const body = await res.json();
+    expect(body.closed).toBe(true);
+    expect(body.account).toBe("demo");
+    expect(body.position.exitPrice).toBeCloseTo(lastClose, 2);
+    // Long up → positive P&L; ledger credited notional + pnl - fee.
+    expect(body.realized_pnl_quote).toBeGreaterThan(0);
+    expect(body.demo_balance_quote).toBeGreaterThan(48000);
+  });
+
+  it("reset_demo voids open demo positions at entry (no fabricated P&L) and restores the balance", async () => {
+    ownerStateRow();
+    demoAccountRow({ balance_quote: 12345 });
+    givenRows("frelux_archie_trading_positions", [
+      { id: "pos_2", account: "demo", symbol: "BTCUSDT", direction: "long", entry_price: 100, stop_price: 95, target_price: 110, position_size_quote: 500, portfolio_value_quote: 50000, opened_at_ms: 1, state: "OPEN", status: "OPEN", exit_price: null, closed_at_ms: null, realized_pnl_quote: null, realized_pnl_pct: null, fees_paid_quote: 0.5 },
+    ]);
+    const res = await handler(req("POST", "", { action: "reset_demo" }, AUTH));
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.demo_balance_quote).toBe(50000);
+    expect(body.voided_positions).toBe(1);
+  });
+});
+
+describe("archie-trading — ARCHIE market intelligence (analyze)", () => {
+  it("suggests a trade with walk-forward evidence the gate accepts, and persists the analysis", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    // 320 bars of gentle uptrend → model should clear the bar.
+    massiveResponses["/range/1/day"] = { body: uptrendBars(320, 100) };
+    const res = await handler(
+      req("POST", "", {
+        action: "analyze",
+        symbol: "BTCUSDT",
+        account: "demo",
+        portfolioValueQuote: 50000,
+      }, AUTH),
+    );
+    const body = await res.json();
+    expect(body.verdict).toBe("suggested");
+    expect(["long", "short"]).toContain(body.analysis.direction);
+    // Walk-forward is real: samples within the fetched history.
+    expect(body.analysis.backtest.samples).toBeGreaterThan(200);
+    expect(body.evidence.validation.samples).toBe(body.analysis.backtest.samples);
+    // Geometry: stop and target are ATR bands around the entry.
+    const a = body.analysis;
+    expect(a.direction === "long"
+      ? a.stop_price < a.entry_price && a.target_price > a.entry_price
+      : a.stop_price > a.entry_price && a.target_price < a.entry_price).toBe(true);
+    // Sizing respects the gate's maxPositionPct.
+    expect(body.request.positionSizeQuote).toBeLessThanOrEqual(0.02 * 50000 + 0.01);
+    // Honest caveats, always.
+    expect(body.analysis.caveats.join(" ")).toMatch(/not financial advice/);
+    expect(body.analysis.caveats.join(" ")).toMatch(/daily-granularity|end-of-day/);
+  });
+
+  it("WITHHOLDS the suggestion when the model has no demonstrated edge — never lowers the bar", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    // Flat wobble: the model's hit rate should hover near a
+    // coin flip — brier likely >= bar → withheld honestly.
+    const flat: any[] = [];
+    let c = 100;
+    for (let i = 0; i < 320; i++) {
+      c = 100 + Math.sin(i / 3) * 30; // oscillation, no trend
+      flat.push({ o: c - 1, h: c + 1, l: c - 1, c, v: 100, t: 1790000000000 + i * 86400000 });
+    }
+    massiveResponses["/range/1/day"] = { body: { results: flat } };
+    const res = await handler(
+      req("POST", "", { action: "analyze", symbol: "BTCUSDT" }, AUTH),
+    );
+    const body = await res.json();
+    // Either verdict is acceptable — but a WITHHELD must say why.
+    if (body.verdict === "withheld") {
+      expect(body.reason).toMatch(/methodology bar|walk-forward/i);
+      expect(body.analysis).toBeUndefined();
+    } else {
+      expect(body.evidence.validation.brier).toBeLessThan(0.25);
+    }
+  });
+
+  it("refuses thin history honestly instead of suggesting on few bars", async () => {
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    massiveResponses["/range/1/day"] = { body: uptrendBars(50, 100) };
+    const res = await handler(
+      req("POST", "", { action: "analyze", symbol: "BTCUSDT" }, AUTH),
+    );
+    const body = await res.json();
+    expect(body.verdict).toBe("withheld");
+    expect(body.reason).toMatch(/thin history|daily bars available/i);
+  });
+
+  it("503s when the market data key is not provisioned", async () => {
+    ownerStateRow();
+    demoAccountRow();
+    delete state.env.MARKET_DATA_API_KEY;
+    const res = await handler(
+      req("POST", "", { action: "analyze", symbol: "BTCUSDT" }, AUTH),
+    );
+    expect(res.status).toBe(503);
+  });
+});
+
+describe("archie-trading — LIVE account routing", () => {
+  it("live execute still requires venue credentials (409) and demo never does", async () => {
+    const res = await handler(
+      req("POST", "", { action: "execute", account: "live", ...ELIGIBLE }, AUTH),
+    );
+    expect(res.status).toBe(409);
+    // The SAME request on demo is not a credential failure.
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    massiveResponses["/range/1/day"] = { body: uptrendBars(40, 100) };
+    const demoRes = await handler(
+      req("POST", "", { action: "execute", account: "demo", ...ELIGIBLE }, AUTH),
+    );
+    expect(demoRes.status).toBe(200);
   });
 });
