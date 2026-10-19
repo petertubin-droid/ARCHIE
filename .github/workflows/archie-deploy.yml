@@ -33,8 +33,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'supabase/functions/archie-*/**'
-      - 'supabase/functions/_shared/**'
+      - 'supabase/functions/**'
       - 'supabase/migrations/**'
       - '.github/workflows/archie-deploy.yml'
   workflow_dispatch:
@@ -145,8 +144,11 @@ jobs:
           fail=0
           deployed=0
           for ref in $ARCHIE_PROJECT_REFS; do
-            for d in supabase/functions/archie-*/ supabase/functions/ai-*/; do
+            for d in supabase/functions/*/; do
               name="$(basename "$d")"
+              if [ "$name" = "_shared" ]; then
+                continue  # shared code, not a function
+              fi
               jwt_flag="--no-verify-jwt"
               if [ "$name" = "archie-agent-worker" ]; then
                 jwt_flag=""  # default: JWT verification ON
