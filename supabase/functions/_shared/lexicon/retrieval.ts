@@ -289,6 +289,31 @@ export async function lookupWords(
     .limit(opts.limit ?? 24);
   const wordRows = (words ?? []) as LexiconWordRow[];
 
+  // FREQUENCY TRACKING (2026-10-19): every successful DB lookup
+  // bumps each matched word's use count via the
+  // archie_bump_lexicon_frequency RPC — the evidence
+  // prune_lexicon_long_tail needs (frequency was read but never
+  // written; all 87,716 rows were NULL and pruning was inert).
+  // Fire-and-forget: statistics must never block or fail a
+  // lookup. In-memory (curated) clients expose no rpc and are
+  // skipped — corpus words are not DB rows.
+  if (wordRows.length) {
+    try {
+      const rpcClient = svc as unknown as {
+        rpc?: (fn: string, args: Record<string, unknown>) => Promise<
+          { error: unknown }
+        >;
+      };
+      if (typeof rpcClient.rpc === "function") {
+        await rpcClient.rpc("archie_bump_lexicon_frequency", {
+          pWordIds: wordRows.map((w) => w.id),
+        });
+      }
+    } catch {
+      // usage statistics never break a lookup
+    }
+  }
+
   if (!wordRows.length) {
     if (opts.fallbackToCorpus || opts.includeCuratedCorpus) {
       return lookupCuratedWords(normalized, { limit: opts.limit, statuses });

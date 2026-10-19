@@ -109,7 +109,7 @@ BEGIN
     RAISE EXCEPTION 'execution run has multiple terminal lifecycle events; manual reconciliation required';
   END IF;
   IF v_existing_event_type IS NOT NULL
-     AND v_existing_event_type IS DISTINCT FROM CASE WHEN v_reported_success THEN 'REPORT' ELSE 'FAIL' END THEN
+     AND v_existing_event_type IS DISTINCT FROM (CASE WHEN v_reported_success THEN 'REPORT' ELSE 'FAIL' END) THEN
     RAISE EXCEPTION 'terminal lifecycle event conflicts with persisted report';
   END IF;
 
