@@ -759,3 +759,41 @@ export interface StreamSubscription {
   active: boolean;
   lastHeartbeatMs: number;
 }
+
+// ----------------------------------------------------------------------------
+// Live WebSocket Provider Streaming (Component A / Live Streaming)
+// ----------------------------------------------------------------------------
+
+export type WebSocketConnectionStatus =
+  | "DISCONNECTED"
+  | "CONNECTING"
+  | "CONNECTED"
+  | "RECONNECTING"
+  | "CLOSING"
+  | "FAILED";
+
+export interface WebSocketStreamConfig {
+  providerId: string;
+  name: string;
+  url: string;
+  apiKey?: string;
+  heartbeatIntervalMs?: number;
+  reconnectInitialDelayMs?: number;
+  reconnectMaxDelayMs?: number;
+  maxReconnectAttempts?: number;
+  pingPayload?: string | Record<string, unknown>;
+}
+
+export interface StreamConnectionMetrics {
+  status: WebSocketConnectionStatus;
+  connectedAtMs: number | null;
+  lastMessageAtMs: number | null;
+  lastPingSentAtMs: number | null;
+  lastPongReceivedAtMs: number | null;
+  roundTripLatencyMs: number;
+  totalMessagesReceived: number;
+  totalBytesReceived: number;
+  reconnectAttempts: number;
+  sequenceGapsCount: number;
+  lastError: string | null;
+}

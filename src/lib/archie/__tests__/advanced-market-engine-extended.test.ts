@@ -7,6 +7,10 @@
 import { describe, it, expect } from "vitest";
 import {
   MarketStreamManager,
+  ResilientWebSocketClient,
+  BinanceKlineWebSocketConnector,
+  type SocketLike,
+  type SocketFactory,
   trainDecisionStumpEnsemble,
   predictDecisionStumpEnsemble,
   classifyMarketRegimeHMM,
@@ -211,5 +215,119 @@ describe("ARCHIE Advanced Market Intelligence Engine — Extended Suite", () => 
     // When owner signs off:
     const authorizedSuite = runAutomatedGateSuite(candles, { ownerApproved: true });
     expect(authorizedSuite.allGatesPassed).toBe(true);
+  });
+});
+
+describe("Live WebSocket Resilient Client & Binance Adapter", () => {
+  it("ResilientWebSocketClient handles open, messages, and disconnect", async () => {
+    let sentPayload: string | null = null;
+    let closedWith: { code?: number; reason?: string } | null = null;
+    let onOpenCb: any = null;
+    let onMessageCb: any = null;
+
+    const fakeSocket: SocketLike = {
+      readyState: 1,
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      send(data: string) { sentPayload = data; },
+      close(code?: number, reason?: string) {
+        closedWith = { code, reason };
+        if (this.onclose) this.onclose({ code: code ?? 1000, reason: reason ?? "" } as CloseEvent);
+      },
+    };
+
+    const mockFactory: SocketFactory = () => fakeSocket;
+    const receivedMessages: any[] = [];
+
+    const client = new ResilientWebSocketClient(
+      {
+        providerId: "TEST_WS",
+        name: "test-stream",
+        url: "wss://test.stream.com/ws",
+        heartbeatIntervalMs: 60000,
+      },
+      (msg) => receivedMessages.push(msg),
+      (sock) => sock.send("READY"),
+      mockFactory,
+    );
+
+    const connectPromise = client.connect();
+    // Simulate socket open
+    fakeSocket.onopen!({} as Event);
+    await connectPromise;
+
+    expect(client.getMetrics().status).toBe("CONNECTED");
+    expect(sentPayload).toBe("READY");
+
+    // Simulate incoming message
+    fakeSocket.onmessage!({ data: JSON.stringify({ e: "kline", value: 123 }) } as MessageEvent);
+    expect(receivedMessages.length).toBe(1);
+    expect(receivedMessages[0].value).toBe(123);
+
+    // Disconnect
+    client.disconnect();
+    expect(client.getMetrics().status).toBe("DISCONNECTED");
+  });
+
+  it("BinanceKlineWebSocketConnector parses real kline frames with live provenance", async () => {
+    let fakeSocket: any = null;
+    const mockFactory: SocketFactory = () => {
+      fakeSocket = {
+        readyState: 1,
+        onopen: null,
+        onmessage: null,
+        onerror: null,
+        onclose: null,
+        send() {},
+        close() {},
+      };
+      return fakeSocket;
+    };
+
+    const updates: any[] = [];
+    const connector = new BinanceKlineWebSocketConnector(
+      (update) => updates.push(update),
+      mockFactory,
+    );
+
+    const subKeyPromise = connector.subscribe("BTC/USDT", "1m");
+    fakeSocket.onopen({} as Event);
+    const subKey = await subKeyPromise;
+
+    expect(subKey).toBe("btcusdt@kline_1m");
+
+    // Send a valid Binance kline payload
+    const binanceKlineFrame = {
+      e: "kline",
+      E: 1672531200000,
+      s: "BTCUSDT",
+      k: {
+        t: 1672531200000,
+        T: 1672531259999,
+        s: "BTCUSDT",
+        i: "1m",
+        o: "50000.00",
+        c: "50100.00",
+        h: "50200.00",
+        l: "49950.00",
+        v: "12.5",
+        q: "625000.00",
+        n: 150,
+        x: true,
+      },
+    };
+
+    fakeSocket.onmessage({ data: JSON.stringify(binanceKlineFrame) } as MessageEvent);
+
+    expect(updates.length).toBe(1);
+    expect(updates[0].symbol).toBe("BTCUSDT");
+    expect(updates[0].category).toBe("CRYPTO");
+    expect(updates[0].candle.close).toBe(50100);
+    expect(updates[0].candle.source).toBe("provider_live");
+    expect(updates[0].candle.isFinalized).toBe(true);
+
+    connector.destroy();
   });
 });

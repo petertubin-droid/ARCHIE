@@ -680,44 +680,293 @@ function mapIntervalToRange(interval: CandleInterval, count: number): string {
 
 
 // ----------------------------------------------------------------------------
-// Real-Time Streaming & WebSocket Ingestion Engine (Component A / Stream)
+// Live Provider WebSocket Streaming & In-Process Fan-Out
 // ----------------------------------------------------------------------------
 
-import type { StreamingCandleUpdate, StreamSubscription } from "./types.ts";
+import type {
+  StreamingCandleUpdate,
+  StreamSubscription,
+  WebSocketStreamConfig,
+  WebSocketConnectionStatus,
+  StreamConnectionMetrics,
+} from "./types.ts";
 
 export type CandleStreamListener = (update: StreamingCandleUpdate) => void;
+
+export interface SocketLike {
+  readonly readyState: number;
+  onopen: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onclose: ((event: CloseEvent) => void) | null;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+
+export type SocketFactory = (url: string, protocols?: string | string[]) => SocketLike;
+export type WebSocketMessageHandler = (data: unknown, event: MessageEvent) => void;
+export type WebSocketOpenHandler = (socket: SocketLike) => void;
+
+const DEFAULT_SOCKET_FACTORY: SocketFactory = (url, protocols) => {
+  const SocketConstructor = globalThis.WebSocket;
+  if (!SocketConstructor) throw new Error("WebSocket is unavailable in this runtime");
+  return new SocketConstructor(url, protocols) as unknown as SocketLike;
+};
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Owns one provider socket, with exponential reconnect, stale-connection
+ * protection and a testable socket factory. Provider-specific adapters should
+ * only parse/subscribe; they must never put credentials in URL query strings.
+ */
+export class ResilientWebSocketClient {
+  private socket: SocketLike | null = null;
+  private stopped = true;
+  private generation = 0;
+  private reconnectTask: Promise<void> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pendingPingAt: number | null = null;
+  private readonly metrics: StreamConnectionMetrics = {
+    status: "DISCONNECTED", connectedAtMs: null, lastMessageAtMs: null,
+    lastPingSentAtMs: null, lastPongReceivedAtMs: null, roundTripLatencyMs: 0,
+    totalMessagesReceived: 0, totalBytesReceived: 0, reconnectAttempts: 0,
+    sequenceGapsCount: 0, lastError: null,
+  };
+
+  constructor(
+    private readonly config: WebSocketStreamConfig,
+    private readonly onMessage: WebSocketMessageHandler,
+    private readonly onOpen?: WebSocketOpenHandler,
+    private readonly socketFactory: SocketFactory = DEFAULT_SOCKET_FACTORY,
+    private readonly random: () => number = Math.random,
+  ) {
+    if (!/^wss?:\/\//i.test(config.url)) throw new Error("WebSocket URL must use ws:// or wss://");
+  }
+
+  public getMetrics(): StreamConnectionMetrics {
+    return { ...this.metrics };
+  }
+
+  public async connect(): Promise<void> {
+    if (!this.stopped && (this.metrics.status === "CONNECTED" || this.metrics.status === "CONNECTING" || this.metrics.status === "RECONNECTING")) return;
+    this.stopped = false;
+    const generation = ++this.generation;
+    await this.openSocket(generation, false);
+  }
+
+  private async openSocket(generation: number, reconnecting: boolean): Promise<void> {
+    if (this.stopped || generation !== this.generation) return;
+    this.metrics.status = reconnecting ? "RECONNECTING" : "CONNECTING";
+    try {
+      const socket = this.socketFactory(this.config.url);
+      this.socket = socket;
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            reject(new Error(`WebSocket connection timed out: ${this.config.name}`));
+            try { socket.close(); } catch { /* best-effort cleanup */ }
+          }
+        }, 15_000);
+        socket.onopen = (event) => {
+          if (generation !== this.generation || this.stopped) { socket.close(1000, "stale connection"); return; }
+          if (!settled) { settled = true; clearTimeout(timeout); resolve(); }
+          this.metrics.status = "CONNECTED";
+          this.metrics.connectedAtMs = Date.now();
+          this.metrics.reconnectAttempts = 0;
+          this.metrics.lastError = null;
+          this.startHeartbeat(generation, socket);
+          try { this.onOpen?.(socket); } catch (error) { this.recordError(error); }
+        };
+        socket.onmessage = (event) => {
+          if (generation !== this.generation || this.stopped) return;
+          const now = Date.now();
+          this.metrics.lastMessageAtMs = now;
+          this.metrics.totalMessagesReceived++;
+          this.metrics.totalBytesReceived += typeof event.data === "string" ? new TextEncoder().encode(event.data).length : Number(event.data?.byteLength ?? 0);
+          const parsed = this.parseMessage(event.data);
+          if (this.isPong(parsed)) {
+            this.metrics.lastPongReceivedAtMs = now;
+            if (this.pendingPingAt !== null) this.metrics.roundTripLatencyMs = Math.max(0, now - this.pendingPingAt);
+            this.pendingPingAt = null;
+          }
+          try { this.onMessage(parsed, event); } catch (error) { this.recordError(error); }
+        };
+        socket.onerror = () => {
+          const error = new Error(`WebSocket error: ${this.config.name}`);
+          this.recordError(error);
+          if (!settled) { settled = true; clearTimeout(timeout); reject(error); }
+        };
+        socket.onclose = (event) => {
+          if (generation !== this.generation || this.stopped) return;
+          this.stopHeartbeat();
+          this.socket = null;
+          if (event.code === 1000 || event.code === 1001) {
+            this.metrics.status = "DISCONNECTED";
+            return;
+          }
+          if (!settled) { settled = true; clearTimeout(timeout); reject(new Error(`WebSocket closed before open (${event.code})`)); }
+          this.scheduleReconnect(generation);
+        };
+      });
+    } catch (error) {
+      if (generation !== this.generation || this.stopped) return;
+      this.recordError(error);
+      if (!reconnecting) this.scheduleReconnect(generation);
+      else this.scheduleReconnect(generation);
+    }
+  }
+
+  private parseMessage(data: unknown): unknown {
+    if (typeof data !== "string") return data;
+    try { return JSON.parse(data); } catch { return data; }
+  }
+
+  private isPong(data: unknown): boolean {
+    if (data === "pong") return true;
+    return !!data && typeof data === "object" && (String((data as Record<string, unknown>).type ?? "").toLowerCase() === "pong");
+  }
+
+  private startHeartbeat(generation: number, socket: SocketLike): void {
+    this.stopHeartbeat();
+    const every = Math.max(5_000, this.config.heartbeatIntervalMs ?? 25_000);
+    this.pingTimer = setInterval(() => {
+      if (this.stopped || generation !== this.generation || this.socket !== socket || socket.readyState !== 1) return;
+      const payload = this.config.pingPayload ?? JSON.stringify({ type: "ping", timestamp: Date.now() });
+      try {
+        socket.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+        this.pendingPingAt = Date.now();
+        this.metrics.lastPingSentAtMs = this.pendingPingAt;
+      } catch (error) {
+        this.recordError(error);
+        try { socket.close(1011, "heartbeat send failed"); } catch { /* reconnect on close */ }
+      }
+    }, every);
+    const timer = this.pingTimer as unknown as { unref?: () => void };
+    timer.unref?.();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.pingTimer) clearInterval(this.pingTimer);
+    this.pingTimer = null;
+    this.pendingPingAt = null;
+  }
+
+  private scheduleReconnect(generation: number): void {
+    if (this.stopped || generation !== this.generation || this.reconnectTask) return;
+    const maximum = Math.max(0, this.config.maxReconnectAttempts ?? 12);
+    if (this.metrics.reconnectAttempts >= maximum) {
+      this.metrics.status = "FAILED";
+      this.metrics.lastError = this.metrics.lastError ?? `Reconnect limit reached for ${this.config.name}`;
+      return;
+    }
+    this.reconnectTask = (async () => {
+      const attempt = ++this.metrics.reconnectAttempts;
+      this.metrics.status = "RECONNECTING";
+      const base = Math.max(100, this.config.reconnectInitialDelayMs ?? 500);
+      const cap = Math.max(base, this.config.reconnectMaxDelayMs ?? 30_000);
+      const backoff = Math.min(cap, base * 2 ** Math.min(attempt - 1, 16));
+      await delay(Math.floor(backoff * (0.8 + this.random() * 0.4)));
+      this.reconnectTask = null;
+      if (!this.stopped && generation === this.generation) await this.openSocket(generation, true);
+    })();
+  }
+
+  private recordError(error: unknown): void {
+    this.metrics.lastError = error instanceof Error ? error.message : String(error);
+  }
+
+  public disconnect(code = 1000, reason = "client disconnect"): void {
+    this.stopped = true;
+    ++this.generation;
+    this.reconnectTask = null;
+    this.stopHeartbeat();
+    this.metrics.status = "CLOSING";
+    const socket = this.socket;
+    this.socket = null;
+    try { socket?.close(code, reason); } catch { /* best-effort cleanup */ }
+    this.metrics.status = "DISCONNECTED";
+  }
+}
+
+/** Binance public kline stream adapter. No API key is required for public streams. */
+export class BinanceKlineWebSocketConnector {
+  private clients = new Map<string, ResilientWebSocketClient>();
+
+  constructor(
+    private readonly emit: (update: StreamingCandleUpdate) => void,
+    private readonly socketFactory: SocketFactory = DEFAULT_SOCKET_FACTORY,
+  ) {}
+
+  public async subscribe(symbol: string, interval: CandleInterval): Promise<string> {
+    const normalized = symbol.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    if (!normalized) throw new Error("A valid Binance symbol is required");
+    const streamInterval = mapToBinanceInterval(interval);
+    const key = `${normalized}@kline_${streamInterval}`;
+    if (this.clients.has(key)) return key;
+    const url = `wss://stream.binance.com:9443/ws/${key}`;
+    const client = new ResilientWebSocketClient(
+      { providerId: "BINANCE_SPOT_WS_PUBLIC", name: key, url, maxReconnectAttempts: 20 },
+      (message) => {
+        const root = message as { e?: string; E?: number; s?: string; k?: Record<string, unknown> };
+        if (!root?.k || root.e !== "kline") return;
+        const k = root.k;
+        const candle: MarketCandle = {
+          openTimeMs: Number(k.t), closeTimeMs: Number(k.T), open: Number(k.o), high: Number(k.h),
+          low: Number(k.l), close: Number(k.c), volume: Number(k.v), quoteVolume: Number(k.q),
+          tradesCount: Number(k.n), isFinalized: Boolean(k.x), source: "provider_live",
+        };
+        if (![candle.openTimeMs, candle.closeTimeMs, candle.open, candle.high, candle.low, candle.close, candle.volume].every(Number.isFinite)) return;
+        this.emit({ symbol: String(root.s ?? normalized).toUpperCase(), category: "CRYPTO", candle,
+          sequenceNumber: Number(root.E ?? Date.now()), timestampMs: Date.now() });
+      },
+      undefined,
+      this.socketFactory,
+    );
+    this.clients.set(key, client);
+    await client.connect();
+    return key;
+  }
+
+  public unsubscribe(subscriptionId: string): boolean {
+    const client = this.clients.get(subscriptionId);
+    if (!client) return false;
+    client.disconnect();
+    this.clients.delete(subscriptionId);
+    return true;
+  }
+
+  public getMetrics(subscriptionId: string): StreamConnectionMetrics | null {
+    return this.clients.get(subscriptionId)?.getMetrics() ?? null;
+  }
+
+  public destroy(): void {
+    for (const client of this.clients.values()) client.disconnect();
+    this.clients.clear();
+  }
+}
 
 export class MarketStreamManager {
   private subscriptions = new Map<string, StreamSubscription>();
   private listeners = new Set<CandleStreamListener>();
   private sequenceTracker = new Map<string, number>();
-  private heartbeatInterval: any = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
-  constructor() {
-    this.startHeartbeat();
-  }
+  constructor() { this.startHeartbeat(); }
 
-  public subscribe(
-    symbol: string,
-    category: MarketCategory,
-    interval: CandleInterval = "1m",
-  ): string {
+  public subscribe(symbol: string, category: MarketCategory, interval: CandleInterval = "1m"): string {
     const subId = `${category}:${symbol.toUpperCase()}:${interval}`;
     if (!this.subscriptions.has(subId)) {
-      this.subscriptions.set(subId, {
-        subscriptionId: subId,
-        symbol: symbol.toUpperCase(),
-        category,
-        interval,
-        active: true,
-        lastHeartbeatMs: Date.now(),
-      });
+      this.subscriptions.set(subId, { subscriptionId: subId, symbol: symbol.toUpperCase(), category, interval, active: true, lastHeartbeatMs: Date.now() });
       this.sequenceTracker.set(subId, 0);
     }
     return subId;
   }
 
   public unsubscribe(subId: string): boolean {
+    this.sequenceTracker.delete(subId);
     return this.subscriptions.delete(subId);
   }
 
@@ -727,52 +976,34 @@ export class MarketStreamManager {
   }
 
   public publishCandleUpdate(symbol: string, category: MarketCategory, candle: MarketCandle): void {
-    const subId = `${category}:${symbol.toUpperCase()}`;
-    const seq = (this.sequenceTracker.get(subId) ?? 0) + 1;
-    this.sequenceTracker.set(subId, seq);
-
-    const update: StreamingCandleUpdate = {
-      symbol: symbol.toUpperCase(),
-      category,
-      candle,
-      sequenceNumber: seq,
-      timestampMs: Date.now(),
-    };
-
-    for (const listener of this.listeners) {
-      try {
-        listener(update);
-      } catch (err) {
-        console.error("Stream listener error:", err);
+    const normalized = symbol.toUpperCase();
+    const matches = Array.from(this.subscriptions.values()).filter((sub) => sub.symbol === normalized && sub.category === category && sub.active);
+    if (matches.length === 0) return;
+    for (const sub of matches) {
+      const seq = (this.sequenceTracker.get(sub.subscriptionId) ?? 0) + 1;
+      this.sequenceTracker.set(sub.subscriptionId, seq);
+      const update: StreamingCandleUpdate = { symbol: normalized, category, candle, sequenceNumber: seq, timestampMs: Date.now() };
+      for (const listener of this.listeners) {
+        try { listener(update); } catch (err) { console.error("Stream listener error:", err); }
       }
     }
   }
 
-  public getActiveSubscriptions(): StreamSubscription[] {
-    return Array.from(this.subscriptions.values());
-  }
+  public getActiveSubscriptions(): StreamSubscription[] { return Array.from(this.subscriptions.values()); }
 
   private startHeartbeat(): void {
-    // Keeps subscriptions active and checks for sequence anomalies
-    if (typeof setInterval !== "undefined") {
-      this.heartbeatInterval = setInterval(() => {
-        const now = Date.now();
-        for (const sub of this.subscriptions.values()) {
-          sub.lastHeartbeatMs = now;
-        }
-      }, 15_000);
-      if (this.heartbeatInterval.unref) {
-        this.heartbeatInterval.unref();
-      }
-    }
+    this.heartbeatInterval = setInterval(() => {
+      const now = Date.now();
+      for (const sub of this.subscriptions.values()) sub.lastHeartbeatMs = now;
+    }, 15_000);
+    (this.heartbeatInterval as unknown as { unref?: () => void }).unref?.();
   }
 
   public destroy(): void {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    this.heartbeatInterval = null;
     this.subscriptions.clear();
+    this.sequenceTracker.clear();
     this.listeners.clear();
   }
 }

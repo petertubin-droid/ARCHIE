@@ -41,6 +41,8 @@ import {
   runAutomatedGateSuite,
   globalMarketStream,
   calculateSquareRootMarketImpact,
+  BinanceKlineWebSocketConnector,
+  type StreamConnectionMetrics,
 } from "@/lib/archie/market-engine";
 
 const AVAILABLE_ASSETS: Array<{ symbol: string; category: MarketCategory; name: string; basePrice: number }> = [
@@ -93,6 +95,8 @@ export default function MarketIntelligenceRadar() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [candles, setCandles] = useState<MarketCandle[]>([]);
   const [streamUpdatesCount, setStreamUpdatesCount] = useState(0);
+  const [streamSource, setStreamSource] = useState<"LIVE_WSS" | "SIMULATED">("LIVE_WSS");
+  const [socketMetrics, setSocketMetrics] = useState<StreamConnectionMetrics | null>(null);
 
   // Initialize and reload candles when asset changes
   useEffect(() => {
@@ -100,10 +104,53 @@ export default function MarketIntelligenceRadar() {
     setCandles(initial);
   }, [selectedAsset]);
 
-  // Handle streaming updates
+  // Handle streaming updates (Live WebSocket or Simulated Fallback)
   useEffect(() => {
-    if (!isStreaming) return;
+    if (!isStreaming) {
+      setSocketMetrics(null);
+      return;
+    }
 
+    // A. Live WebSocket Stream for Crypto
+    if (streamSource === "LIVE_WSS" && selectedAsset.category === "CRYPTO") {
+      let activeSubKey: string | null = null;
+      const connector = new BinanceKlineWebSocketConnector((update) => {
+        if (update.symbol === selectedAsset.symbol) {
+          setCandles((prev) => {
+            if (prev.length === 0) return [update.candle];
+            const last = prev[prev.length - 1];
+            // If current candle update belongs to active candle window, update in place
+            if (update.candle.openTimeMs === last.openTimeMs) {
+              return [...prev.slice(0, prev.length - 1), update.candle];
+            }
+            // New minute candle arrived
+            return [...prev.slice(1), update.candle];
+          });
+          setStreamUpdatesCount((c) => c + 1);
+        }
+      });
+
+      connector.subscribe(selectedAsset.symbol, selectedInterval).then((subKey) => {
+        activeSubKey = subKey;
+      }).catch((err) => {
+        console.warn("WebSocket subscription error:", err);
+      });
+
+      const metricsInterval = setInterval(() => {
+        if (activeSubKey) {
+          const m = connector.getMetrics(activeSubKey);
+          if (m) setSocketMetrics(m);
+        }
+      }, 1000);
+
+      return () => {
+        clearInterval(metricsInterval);
+        connector.destroy();
+        setSocketMetrics(null);
+      };
+    }
+
+    // B. In-Process / Simulated Stream for other assets or test mode
     const subId = globalMarketStream.subscribe(selectedAsset.symbol, selectedAsset.category, selectedInterval);
     const unsubscribe = globalMarketStream.addListener((update) => {
       if (update.symbol === selectedAsset.symbol) {
@@ -141,7 +188,7 @@ export default function MarketIntelligenceRadar() {
       unsubscribe();
       globalMarketStream.unsubscribe(subId);
     };
-  }, [isStreaming, selectedAsset, selectedInterval]);
+  }, [isStreaming, streamSource, selectedAsset, selectedInterval]);
 
   // Run analytical fusion on candles
   const analysis = useMemo(() => {
@@ -228,17 +275,56 @@ export default function MarketIntelligenceRadar() {
         </div>
 
         {/* Streaming & Interval Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Stream Mode Switcher */}
+          <div className="flex items-center p-0.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px]">
+            <button
+              onClick={() => setStreamSource("LIVE_WSS")}
+              className={`px-2 py-1 rounded transition-colors font-medium ${
+                streamSource === "LIVE_WSS"
+                  ? "bg-indigo-600 text-white shadow"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+              title="Direct WebSocket streaming via Binance Public Kline Stream"
+            >
+              Live WSS
+            </button>
+            <button
+              onClick={() => setStreamSource("SIMULATED")}
+              className={`px-2 py-1 rounded transition-colors font-medium ${
+                streamSource === "SIMULATED"
+                  ? "bg-indigo-600 text-white shadow"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+              title="Local synthetic ticker generator"
+            >
+              Simulation
+            </button>
+          </div>
+
+          {/* Socket Status Badge if active */}
+          {socketMetrics && (
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-[11px] font-mono">
+              <span className={`w-2 h-2 rounded-full ${
+                socketMetrics.status === "CONNECTED" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
+              }`} />
+              <span className="text-slate-300 font-semibold">{socketMetrics.status}</span>
+              {socketMetrics.roundTripLatencyMs > 0 && (
+                <span className="text-slate-400">({socketMetrics.roundTripLatencyMs}ms)</span>
+              )}
+            </div>
+          )}
+
           <button
             onClick={() => setIsStreaming(!isStreaming)}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
               isStreaming
-                ? "bg-emerald-600 text-white animate-pulse"
+                ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/30"
                 : "bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
             }`}
           >
             <Activity className="w-3.5 h-3.5" />
-            {isStreaming ? `Live Ingestion (${streamUpdatesCount})` : "Start Stream"}
+            {isStreaming ? `Streaming (${streamUpdatesCount})` : "Start Stream"}
           </button>
         </div>
       </div>
