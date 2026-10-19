@@ -119,6 +119,52 @@ describe("checkAuthority — the single decision point", () => {
     });
   });
 
+  // ---- multi-actor grants (2026-10-19): moved deliberately from
+  // the misdirected FRELUX commit into the live ARCHIE gate ----
+  it("honors ADMIN, SYSTEM and AUTO grants as first-class authorizations", () => {
+    for (const grantedBy of ["ADMIN", "SYSTEM", "AUTO"] as const) {
+      const d = checkAuthority(
+        { authority: "deploy_code", scope: "repo:archie" },
+        reg({ id: `auth_${grantedBy}`, scope: "repo:archie", granted_by: grantedBy }),
+        NOW,
+      );
+      expect(d).toMatchObject({
+        allowed: true,
+        basis: "OWNER_AUTHORIZED",
+        authorizationId: `auth_${grantedBy}`,
+      });
+    }
+  });
+
+  it("defaults grants to OWNER when no grantor is named", () => {
+    const r = new AuthorizationRegistry().grant({
+      id: "auth_default",
+      authority: "deploy_code",
+      scope: "repo:*",
+      granted_at: NOW - 1000,
+      expires_at: NOW + 100_000,
+      evidence: "session:test",
+    });
+    expect(r.granted_by).toBe("OWNER");
+  });
+
+  it("keeps honoring expiry and scope boundaries for every grantor type", () => {
+    const registry = new AuthorizationRegistry();
+    registry.grant({
+      id: "auth_expired_auto",
+      authority: "deploy_code",
+      scope: "repo:*",
+      granted_by: "AUTO",
+      granted_at: NOW - 10_000,
+      expires_at: NOW - 100, // expired
+      evidence: "workflow:test",
+    });
+    expect(
+      checkAuthority({ authority: "deploy_code", scope: "repo:x" }, registry, NOW)
+        .allowed,
+    ).toBe(false);
+  });
+
   it("refuses expired authorizations — expiry is enforced at decision time", () => {
     const d = checkAuthority(
       { authority: "deploy_code", scope: "repo:frelux" },

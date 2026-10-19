@@ -53,13 +53,27 @@ export type ArchieAuthority =
   | "change_configuration"
   | "grant_api_access";
 
+/** Legitimate grantors of authority (multi-actor design,
+ *  2026-10-19 — moved here deliberately from a misdirected
+ *  FRELUX-repo commit; the ARCHIE repo is the source of truth
+ *  for this gate). */
+export type Grantor = "OWNER" | "ADMIN" | "SYSTEM" | "AUTO";
+
 /** Authority-requiring actions and their authorization shape. */
 export interface AuthorizationRecord {
   id: string;
   authority: ArchieAuthority;
   /** What the authorization covers, e.g. a URL, repo path or target scope. */
   scope: string;
-  granted_by: "OWNER";
+  /** Who minted the grant. Multi-actor (2026-10-19): OWNER
+   *  (human owner), ADMIN (owner-appointed admin via the
+   *  admin-gated RLS write path), SYSTEM (service-role from
+   *  validated infrastructure workflows), AUTO (service-role
+   *  from ARCHIE's own audited automation, e.g. a scheduled
+   *  crawl it was pre-authorized to perform). All four are
+   *  honored at decision time; the DB write path stays
+   *  admin-only (is_current_user_admin) plus service role. */
+  granted_by: Grantor;
   /** Epoch ms when granted. */
   granted_at: number;
   /** Epoch ms after which the authorization is void. */
@@ -104,18 +118,29 @@ export const FREE_CAPABILITIES: readonly ArchieCapability[] =
 
 /** In-memory authorization registry. Production deployments
  *  mirror this in the archie_global_authorizations table
- *  (owner-only write via RLS); the DB record is the source
- *  of truth, this registry is the runtime cache of OWNER-
- *  granted records. ARCHIE can NEVER insert or update it. */
+ *  (admin-gated write via RLS; service-role may mint
+ *  SYSTEM/AUTO grants from validated workflows); the DB
+ *  record is the source of truth, this registry is the
+ *  runtime cache. ARCHIE's reasoning can NEVER insert or
+ *  update it on its own behalf. */
 export class AuthorizationRegistry {
   private records = new Map<string, AuthorizationRecord>();
 
-  /** OWNER-ONLY action (enforced by callers/RLS; ARCHIE never
-   *  invokes this). Grants an authority for a scope. */
+  /** Grants an authority for a scope. Callers are the OWNER,
+   *  an OWNER-appointed ADMIN, or service-role infrastructure
+   *  minting SYSTEM/AUTO grants from validated workflows —
+   *  enforced by the admin-gated RLS write path on
+   *  archie_global_authorizations. ARCHIE's own reasoning can
+   *  never invoke this on its own behalf. */
   grant(
-    record: Omit<AuthorizationRecord, "granted_by"> & { granted_by?: "OWNER" },
+    record: Omit<AuthorizationRecord, "granted_by"> & {
+      granted_by?: Grantor;
+    },
   ): AuthorizationRecord {
-    const full: AuthorizationRecord = { ...record, granted_by: "OWNER" };
+    const full: AuthorizationRecord = {
+      ...record,
+      granted_by: record.granted_by ?? "OWNER",
+    };
     if (full.expires_at <= full.granted_at) {
       throw new Error("Authorization expiry must be after grant time.");
     }
@@ -136,7 +161,9 @@ export class AuthorizationRegistry {
     for (const r of this.records.values()) {
       if (
         r.authority === authority &&
-        r.granted_by === "OWNER" &&
+        // Multi-actor (2026-10-19): OWNER, ADMIN, SYSTEM and
+        // AUTO grants are all legitimate records — trust lives
+        // in the admin-gated WRITE path, not here.
         r.expires_at > now &&
         scopeMatches(r.scope, scope)
       ) {
