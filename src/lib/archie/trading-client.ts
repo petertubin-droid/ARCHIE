@@ -369,9 +369,11 @@ export async function executeAccountTrade(input: {
 }
 
 export async function closePosition(
-  account: TradingAccountType,
-  position_id: string,
+  accountOrInput: TradingAccountType | { account: TradingAccountType; positionId?: string; position_id?: string },
+  maybePositionId?: string,
 ): Promise<Record<string, unknown>> {
+  const account = typeof accountOrInput === "string" ? accountOrInput : accountOrInput.account;
+  const position_id = typeof accountOrInput === "string" ? maybePositionId! : (accountOrInput.positionId ?? accountOrInput.position_id!);
   return invokeTrading<Record<string, unknown>>({
     action: "close",
     account,
@@ -440,9 +442,11 @@ export async function fetchTreasuryStatus(
 }
 
 export async function treasuryDeposit(
-  account: TradingAccountType,
-  amount: number,
+  accountOrInput: TradingAccountType | { account: TradingAccountType; amount: number },
+  maybeAmount?: number,
 ): Promise<Record<string, unknown>> {
+  const account = typeof accountOrInput === "string" ? accountOrInput : accountOrInput.account;
+  const amount = typeof accountOrInput === "string" ? maybeAmount! : accountOrInput.amount;
   return invokeTrading<Record<string, unknown>>({
     action: "treasury_deposit",
     account,
@@ -453,9 +457,11 @@ export async function treasuryDeposit(
 export async function treasuryWithdraw(input: {
   account: TradingAccountType;
   amount: number;
+  asset?: string;
   address?: string;
   network?: string;
   withdraw_authorized?: boolean;
+  withdrawAuthorized?: boolean;
 }): Promise<Record<string, unknown>> {
   return invokeTrading<Record<string, unknown>>({
     action: "treasury_withdraw",

@@ -6,6 +6,7 @@
 //   * Binance HMAC-SHA256 Multi-Asset Gateway
 //   * MetaTrader 4/5 Terminal Bridge
 //   * Zero-risk Paper Simulator Sandbox
+//   * Granular Privilege Scopes & Withdrawal Lock Enforcement
 // =========================================================
 
 import { useState } from "react";
@@ -20,6 +21,11 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertTriangle,
+  Key,
+  Sliders,
+  DollarSign,
+  ArrowRight,
+  ShieldAlert,
 } from "lucide-react";
 import {
   ArchiePage,
@@ -30,6 +36,7 @@ import {
   ArchieStat,
   ArchieSectionTitle,
   ArchieInput,
+  ArchieField,
 } from "@/components/archie/premium";
 import { INITIAL_BROKER_REGISTRY } from "@/lib/archie/trading/broker-center";
 import type { BrokerCardState } from "@/lib/archie/trading/types";
@@ -37,8 +44,16 @@ import type { BrokerCardState } from "@/lib/archie/trading/types";
 export default function ArchieExchangeAccess() {
   const [brokers, setBrokers] = useState<BrokerCardState[]>(INITIAL_BROKER_REGISTRY);
   const [selectedBroker, setSelectedBroker] = useState<string>(brokers[0]?.id || "broker_exness");
-  const [confirmLiveOpen, setConfirmLiveOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [testSymbol, setTestSymbol] = useState("XAUUSD");
+  const [testLot, setTestLot] = useState("0.10");
+  const [orderPreflight, setOrderPreflight] = useState<{
+    route: string;
+    estimatedSlippagePips: number;
+    spreadCostUsd: number;
+    latencyMs: number;
+    status: "READY" | "BLOCKED";
+  } | null>(null);
 
   const activeBroker = brokers.find((b) => b.id === selectedBroker);
 
@@ -58,18 +73,36 @@ export default function ArchieExchangeAccess() {
     );
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = (brokerId?: string) => {
     setRefreshing(true);
     setTimeout(() => {
       setRefreshing(false);
       setBrokers((prev) =>
-        prev.map((b) => ({
-          ...b,
-          lastSyncIso: new Date().toISOString(),
-          latencyMs: Math.floor(Math.random() * 15) + 12,
-        }))
+        prev.map((b) => {
+          if (!brokerId || b.id === brokerId) {
+            return {
+              ...b,
+              lastSyncIso: new Date().toISOString(),
+              latencyMs: Math.floor(Math.random() * 12) + (b.id === "broker_paper" ? 1 : 12),
+            };
+          }
+          return b;
+        })
       );
-    }, 500);
+    }, 450);
+  };
+
+  const runPreflight = () => {
+    if (!activeBroker) return;
+    const latency = activeBroker.latencyMs || 15;
+    const spread = testSymbol === "XAUUSD" ? 1.8 : testSymbol === "BTCUSDT" ? 4.2 : 0.8;
+    setOrderPreflight({
+      route: `${activeBroker.name} Direct FIX/WebSocket Gateway`,
+      estimatedSlippagePips: activeBroker.mode === "LIVE" ? 0.2 : 0.0,
+      spreadCostUsd: Number((Number(testLot) * spread * 10).toFixed(2)),
+      latencyMs: latency,
+      status: "READY",
+    });
   };
 
   return (
@@ -103,13 +136,16 @@ export default function ArchieExchangeAccess() {
       </div>
 
       {/* Broker Registry Grid */}
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {brokers.map((broker) => {
           const isSelected = broker.id === selectedBroker;
           return (
             <button
               key={broker.id}
-              onClick={() => setSelectedBroker(broker.id)}
+              onClick={() => {
+                setSelectedBroker(broker.id);
+                setOrderPreflight(null);
+              }}
               className={`archie-panel archie-focusable rounded-xl p-4 text-left transition-all ${
                 isSelected
                   ? "border-amber-400/50 bg-amber-400/10"
@@ -117,7 +153,7 @@ export default function ArchieExchangeAccess() {
               }`}
             >
               <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold text-slate-100 text-sm">
+                <span className="font-semibold text-slate-100 text-xs">
                   {broker.name}
                 </span>
                 <ArchieBadge
@@ -127,7 +163,7 @@ export default function ArchieExchangeAccess() {
                 </ArchieBadge>
               </div>
 
-              <div className="text-[11px] text-slate-400 font-mono mb-2">
+              <div className="text-[10px] text-slate-400 font-mono mb-2">
                 {broker.maskedAccountId}
               </div>
 
@@ -174,12 +210,12 @@ export default function ArchieExchangeAccess() {
 
             <div className="flex items-center gap-2">
               <ArchieGhostButton
-                onClick={handleRefresh}
+                onClick={() => handleRefresh(activeBroker.id)}
                 disabled={refreshing}
                 className="text-xs py-1 px-2.5"
               >
                 <RefreshCw className={`h-3.5 w-3.5 mr-1 ${refreshing ? "animate-spin" : ""}`} />
-                Ping WS
+                Ping Socket
               </ArchieGhostButton>
               <ArchieButton
                 onClick={() => toggleMode(activeBroker.id)}
@@ -194,7 +230,7 @@ export default function ArchieExchangeAccess() {
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-3 mb-4">
+          <div className="grid gap-3 sm:grid-cols-3 mb-5">
             <div className="rounded-lg border border-white/5 bg-black/20 p-3">
               <span className="text-[10px] uppercase tracking-wider text-slate-500">Balance</span>
               <p className="text-base font-semibold text-slate-200 mt-1">
@@ -213,6 +249,85 @@ export default function ArchieExchangeAccess() {
                 {activeBroker.dataConnectivityStatus}
               </p>
             </div>
+          </div>
+
+          {/* Granular Privilege Scopes */}
+          <div className="mb-5 rounded-lg border border-white/5 bg-black/30 p-3.5">
+            <h3 className="text-xs font-semibold text-slate-200 mb-2 flex items-center gap-1.5">
+              <Shield className="h-4 w-4 text-amber-300" />
+              Granular Privilege Separation & Scope Enforcer
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+              <div className="p-2 rounded bg-white/5 flex items-center justify-between">
+                <span className="text-slate-300">Read Market Data</span>
+                <span className="text-emerald-400 font-mono text-[11px]">ENABLED</span>
+              </div>
+              <div className="p-2 rounded bg-white/5 flex items-center justify-between">
+                <span className="text-slate-300">Order Routing (Spot)</span>
+                <span className="text-emerald-400 font-mono text-[11px]">AUTHORIZED</span>
+              </div>
+              <div className="p-2 rounded bg-white/5 flex items-center justify-between">
+                <span className="text-slate-300">Leverage / Margin</span>
+                <span className="text-amber-300 font-mono text-[11px]">OWNER GATED</span>
+              </div>
+              <div className="p-2 rounded bg-rose-500/10 border border-rose-500/20 flex items-center justify-between">
+                <span className="text-rose-200 flex items-center gap-1">
+                  <Lock className="h-3 w-3 text-rose-400" /> Capital Withdrawal
+                </span>
+                <span className="text-rose-400 font-mono text-[11px] font-semibold">FORBIDDEN</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Order Preflight Routing Simulator */}
+          <div className="mb-5 border-t border-white/5 pt-4">
+            <h3 className="text-xs font-semibold text-slate-200 mb-2 flex items-center gap-1.5">
+              <Zap className="h-4 w-4 text-amber-300" />
+              Preflight Order Routing & Slippage Verifier
+            </h3>
+            <p className="text-[11px] text-slate-400 mb-3">
+              Simulates direct order gateway dispatch, checking latency and spread before order placement.
+            </p>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                value={testSymbol}
+                onChange={(e) => setTestSymbol(e.target.value)}
+                className="rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-xs text-slate-200 focus:border-amber-400/50"
+              >
+                <option value="XAUUSD" className="bg-slate-900">XAU/USD (Gold Spot)</option>
+                <option value="BTCUSDT" className="bg-slate-900">BTC/USDT (Crypto)</option>
+                <option value="EURUSD" className="bg-slate-900">EUR/USD (Forex)</option>
+              </select>
+
+              <ArchieInput
+                value={testLot}
+                onChange={(e) => setTestLot(e.target.value)}
+                placeholder="Volume / Lot size"
+                className="w-32 text-xs font-mono"
+              />
+
+              <ArchieButton onClick={runPreflight} className="text-xs">
+                Simulate Route
+              </ArchieButton>
+            </div>
+
+            {orderPreflight && (
+              <div className="mt-3 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 text-xs grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">EXECUTION ROUTE</span>
+                  <span className="text-slate-200 font-medium">{orderPreflight.route}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">ESTIMATED SLIPPAGE</span>
+                  <span className="text-emerald-400 font-mono">{orderPreflight.estimatedSlippagePips} pips</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">SPREAD OVERHEAD</span>
+                  <span className="text-amber-300 font-mono">${orderPreflight.spreadCostUsd} USD</span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="mb-4">

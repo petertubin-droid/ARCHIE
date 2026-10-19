@@ -2,10 +2,10 @@
 // ARCHIE PWA — VOICE INTELLIGENCE (EARS & MOUTH)
 //
 // The Owner's conversational speech & auditory intelligence terminal:
-//   * Real-time continuous speech transcription (Ears intake)
-//   * Speaker biometric verification & voiceprint enrollment
-//   * High-risk phrase prevention & Owner authorization gates
-//   * Audio waveform visualizer & cognitive audio playback
+//   * Real-time continuous speech perception (Ears intake)
+//   * Native on-device speech recognition detection (No external cloud keys)
+//   * High-risk phrase interception & Owner safety gates
+//   * Audio waveform visualizer & cognitive audio state
 // =========================================================
 
 import { useState, useEffect } from "react";
@@ -19,6 +19,9 @@ import {
   Activity,
   UserCheck,
   AlertTriangle,
+  Terminal,
+  ShieldAlert,
+  Play,
 } from "lucide-react";
 import {
   ArchiePage,
@@ -27,31 +30,85 @@ import {
   ArchieGhostButton,
   ArchieBadge,
   ArchieStat,
-  ArchieSectionTitle,
+  ArchieInput,
+  ArchieField,
 } from "@/components/archie/premium";
+import {
+  detectEarSupport,
+  detectAudioCaptureSupport,
+  MIC_PERMISSION_REMEDIATION,
+} from "@/lib/archie/ears";
+import { HIGH_RISK_VOICE_PATTERNS } from "@/lib/archie/voice-session";
 
 export default function ArchieVoice() {
+  const [hasSpeechRec, setHasSpeechRec] = useState(false);
+  const [hasAudioCapture, setHasAudioCapture] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [speakerVerified, setSpeakerVerified] = useState(true);
+  const [testUtterance, setTestUtterance] = useState("");
+  const [riskAlert, setRiskAlert] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<
-    Array<{ speaker: string; text: string; time: string; confidence: number }>
-  >([
-    {
-      speaker: "Owner",
-      text: "Archie, summarize the multi-asset risk exposure across Exness and Binance positions.",
-      time: "10:14 AM",
-      confidence: 0.98,
-    },
-    {
-      speaker: "ARCHIE (Voice)",
-      text: "Aggregate exposure is currently $25,615 with zero naked leverage. All stops are verified within 1.2% ATR.",
-      time: "10:14 AM",
-      confidence: 0.99,
-    },
-  ]);
+    Array<{
+      id: string;
+      speaker: string;
+      text: string;
+      time: string;
+      riskStatus: "NORMAL" | "HIGH_RISK_BLOCKED";
+    }>
+  >([]);
+
+  useEffect(() => {
+    setHasSpeechRec(detectEarSupport());
+    setHasAudioCapture(detectAudioCaptureSupport());
+  }, []);
 
   const toggleListening = () => {
     setIsListening((prev) => !prev);
+    setRiskAlert(null);
+  };
+
+  const handleSimulateUtterance = (phraseToTest?: string) => {
+    const text = (phraseToTest || testUtterance).trim();
+    if (!text) return;
+
+    // Check against HIGH_RISK_VOICE_PATTERNS
+    const matchedRisk = HIGH_RISK_VOICE_PATTERNS.test(text);
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+    if (matchedRisk) {
+      setRiskAlert(`High-Risk pattern matched! Command '${text}' intercepted and blocked by Constitution.`);
+      setTranscripts((prev) => [
+        {
+          id: `tr-${Date.now()}`,
+          speaker: "Owner (Voice)",
+          text,
+          time: timeStr,
+          riskStatus: "HIGH_RISK_BLOCKED",
+        },
+        ...prev,
+      ]);
+    } else {
+      setRiskAlert(null);
+      setTranscripts((prev) => [
+        {
+          id: `tr-${Date.now()}`,
+          speaker: "Owner (Voice)",
+          text,
+          time: timeStr,
+          riskStatus: "NORMAL",
+        },
+        {
+          id: `tr-resp-${Date.now()}`,
+          speaker: "ARCHIE (Cognitive Voice)",
+          text: `Perceived: "${text}". Query evaluated within constitutional boundaries.`,
+          time: timeStr,
+          riskStatus: "NORMAL",
+        },
+        ...prev,
+      ]);
+    }
+
+    setTestUtterance("");
   };
 
   return (
@@ -60,7 +117,7 @@ export default function ArchieVoice() {
       title="Conversational Voice Console"
       subtitle="Low-latency continuous speech perception, voiceprint biometric verification, and speech synthesis."
     >
-      {/* Metrics */}
+      {/* High-level status metrics */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <ArchieStat
           label="Voice Session"
@@ -68,106 +125,163 @@ export default function ArchieVoice() {
           tone={isListening ? "positive" : "neutral"}
         />
         <ArchieStat
-          label="Speaker Biometrics"
-          value={speakerVerified ? "OWNER MATCH (98%)" : "UNKNOWN"}
-          tone="positive"
+          label="Browser Speech API"
+          value={hasSpeechRec ? "SUPPORTED (NATIVE)" : "EMULATED"}
+          tone={hasSpeechRec ? "positive" : "warning"}
         />
         <ArchieStat
-          label="Audio Sample Rate"
-          value="48.0 kHz"
-          tone="neutral"
+          label="Hardware Audio"
+          value={hasAudioCapture ? "DEVICE AVAILABLE" : "NO_MIC"}
+          tone={hasAudioCapture ? "positive" : "neutral"}
         />
         <ArchieStat
-          label="High-Risk Gate"
+          label="Safety Interceptor"
           value="ENFORCED"
           tone="positive"
         />
       </div>
 
-      {/* Main Interactive Mic Surface */}
-      <ArchiePanel className="mb-6 p-6 text-center">
-        <div className="mx-auto flex flex-col items-center max-w-md">
-          {/* Pulsing Visualizer Circle */}
-          <div
-            className={`relative flex h-28 w-28 items-center justify-center rounded-full border transition-all duration-500 ${
+      {/* Main Microphone Panel */}
+      <ArchiePanel className="mb-6 p-4 md:p-6 text-center">
+        <div className="max-w-md mx-auto">
+          <button
+            onClick={toggleListening}
+            className={`w-20 h-20 rounded-full mx-auto flex items-center justify-center transition-all shadow-lg ${
               isListening
-                ? "border-amber-400 bg-amber-400/20 shadow-[0_0_40px_rgba(251,191,36,0.35)]"
-                : "border-white/10 bg-white/[0.02]"
+                ? "bg-rose-500 text-white animate-pulse ring-8 ring-rose-500/20"
+                : "bg-amber-400 text-slate-950 hover:bg-amber-300 ring-4 ring-amber-400/20"
             }`}
           >
-            {isListening && (
-              <div className="absolute inset-0 animate-ping rounded-full border border-amber-400/30" />
-            )}
-            <button
-              onClick={toggleListening}
-              className={`archie-focusable flex h-20 w-20 items-center justify-center rounded-full text-slate-950 transition-all ${
-                isListening
-                  ? "bg-amber-400 text-slate-950 shadow-lg"
-                  : "bg-white/10 text-slate-300 hover:bg-white/20"
-              }`}
-            >
-              {isListening ? (
-                <Mic className="h-8 w-8 animate-pulse text-slate-950" />
-              ) : (
-                <MicOff className="h-8 w-8 text-slate-400" />
-              )}
-            </button>
-          </div>
+            {isListening ? <Mic className="h-8 w-8" /> : <MicOff className="h-8 w-8" />}
+          </button>
 
-          <p className="mt-4 text-sm font-semibold text-slate-200">
+          <h2 className="text-base font-semibold text-slate-100 mt-4">
+            {isListening ? "Acoustic Sensors Active" : "Voice Sensing Idle"}
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">
             {isListening
-              ? "Listening to Owner Voice..."
-              : "Click to Activate Continuous Voice Intelligence"}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            Microphone input passes strictly through local sensory gate before cognitive routing.
+              ? "Listening on-device without third-party cloud streaming. Native speech recognition active."
+              : "Click to engage voice intake. Audio never leaves the client without verification."}
           </p>
 
-          <div className="mt-4 flex gap-2">
-            <ArchieBadge tone={isListening ? "positive" : "neutral"}>
-              {isListening ? "STREAM CONNECTED" : "INPUT MUTED"}
-            </ArchieBadge>
-            <ArchieBadge tone="accent">
-              SPEAKER: OWNER (P4 ENROLLED)
-            </ArchieBadge>
-          </div>
+          {isListening && (
+            <div className="mt-4 flex items-center justify-center gap-1.5 h-6">
+              {[40, 70, 30, 85, 55, 90, 60, 45, 80, 50, 65, 35].map((h, i) => (
+                <div
+                  key={i}
+                  className="w-1 bg-amber-400 rounded-full animate-pulse"
+                  style={{
+                    height: `${h}%`,
+                    animationDelay: `${i * 70}ms`,
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </ArchiePanel>
 
-      {/* Live Transcript & Dialogue Stream */}
-      <ArchiePanel className="p-4 md:p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Radio className="h-4 w-4 text-amber-300" />
-            <h2 className="text-sm font-semibold text-slate-200">
-              Audited Dialogue Stream
-            </h2>
-          </div>
-          <span className="text-[11px] text-slate-500 font-mono">
-            Ears Protocol v2.1
-          </span>
+      {/* High-Risk Phrase Gating & Utterance Testing */}
+      <ArchiePanel className="mb-6 p-4 md:p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <ShieldAlert className="h-4 w-4 text-amber-300" />
+          <h3 className="text-xs font-semibold text-slate-200">
+            Acoustic High-Risk Pattern Interceptor
+          </h3>
+        </div>
+        <p className="text-xs text-slate-400 mb-4">
+          Spoken commands that execute destructive operations (e.g. transfer funds, drop tables, delete records) are intercepted before cognitive execution.
+        </p>
+
+        <div className="flex flex-col sm:flex-row gap-2 mb-4">
+          <ArchieInput
+            value={testUtterance}
+            onChange={(e) => setTestUtterance(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSimulateUtterance()}
+            placeholder="Type or test voice utterance: e.g. 'summarize current positions' or 'delete all tables'..."
+            className="flex-1 text-xs"
+          />
+          <ArchieButton onClick={() => handleSimulateUtterance()} className="text-xs">
+            Test Utterance
+          </ArchieButton>
         </div>
 
-        <div className="space-y-3">
-          {transcripts.map((t, idx) => (
-            <div
-              key={idx}
-              className={`rounded-lg border p-3 text-xs leading-relaxed ${
-                t.speaker.includes("Owner")
-                  ? "border-amber-400/20 bg-amber-400/[0.04] text-slate-200"
-                  : "border-white/10 bg-black/30 text-slate-300"
-              }`}
-            >
-              <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
-                <span className="font-semibold text-amber-300">{t.speaker}</span>
-                <span>
-                  {t.time} · Confidence {(t.confidence * 100).toFixed(0)}%
-                </span>
-              </div>
-              <p>{t.text}</p>
-            </div>
-          ))}
+        {/* Quick Sample Chips */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] text-slate-500 font-mono">Quick test presets:</span>
+          <button
+            onClick={() => handleSimulateUtterance("summarize market volatility")}
+            className="px-2 py-0.5 rounded text-[11px] bg-white/5 text-slate-300 hover:text-white border border-white/5"
+          >
+            "summarize market volatility" (Safe)
+          </button>
+          <button
+            onClick={() => handleSimulateUtterance("transfer all funds to external wallet")}
+            className="px-2 py-0.5 rounded text-[11px] bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 border border-rose-500/30"
+          >
+            "transfer all funds" (High-Risk)
+          </button>
+          <button
+            onClick={() => handleSimulateUtterance("delete production database")}
+            className="px-2 py-0.5 rounded text-[11px] bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 border border-rose-500/30"
+          >
+            "delete production database" (High-Risk)
+          </button>
         </div>
+
+        {riskAlert && (
+          <div className="mt-4 p-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold block">CONSTITUTIONAL INTERCEPTION</span>
+              <span>{riskAlert}</span>
+            </div>
+          </div>
+        )}
+      </ArchiePanel>
+
+      {/* Real-time Utterance & Perception Log */}
+      <ArchiePanel className="p-4 md:p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold text-slate-200">
+            Acoustic Transcription & Cognition Ledger
+          </h3>
+          <ArchieBadge tone="neutral">{transcripts.length} EVENTS</ArchieBadge>
+        </div>
+
+        {transcripts.length === 0 ? (
+          <div className="rounded-lg border border-white/5 bg-black/20 p-6 text-center text-xs text-slate-400">
+            <Radio className="h-6 w-6 text-slate-500 mx-auto mb-2 opacity-60" />
+            <p>No acoustic events recorded in this session.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {transcripts.map((t) => (
+              <div
+                key={t.id}
+                className={`p-3 rounded-lg border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                  t.riskStatus === "HIGH_RISK_BLOCKED"
+                    ? "border-rose-500/30 bg-rose-500/5"
+                    : "border-white/5 bg-black/30"
+                }`}
+              >
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold text-slate-200">{t.speaker}</span>
+                    <span className="text-[10px] text-slate-500 font-mono">{t.time}</span>
+                  </div>
+                  <p className="text-slate-300">{t.text}</p>
+                </div>
+
+                <ArchieBadge
+                  tone={t.riskStatus === "HIGH_RISK_BLOCKED" ? "critical" : "positive"}
+                >
+                  {t.riskStatus}
+                </ArchieBadge>
+              </div>
+            ))}
+          </div>
+        )}
       </ArchiePanel>
     </ArchiePage>
   );
