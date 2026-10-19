@@ -108,6 +108,7 @@ beforeEach(() => {
   givenRows("frelux_archie_trading_state", []);
   givenRows("frelux_archie_trading_positions", []);
   givenRows("frelux_archie_trading_accounts", []);
+  givenRows("frelux_archie_treasury_ledger", []);
   massiveResponses = {};
   unstubMassive();
   state.env.MARKET_DATA_API_KEY = "test-key";
@@ -722,5 +723,165 @@ describe("archie-trading — LIVE account routing", () => {
       req("POST", "", { action: "execute", account: "demo", ...ELIGIBLE }, AUTH),
     );
     expect(demoRes.status).toBe(200);
+  });
+});
+
+
+// ---- treasury test helpers ----
+function barsUp(n: number, start: number) {
+  const out: Array<Record<string, number>> = [];
+  let c = start;
+  const t0 = 1790000000000;
+  for (let i = 0; i < n; i++) {
+    c = c * 1.001;
+    out.push({ o: c - 0.4, h: c + 0.5, l: c - 0.5, c: +c.toFixed(6), v: 100, t: t0 + i * 86400000 });
+  }
+  return out;
+}
+
+/** All rows the handler has INSERTed into a table so far.
+ * The handler's ledger writes carry id="tl_..." — the harness
+ * assigns generated ids only to OTHER inserts, so the prefix
+ * is a reliable inserted-by-this-call marker. */
+function insertsInto(table: string): Array<Record<string, unknown>> {
+  const rows = tableFixtures.get(table) ?? [];
+  return rows.filter((r: any) => String((r as any).id ?? "").startsWith("tl_"));
+}
+
+describe("archie-trading — treasury (deposit / withdraw / swap)", () => {
+  it("demo deposit credits the paper ledger and writes the audit trail", async () => {
+    stubMassive();
+    demoAccountRow();
+    const res = await handler(
+      req("POST", "", { action: "treasury_deposit", account: "demo", amount: 5000 }, AUTH),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.credited).toBe(5000);
+    expect(body.mode).toBe("PAPER_LEDGER");
+    expect(body.newBalance).toBe(55000); // 50k seed + 5k
+    const inserts = insertsInto("frelux_archie_treasury_ledger");
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].kind).toBe("deposit");
+    expect(inserts[0].status).toBe("completed");
+    unstubMassive();
+  });
+
+  it("demo withdrawal refuses to overdraw the paper ledger (honest refusal)", async () => {
+    stubMassive();
+    demoAccountRow();
+    const res = await handler(
+      req("POST", "", { action: "treasury_withdraw", account: "demo", amount: 999999 }, AUTH),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBe("insufficient_paper_funds");
+    expect(insertsInto("frelux_archie_treasury_ledger")).toHaveLength(0);
+    unstubMassive();
+  });
+
+  it("LIVE withdrawal demands the explicit confirmation flag first", async () => {
+    stubMassive();
+    const res = await handler(
+      req("POST", "", { action: "treasury_withdraw", account: "live", amount: 50, address: "bc1qexampleaddress0123" }, AUTH),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("withdraw_authorized");
+    expect(insertsInto("frelux_archie_treasury_ledger")).toHaveLength(0);
+    unstubMassive();
+  });
+
+  it("LIVE withdrawal refuses while the live account is disarmed — no ledger, no venue call", async () => {
+    stubMassive();
+    const res = await handler(
+      req("POST", "", {
+        action: "treasury_withdraw",
+        account: "live",
+        amount: 50,
+        address: "bc1qexampleaddress0123",
+        withdraw_authorized: true,
+      }, AUTH),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBe("live_account_not_armed");
+    expect(insertsInto("frelux_archie_treasury_ledger")).toHaveLength(0);
+    unstubMassive();
+  });
+
+  it("LIVE deposit via API is refused honestly — money arrives on-chain only", async () => {
+    stubMassive();
+    const res = await handler(
+      req("POST", "", { action: "treasury_deposit", account: "live", amount: 100 }, AUTH),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("on-chain");
+    unstubMassive();
+  });
+
+  it("demo swap quotes at the REAL daily-close ratio with a fee, and refuses without prices", async () => {
+    stubMassive();
+    // Two different price series: USDT ~ $1.00, BTC ~ $80,000.
+    // The stub differentiates by ticker IN the URL (the edge
+    // fetches C:USDTUSD and X:BTCUSD separately).
+    massiveResponses["C:USDTUSD/range/1/day"] = { body: { results: barsUp(30, 1) } };
+    massiveResponses["X:BTCUSD/range/1/day"] = { body: { results: barsUp(30, 80000) } };
+    let res = await handler(
+      req("POST", "", { action: "treasury_swap_quote", account: "demo", fromAsset: "USDT", toAsset: "BTC", amount: 800 }, AUTH),
+    );
+    let body = await res.json();
+    
+    expect(body.ok).toBe(true);
+    // 800 USDT / $80k = 0.01 BTC gross; 0.1% fee
+    expect(body.toAmount).toBeCloseTo(0.01 * 0.999, 8);
+    expect(body.feePct).toBe(0.1);
+
+    // No prices available -> honest refusal, never a fabricated ratio
+    massiveResponses["C:USDTUSD/range/1/day"] = { body: { results: [] } };
+    massiveResponses["X:BTCUSD/range/1/day"] = { body: { results: [] } };
+    res = await handler(
+      req("POST", "", { action: "treasury_swap_execute", account: "demo", fromAsset: "USDT", toAsset: "BTC", amount: 800 }, AUTH),
+    );
+    body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBe("swap_price_unavailable");
+    expect(insertsInto("frelux_archie_treasury_ledger")).toHaveLength(0);
+    unstubMassive();
+  });
+
+  it("demo swap executes fresh (never trusts a stale client quote) and audits", async () => {
+    stubMassive();
+    demoAccountRow();
+    massiveResponses["/range/1/day"] = { body: { results: barsUp(40, 100) } };
+    const res = await handler(
+      req("POST", "", { action: "treasury_swap_execute", account: "demo", fromAsset: "USDT", toAsset: "BTC", amount: 1000 }, AUTH),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.mode).toBe("PAPER_LEDGER");
+    const inserts = insertsInto("frelux_archie_treasury_ledger");
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].kind).toBe("swap");
+    expect(inserts[0].status).toBe("completed");
+    unstubMassive();
+  });
+
+  it("treasury_status returns the paper ledger for demo", async () => {
+    stubMassive();
+    demoAccountRow();
+    const res = await handler(
+      req("POST", "", { action: "treasury_status", account: "demo" }, AUTH),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.mode).toBe("PAPER_LEDGER");
+    expect(body.balanceQuote).toBe(50000);
+    expect(Array.isArray(body.ledger)).toBe(true);
+    unstubMassive();
   });
 });

@@ -147,7 +147,7 @@ export async function fetchMarketStatus(): Promise<MarketStatus | null> {
 export function consoleSymbolToTicker(symbol: string): string {
   const s = symbol.trim().toUpperCase();
   const cryptoBase = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LTC", "LINK", "AVAX", "TRX", "TON"];
-  const forexBase = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU"];
+  const forexBase = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU", "USDT"];
   const m = s.match(/^([A-Z0-9]+)\/?USD$/);
   if (m) {
     if (cryptoBase.includes(m[1])) return `X:${m[1]}USD`;

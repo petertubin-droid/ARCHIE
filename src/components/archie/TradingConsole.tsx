@@ -64,6 +64,20 @@ import {
   dryRunTrade,
   executeTrade,
   emergencyCancel,
+  fetchTradingStatusV2,
+  fetchAccountPositions,
+  executeAccountTrade,
+  analyzeTrade,
+  closePosition,
+  resetDemoAccount,
+  fetchTreasuryStatus,
+  treasuryDeposit,
+  treasuryWithdraw,
+  treasurySwapQuote,
+  treasurySwapExecute,
+  type TradingAccountType,
+  type TradingAccountView,
+  type AnalyzeResult,
   validatePerceptualQuoteConsistency,
   fetchFeedConfig,
   saveFeedApiKey,
@@ -123,6 +137,9 @@ export interface IndicatorSettings {
   rsi: boolean;
   macd: boolean;
   volume: boolean;
+  vwap: boolean;
+  atr: boolean;
+  stoch: boolean;
 }
 
 // Preset verified instruments with realistic market specifications
@@ -362,9 +379,38 @@ export default function TradingConsole() {
     rsi: true,
     macd: false,
     volume: true,
+    vwap: false,
+    atr: false,
+    stoch: false,
   });
   const [showIndicatorsModal, setShowIndicatorsModal] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Premium chart viewport (batch 36): Exness-style wheel zoom,
+  // drag pan, responsive fullscreen (portrait + landscape) and
+  // axis flip. `zoom` is candle width in px; `rightOffset` is
+  // how many candles are PAN'd past the right (latest) edge.
+  const [zoom, setZoom] = useState(9);
+  const [rightOffset, setRightOffset] = useState(0);
+  const [chartSize, setChartSize] = useState({ w: 850, h: 420 });
+  const [axisFlip, setAxisFlip] = useState(false);
+  const [portraitMode, setPortraitMode] = useState(false);
+
+  // =========================================================
+  // TWO-ACCOUNT LAYER (batch 36): DEMO (paper) vs LIVE (venue)
+  // + ARCHIE market intelligence + treasury.
+  // =========================================================
+  const [tradingAccount, setTradingAccount] = useState<TradingAccountType>("demo");
+  const [accountsMeta, setAccountsMeta] = useState<TradingAccountView[]>([]);
+  const [analysis, setAnalysis] = useState<AnalyzeResult | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [liveConfirm, setLiveConfirm] = useState<null | "long" | "short">(null);
+  const [liveConfirmText, setLiveConfirmText] = useState("");
+  const [treasuryMsg, setTreasuryMsg] = useState<string | null>(null);
+  const [treasuryBusy, setTreasuryBusy] = useState(false);
+  const [treasuryAmount, setTreasuryAmount] = useState("");
+  const [treasuryFromAsset, setTreasuryFromAsset] = useState("USDT");
+  const [treasuryToAsset, setTreasuryToAsset] = useState("BTC");
+  const dragStateRef = useRef<{ x: number; startRight: number } | null>(null);
   const [hoveredCandle, setHoveredCandle] = useState<CandleData | null>(null);
 
   // Exness Order Form State
@@ -417,7 +463,7 @@ export default function TradingConsole() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"positions" | "pending" | "history" | "gate" | "brokers" | "backtest" | "stops" | "feed_keys" | "markets">("positions");
+  const [activeTab, setActiveTab] = useState<"positions" | "pending" | "history" | "gate" | "brokers" | "backtest" | "stops" | "feed_keys" | "markets" | "treasury">("positions");
   const [busy, setBusy] = useState(false);
   const [notification, setNotification] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const [dryRunEvidence, setDryRunEvidence] = useState<DryRunResult | null>(null);
@@ -433,6 +479,36 @@ export default function TradingConsole() {
   });
 
   const chartContainerRef = useRef<HTMLDivElement>(null);
+
+  // Responsive chart sizing (fullscreen portrait/landscape aware).
+  useEffect(() => {
+    const el = chartContainerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r && r.width > 100) {
+        setChartSize({ w: Math.round(r.width), h: Math.round(r.height) });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Wheel zoom around the cursor — native listener so
+  // preventDefault works (React wheel handlers are passive).
+  useEffect(() => {
+    const el = chartContainerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((prev) => {
+        const next = e.deltaY < 0 ? prev * 1.12 : prev / 1.12;
+        return Math.max(2.5, Math.min(60, next));
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
   const currentInstrument = useMemo(
     () => instruments.find((i) => i.symbol === selectedSymbol) ?? instruments[0],
     [instruments, selectedSymbol]
@@ -441,20 +517,39 @@ export default function TradingConsole() {
   // Initialize & fetch real server-side status
   const loadBackend = useCallback(async () => {
     try {
-      const [status, pos] = await Promise.all([
+      // Account-scoped: positions are read per-account so the DEMO
+      // paper book and the LIVE venue book never mix.
+      const [status, pos, v2] = await Promise.all([
         fetchTradingStatus().catch(() => null),
-        fetchTradingPositions().catch(() => null),
+        fetchAccountPositions(tradingAccount).catch(() => null),
+        fetchTradingStatusV2().catch(() => null),
       ]);
       if (status) setTradingStatus(status);
       if (pos?.positions) setPositions(pos.positions);
+      if (v2?.accounts) setAccountsMeta(v2.accounts);
     } catch {
       // Backend status stays graceful if Supabase edge function is unauthenticated
     }
-  }, []);
+  }, [tradingAccount]);
 
   useEffect(() => {
     loadBackend();
   }, [loadBackend]);
+
+  // Account-scoped position book: switching accounts reloads
+  // only that account's positions.
+  useEffect(() => {
+    let alive = true;
+    fetchAccountPositions(tradingAccount)
+      .then((r) => {
+        if (alive) setPositions((r as { positions?: TradingPositionView[] }).positions ?? []);
+      })
+      .catch(() => null);
+    setAnalysis(null); // a suggestion is instrument+account scoped
+    return () => {
+      alive = false;
+    };
+  }, [tradingAccount]);
 
   // =========================================================
   // LIVE MARKET FEED (Massive.com daily bars, owner-gated).
@@ -652,7 +747,51 @@ export default function TradingConsole() {
   }, [currentInstrument, lots, orderType, leverage, stopLoss, takeProfit]);
 
   // Execute Real or Paper Order
+  // ARCHIE market intelligence: deterministic analysis over real
+  // daily bars with walk-forward validation. Suggestions carry
+  // gate-grade evidence; WITHHELD means ARCHIE found no edge and
+  // will not dress one up.
+  const handleAnalyzeTrade = useCallback(async () => {
+    setAnalyzing(true);
+    setNotification(null);
+    try {
+      const res = await analyzeTrade({
+        symbol: currentInstrument.symbol,
+        portfolioValue: account.balance,
+      });
+      setAnalysis(res as AnalyzeResult);
+    } catch (err) {
+      setNotification({ type: "error", message: `Analysis failed: ${(err as Error).message}` });
+    } finally {
+      setAnalyzing(false);
+    }
+  }, [currentInstrument.symbol, account.balance]);
+
+  // Apply ARCHIE's suggestion to the ticket: stop, target and a
+  // direction banner. The evidence itself rides on execute.
+  const applyAnalysisToTicket = useCallback(() => {
+    if (!analysis?.analysis) return;
+    const a = analysis.analysis;
+    setStopLoss(a.stopPrice.toFixed(currentInstrument.digits));
+    setTakeProfit(a.targetPrice.toFixed(currentInstrument.digits));
+    setNotification({
+      type: "success",
+      message: `ARCHIE suggestion applied: ${a.direction.toUpperCase()} ${a.symbol}, SL ${a.stopPrice.toFixed(currentInstrument.digits)}, TP ${a.targetPrice.toFixed(currentInstrument.digits)}.`,
+    });
+  }, [analysis, currentInstrument.digits]);
+
   const handleExecuteTrade = useCallback(async (direction: "long" | "short") => {
+    // LIVE orders need an explicit typed confirmation — real money
+    // never moves on a single click.
+    if (tradingAccount === "live") {
+      setLiveConfirm(direction);
+      return;
+    }
+    await doExecuteTrade(direction);
+  }, [tradingAccount, analysis, currentInstrument, lots, orderType, stopLoss, takeProfit, leverage, pipValue, calculatedMargin]);
+
+  const doExecuteTrade = async (direction: "long" | "short") => {
+    setLiveConfirm(null);
     setBusy(true);
     setNotification(null);
     try {
@@ -667,8 +806,12 @@ export default function TradingConsole() {
         throw new Error(`Quote consistency failed: ${consistency.reason}`);
       }
 
-      // Execute through authoritative client
-      const res: ExecuteResult = await executeTrade({
+      // Execute through the authoritative account-routed client.
+      // When ARCHIE has analyzed this instrument, its walk-forward
+      // evidence rides with the order — the trade-gate judges the
+      // REAL evidence, never a rubber stamp.
+      const res: ExecuteResult = await executeAccountTrade({
+        account: tradingAccount,
         request: {
           symbol: currentInstrument.symbol,
           direction,
@@ -680,9 +823,13 @@ export default function TradingConsole() {
         },
         evidence: {
           channel: "ARCHIE_TRADING_CONSOLE_PWA",
+          account: tradingAccount,
           leverage,
           pipValue,
           timestamp: Date.now(),
+          ...(analysis?.analysis?.symbol === currentInstrument.symbol
+            ? { archie_analysis: analysis }
+            : {}),
         },
       });
 
@@ -746,28 +893,52 @@ export default function TradingConsole() {
     } finally {
       setBusy(false);
     }
-  }, [currentInstrument, lots, orderType, calculatedMargin, pipValue, leverage, stopLoss, takeProfit]);
+  };
 
   // Close Position
-  const handleClosePosition = useCallback((posId: string) => {
-    setPositions((prev) =>
-      prev.map((p) => {
-        if (p.id === posId) {
-          return {
-            ...p,
-            state: "CLOSED",
-            status: "CLOSED",
-            exitPrice: currentInstrument.bid,
-            closedAtMs: Date.now(),
-            realizedPnlQuote: 45.2,
-            realizedPnlPct: 1.25,
-          };
-        }
-        return p;
-      })
-    );
-    setNotification({ type: "info", message: `Position #${posId.slice(-6)} closed.` });
-  }, [currentInstrument.bid]);
+  // Real close through the audited lifecycle: demo settles at the
+  // real daily close, live closes through the venue. Never a
+  // fabricated P&L — the server's numbers are the only numbers.
+  const handleClosePosition = useCallback(async (posId: string) => {
+    setBusy(true);
+    setNotification(null);
+    try {
+      const res = await closePosition({ account: tradingAccount, positionId: posId });
+      const body = res as Record<string, unknown>;
+      if (body.closed === false || body.error) {
+        setNotification({ type: "error", message: String(body.error ?? body.reason ?? "Close refused by the engine.") });
+        return;
+      }
+      setNotification({
+        type: "success",
+        message: body.position
+          ? `Position #${posId.slice(-6)} closed at ${(body.position as Record<string, unknown>).exitPrice}. Realized P&L: ${(body.position as Record<string, unknown>).realizedPnlQuote ?? 0}`
+          : `Position #${posId.slice(-6)} closed.`,
+      });
+      const fresh = await fetchAccountPositions(tradingAccount).catch(() => null);
+      if (fresh) setPositions((fresh as { positions?: TradingPositionView[] }).positions ?? []);
+      loadBackend();
+    } catch (err) {
+      setNotification({ type: "error", message: `Close failed: ${(err as Error).message}` });
+    } finally {
+      setBusy(false);
+    }
+  }, [tradingAccount, loadBackend]);
+
+  // DEMO reset: void open paper positions at entry (no fabricated
+  // P&L) and restore the $50k starting balance.
+  const handleResetDemo = useCallback(async () => {
+    setTreasuryBusy(true);
+    try {
+      await resetDemoAccount();
+      setNotification({ type: "success", message: "Demo account reset: balance restored, open positions voided." });
+      loadBackend();
+    } catch (err) {
+      setNotification({ type: "error", message: `Reset failed: ${(err as Error).message}` });
+    } finally {
+      setTreasuryBusy(false);
+    }
+  }, [loadBackend]);
 
   // Emergency Kill Switch
   const handleEmergencyStop = useCallback(async () => {
@@ -869,6 +1040,43 @@ export default function TradingConsole() {
       }
     });
 
+    // ATR(14) — real range average (volatility)
+    const atr14: (number | null)[] = candles.map((_, i) => {
+      if (i < 14) return null;
+      let sum = 0;
+      for (let j = i - 13; j <= i; j++) {
+        const c = candles[j];
+        const prevClose = candles[j - 1]?.close ?? c.open;
+        const tr = Math.max(c.high - c.low, Math.abs(c.high - prevClose), Math.abs(c.low - prevClose));
+        sum += tr;
+      }
+      return sum / 14;
+    });
+    // Stochastic %K(14) smoothed %D(3)
+    const stochK: (number | null)[] = candles.map((_, i) => {
+      if (i < 13) return null;
+      const win = candles.slice(i - 13, i + 1);
+      const hh = Math.max(...win.map((c) => c.high));
+      const ll = Math.min(...win.map((c) => c.low));
+      const range = hh - ll;
+      return range === 0 ? 50 : ((candles[i].close - ll) / range) * 100;
+    });
+    const stochD: (number | null)[] = stochK.map((_, i) => {
+      if (i < 2 || stochK[i] === null || stochK[i - 1] === null || stochK[i - 2] === null) return null;
+      return ((stochK[i] as number) + (stochK[i - 1] as number) + (stochK[i - 2] as number)) / 3;
+    });
+    // VWAP (session-anchored over the loaded history)
+    const vwap: (number | null)[] = [];
+    let cumPV = 0;
+    let cumV = 0;
+    candles.forEach((c) => {
+      const typical = (c.high + c.low + c.close) / 3;
+      const vol = Math.max(1, c.volume);
+      cumPV += typical * vol;
+      cumV += vol;
+      vwap.push(cumPV / cumV);
+    });
+
     return {
       sma20,
       sma50: calcSMA(50),
@@ -876,40 +1084,122 @@ export default function TradingConsole() {
       bbUpper,
       bbLower,
       rsi: calcRSI(14),
+      atr14,
+      stochK,
+      stochD,
+      vwap,
     };
   }, [candles]);
 
   // Render SVG Candlestick Chart
   const renderChart = () => {
     if (candles.length === 0) return null;
-    const width = 850;
-    const height = 420;
-    const padding = { top: 25, right: 65, bottom: 45, left: 15 };
+    // ---- Premium viewport (batch 36): the chart renders the
+    // VISIBLE slice of candles. Wheel zooms around the cursor,
+    // drag pans through history, double-click resets to fit. ----
+    const width = chartSize.w;
+    const height = chartSize.h;
+    const priceAxisRight = !axisFlip;
+    const padding = {
+      top: 25,
+      right: priceAxisRight ? 70 : 15,
+      bottom: 45,
+      left: priceAxisRight ? 15 : 70,
+    };
     const chartW = width - padding.left - padding.right;
     const chartH = height - padding.top - padding.bottom;
 
-    // Price range bounds
-    const minPrice = Math.min(...candles.map((c) => c.low));
-    const maxPrice = Math.max(...candles.map((c) => c.high));
+    const candleW = Math.max(2, zoom);
+    const stepX = candleW / 0.7;
+    const visibleCount = Math.max(10, Math.floor(chartW / stepX));
+    const maxRight = Math.max(0, candles.length - visibleCount);
+    const right = Math.min(maxRight, Math.max(0, rightOffset));
+    const offset = candles.length - visibleCount - right;
+    const view = candles.slice(offset, offset + visibleCount);
+    const viewEnd = offset + visibleCount;
+
+    // Heikin-Ashi transform (over the full series, sliced after)
+    const heikin =
+      chartStyle === "heikin_ashi"
+        ? (() => {
+            const ha: CandleData[] = [];
+            candles.forEach((c, i) => {
+              const prev = ha[i - 1];
+              const haOpen = prev ? (prev.open + prev.close) / 2 : (c.open + c.close) / 2;
+              const haClose = (c.open + c.high + c.low + c.close) / 4;
+              ha.push({
+                ...c,
+                open: haOpen,
+                close: haClose,
+                high: Math.max(c.high, haOpen, haClose),
+                low: Math.min(c.low, haOpen, haClose),
+              });
+            });
+            return ha;
+          })()
+        : candles;
+    const renderSeries = heikin.slice(offset, viewEnd);
+
+    // Price range across the VISIBLE slice only (premium zoom
+    // means local scale, not the full-history scale).
+    let minPrice = Infinity;
+    let maxPrice = -Infinity;
+    renderSeries.forEach((c) => {
+      minPrice = Math.min(minPrice, c.low);
+      maxPrice = Math.max(maxPrice, c.high);
+    });
+    // keep the live price in frame when it is near the view
+    const liveY = currentInstrument.bid;
+    if (liveY > 0) {
+      minPrice = Math.min(minPrice, liveY);
+      maxPrice = Math.max(maxPrice, liveY);
+    }
     const priceRange = maxPrice - minPrice || 1;
-
-    const scaleY = (p: number) => {
-      return padding.top + chartH - ((p - minPrice) / priceRange) * chartH;
-    };
-
-    const candleW = Math.max(3, (chartW / candles.length) * 0.7);
-    const stepX = chartW / candles.length;
+    const padRange = priceRange * 0.08;
+    minPrice -= padRange;
+    maxPrice += padRange;
+    const scaleY = (p: number) =>
+      padding.top + chartH - ((p - minPrice) / (maxPrice - minPrice)) * chartH;
+    const xOf = (i: number) => padding.left + (i + 0.5) * stepX;
+    const idxAt = (clientX: number, rectLeft: number) =>
+      Math.floor((clientX - rectLeft - padding.left) / stepX);
 
     // Grid ticks
     const priceTicks = 6;
-    const tickStep = priceRange / priceTicks;
+    const tickStep = (maxPrice - minPrice) / priceTicks;
     const ticks = Array.from({ length: priceTicks + 1 }, (_, i) => minPrice + i * tickStep);
+    const axisX = priceAxisRight ? width - padding.right : padding.left;
+    const axisTextX = priceAxisRight ? width - padding.right + 8 : 8;
 
     return (
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-full select-none"
+        className="w-full h-full select-none touch-none"
         onMouseLeave={() => setHoveredCandle(null)}
+        onMouseMove={(e) => {
+          const idx = idxAt(e.clientX, e.currentTarget.getBoundingClientRect().left);
+          const c = view[idx];
+          if (c) setHoveredCandle(c);
+        }}
+        onDoubleClick={() => {
+          setZoom(9);
+          setRightOffset(0);
+        }}
+        onPointerDown={(e) => {
+          dragStateRef.current = { x: e.clientX, startRight: right };
+          (e.currentTarget as SVGElement).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerUp={(e) => {
+          dragStateRef.current = null;
+          (e.currentTarget as SVGElement).releasePointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const drag = dragStateRef.current;
+          if (!drag) return;
+          const dx = e.clientX - drag.x;
+          const candlesDragged = Math.round(dx / stepX);
+          setRightOffset(Math.min(maxRight, Math.max(0, drag.startRight - candlesDragged)));
+        }}
       >
         <defs>
           <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -922,22 +1212,22 @@ export default function TradingConsole() {
           </linearGradient>
         </defs>
 
-        {/* Background Grid Lines & Price Labels */}
+        {/* Background grid + price axis (flippable) */}
         {ticks.map((t, idx) => {
           const y = scaleY(t);
           return (
-            <g key={idx}>
+            <g key={`grid_${idx}`}>
               <line
                 x1={padding.left}
                 y1={y}
-                x2={width - padding.right}
+                x2={axisX}
                 y2={y}
                 stroke="#1e293b"
                 strokeDasharray="3 3"
                 strokeWidth="1"
               />
               <text
-                x={width - padding.right + 8}
+                x={axisTextX}
                 y={y + 3}
                 fill="#64748b"
                 fontSize="10"
@@ -949,18 +1239,35 @@ export default function TradingConsole() {
           );
         })}
 
-        {/* Volume Bars at Bottom */}
+        {/* Time axis: visible candle dates */}
+        {view.map((c, i) => {
+          if (visibleCount > 60 && i % Math.ceil(visibleCount / 8) !== 0) return null;
+          return (
+            <text
+              key={`t_${i}`}
+              x={xOf(i)}
+              y={height - 18}
+              fill="#475569"
+              fontSize="9"
+              fontFamily="monospace"
+              textAnchor="middle"
+            >
+              {new Date(c.time).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+            </text>
+          );
+        })}
+
+        {/* Volume bars */}
         {indicators.volume && (
           <g opacity="0.4">
-            {candles.map((c, i) => {
-              const x = padding.left + i * stepX + stepX / 2;
-              const maxVol = Math.max(...candles.map((cd) => cd.volume)) || 1;
-              const vH = (c.volume / maxVol) * 60;
+            {view.map((c, i) => {
+              const maxVol = Math.max(...view.map((cd) => cd.volume)) || 1;
+              const vH = (c.volume / maxVol) * 55;
               const isBull = c.close >= c.open;
               return (
                 <rect
                   key={`vol_${i}`}
-                  x={x - candleW / 2}
+                  x={xOf(i) - candleW / 2}
                   y={height - padding.bottom - vH}
                   width={candleW}
                   height={vH}
@@ -971,68 +1278,90 @@ export default function TradingConsole() {
           </g>
         )}
 
-        {/* Bollinger Bands Channel */}
-        {indicators.bollingerBands && (
-          <g>
-            {candles.map((_, i) => {
-              if (i === 0) return null;
-              const prevUpper = calculatedIndicators.bbUpper[i - 1];
-              const currUpper = calculatedIndicators.bbUpper[i];
-              const prevLower = calculatedIndicators.bbLower[i - 1];
-              const currLower = calculatedIndicators.bbLower[i];
-              if (!prevUpper || !currUpper || !prevLower || !currLower) return null;
+        {/* Bollinger bands over the visible window */}
+        {indicators.bollingerBands &&
+          view.map((_, i) => {
+            if (i === 0) return null;
+            const gi = offset + i;
+            const prevUpper = calculatedIndicators.bbUpper[gi - 1];
+            const currUpper = calculatedIndicators.bbUpper[gi];
+            const prevLower = calculatedIndicators.bbLower[gi - 1];
+            const currLower = calculatedIndicators.bbLower[gi];
+            if (!prevUpper || !currUpper || !prevLower || !currLower) return null;
+            return (
+              <polygon
+                key={`bb_${i}`}
+                points={`${xOf(i - 1)},${scaleY(prevUpper)} ${xOf(i)},${scaleY(currUpper)} ${xOf(i)},${scaleY(currLower)} ${xOf(i - 1)},${scaleY(prevLower)}`}
+                fill="url(#bbBandGrad)"
+              />
+            );
+          })}
 
-              const x1 = padding.left + (i - 1) * stepX + stepX / 2;
-              const x2 = padding.left + i * stepX + stepX / 2;
-
-              return (
-                <polygon
-                  key={`bb_${i}`}
-                  points={`${x1},${scaleY(prevUpper)} ${x2},${scaleY(currUpper)} ${x2},${scaleY(currLower)} ${x1},${scaleY(prevLower)}`}
-                  fill="url(#bbBandGrad)"
-                />
-              );
-            })}
-          </g>
-        )}
-
-        {/* Indicator Overlays: SMA 20 */}
+        {/* SMA overlays over the visible window */}
         {indicators.sma20 && (
           <polyline
             fill="none"
             stroke="#f59e0b"
             strokeWidth="1.5"
-            points={candles
+            points={view
               .map((_, i) => {
-                const val = calculatedIndicators.sma20[i];
-                if (val === null) return null;
-                const x = padding.left + i * stepX + stepX / 2;
-                return `${x},${scaleY(val)}`;
+                const val = calculatedIndicators.sma20[offset + i];
+                return val === null ? null : `${xOf(i)},${scaleY(val)}`;
+              })
+              .filter(Boolean)
+              .join(" ")}
+          />
+        )}
+        {indicators.sma50 && (
+          <polyline
+            fill="none"
+            stroke="#3b82f6"
+            strokeWidth="1.5"
+            points={view
+              .map((_, i) => {
+                const val = calculatedIndicators.sma50[offset + i];
+                return val === null ? null : `${xOf(i)},${scaleY(val)}`;
+              })
+              .filter(Boolean)
+              .join(" ")}
+          />
+        )}
+        {/* VWAP */}
+        {indicators.vwap && (
+          <polyline
+            fill="none"
+            stroke="#22d3ee"
+            strokeWidth="1.2"
+            strokeDasharray="5 3"
+            points={view
+              .map((_, i) => {
+                const val = calculatedIndicators.vwap[offset + i];
+                return val === null ? null : `${xOf(i)},${scaleY(val)}`;
               })
               .filter(Boolean)
               .join(" ")}
           />
         )}
 
-        {/* Candlesticks / Chart Styles */}
+        {/* Chart body by style */}
         {chartStyle === "line" ? (
           <g>
             <polygon
               fill="url(#areaGrad)"
-              points={`${padding.left},${height - padding.bottom} ` +
-                candles.map((c, i) => `${padding.left + i * stepX + stepX / 2},${scaleY(c.close)}`).join(" ") +
-                ` ${padding.left + (candles.length - 1) * stepX + stepX / 2},${height - padding.bottom}`}
+              points={`${xOf(0)},${height - padding.bottom} ` +
+                view.map((c, i) => `${xOf(i)},${scaleY(c.close)}`).join(" ") +
+                ` ${xOf(view.length - 1)},${height - padding.bottom}`}
             />
             <polyline
               fill="none"
               stroke="#06b6d4"
               strokeWidth="2"
-              points={candles.map((c, i) => `${padding.left + i * stepX + stepX / 2},${scaleY(c.close)}`).join(" ")}
+              points={view.map((c, i) => `${xOf(i)},${scaleY(c.close)}`).join(" ")}
             />
           </g>
         ) : (
-          candles.map((c, i) => {
-            const x = padding.left + i * stepX + stepX / 2;
+          renderSeries.map((c, i) => {
+            const x = xOf(i);
             const openY = scaleY(c.open);
             const closeY = scaleY(c.close);
             const highY = scaleY(c.high);
@@ -1040,24 +1369,21 @@ export default function TradingConsole() {
             const isBull = c.close >= c.open;
             const color = isBull ? "#10b981" : "#f43f5e";
             const topY = Math.min(openY, closeY);
-            const bodyH = Math.max(2, Math.abs(closeY - openY));
+            const bodyH = Math.max(1.5, Math.abs(closeY - openY));
 
+            if (chartStyle === "bars") {
+              // OHLC bars: vertical line + open (left) / close (right) ticks
+              return (
+                <g key={`bar_${i}`} className="cursor-crosshair" onMouseEnter={() => setHoveredCandle(view[i])}>
+                  <line x1={x} y1={highY} x2={x} y2={lowY} stroke={color} strokeWidth="1.2" />
+                  <line x1={x - candleW / 3} y1={openY} x2={x} y2={openY} stroke={color} strokeWidth="1.2" />
+                  <line x1={x} y1={closeY} x2={x + candleW / 3} y2={closeY} stroke={color} strokeWidth="1.2" />
+                </g>
+              );
+            }
             return (
-              <g
-                key={i}
-                className="cursor-crosshair group"
-                onMouseEnter={() => setHoveredCandle(c)}
-              >
-                {/* Wick */}
-                <line
-                  x1={x}
-                  y1={highY}
-                  x2={x}
-                  y2={lowY}
-                  stroke={color}
-                  strokeWidth="1.2"
-                />
-                {/* Body */}
+              <g key={`c_${i}`} className="cursor-crosshair" onMouseEnter={() => setHoveredCandle(view[i])}>
+                <line x1={x} y1={highY} x2={x} y2={lowY} stroke={color} strokeWidth="1.2" />
                 <rect
                   x={x - candleW / 2}
                   y={topY}
@@ -1073,36 +1399,36 @@ export default function TradingConsole() {
           })
         )}
 
-        {/* Current Live Price Line & Tag */}
-        <g>
-          <line
-            x1={padding.left}
-            y1={scaleY(currentInstrument.bid)}
-            x2={width - padding.right}
-            y2={scaleY(currentInstrument.bid)}
-            stroke="#10b981"
-            strokeWidth="1.2"
-            strokeDasharray="4 2"
-          />
-          <rect
-            x={width - padding.right + 2}
-            y={scaleY(currentInstrument.bid) - 9}
-            width={58}
-            height={18}
-            fill="#10b981"
-            rx="3"
-          />
-          <text
-            x={width - padding.right + 6}
-            y={scaleY(currentInstrument.bid) + 4}
-            fill="#022c22"
-            fontSize="10"
-            fontWeight="bold"
-            fontFamily="monospace"
-          >
-            {currentInstrument.bid.toFixed(currentInstrument.digits)}
-          </text>
-        </g>
+        {/* Live price line + tag (axis-aware) */}
+        {(() => {
+          const y = scaleY(currentInstrument.bid);
+          const tagW = 60;
+          const tagX = priceAxisRight ? width - padding.right + 2 : 2;
+          return (
+            <g>
+              <line
+                x1={padding.left}
+                y1={y}
+                x2={axisX}
+                y2={y}
+                stroke="#10b981"
+                strokeWidth="1.2"
+                strokeDasharray="4 2"
+              />
+              <rect x={tagX} y={y - 9} width={tagW} height={18} fill="#10b981" rx="3" />
+              <text
+                x={tagX + 5}
+                y={y + 4}
+                fill="#022c22"
+                fontSize="10"
+                fontWeight="bold"
+                fontFamily="monospace"
+              >
+                {currentInstrument.bid.toFixed(currentInstrument.digits)}
+              </text>
+            </g>
+          );
+        })()}
       </svg>
     );
   };
@@ -1156,6 +1482,33 @@ export default function TradingConsole() {
               <span className="font-bold text-emerald-400">+${account.unrealizedPnl.toFixed(2)}</span>
             </div>
 
+            {/* TWO-ACCOUNT SWITCHER (DEMO / LIVE) */}
+            <div data-testid="account-switcher" className="ml-1 flex items-center rounded-xl border border-slate-700/80 bg-slate-950/70 p-0.5">
+              {(["demo", "live"] as TradingAccountType[]).map((t) => {
+                const meta = accountsMeta.find((a) => a.id === t);
+                const on = tradingAccount === t;
+                return (
+                  <button
+                    key={t}
+                    data-testid={`account-tab-${t}`}
+                    onClick={() => setTradingAccount(t)}
+                    className={`relative rounded-lg px-2.5 py-1 text-left transition-all ${on ? (t === "demo" ? "bg-sky-500/20 text-sky-200 ring-1 ring-sky-400/40" : "bg-rose-500/20 text-rose-200 ring-1 ring-rose-400/40") : "text-slate-400 hover:text-slate-200"}`}
+                    title={t === "demo" ? "Paper account: simulated fills at real prices" : "Live venue account: real orders, real money"}
+                  >
+                    <span className="block text-[10px] font-extrabold uppercase tracking-wider">
+                      {t === "demo" ? "DEMO" : "LIVE"}
+                    </span>
+                    <span className="block text-[10px] font-mono">
+                      {meta ? `$${Number(meta.balance_quote).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—"}
+                    </span>
+                    {meta && meta.trading_enabled === false && (
+                      <span className="absolute -top-1 -right-1 rounded-full bg-amber-400 px-1 text-[7px] font-black text-black">ARM</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Panic Button */}
             <button
               onClick={handleEmergencyStop}
@@ -1167,6 +1520,63 @@ export default function TradingConsole() {
             </button>
           </div>
         </div>
+
+        {/* LIVE ORDER CONFIRMATION — real money, typed confirmation */}
+        {liveConfirm && (
+          <div data-testid="live-confirm-modal" className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <div className="w-full max-w-md rounded-2xl border border-rose-500/40 bg-slate-950 p-5 shadow-2xl">
+              <h3 className="flex items-center gap-2 text-sm font-extrabold uppercase tracking-wider text-rose-300">
+                <ShieldAlert className="h-4 w-4" /> Live Order Confirmation
+              </h3>
+              <p className="mt-2 text-xs leading-relaxed text-slate-300">
+                You are about to place a <strong className="text-rose-300">REAL {liveConfirm.toUpperCase()}</strong> market order for{" "}
+                <strong className="text-slate-100">{currentInstrument.symbol}</strong> on the <strong>LIVE venue account</strong> with real money.
+                ARCHIE will re-run the full trade-gate at the live fill price — the gate can still refuse.
+              </p>
+              <div className="mt-3 rounded-lg bg-slate-900/80 p-2 font-mono text-[11px] text-slate-400">
+                <div>Lots: {lots} · Leverage: {leverage}x</div>
+                <div>SL: {stopLoss || "—"} · TP: {takeProfit || "—"}</div>
+                <div>Est. margin: ${calculatedMargin.toFixed(2)}</div>
+              </div>
+              <div className="mt-4">
+                <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  Type LIVE to authorize real-money execution
+                </label>
+                <input
+                  data-testid="live-confirm-input"
+                  value={liveConfirmText}
+                  onChange={(e) => setLiveConfirmText(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:border-rose-400"
+                  placeholder="LIVE"
+                />
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => {
+                    setLiveConfirm(null);
+                    setLiveConfirmText("");
+                  }}
+                  className="flex-1 rounded-lg bg-slate-800 py-2 text-xs font-bold text-slate-300 hover:bg-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  data-testid="live-confirm-authorize"
+                  disabled={liveConfirmText.trim().toUpperCase() !== "LIVE"}
+                  onClick={() => {
+                    const d = liveConfirm;
+                    setLiveConfirm(null);
+                    setLiveConfirmText("");
+                    if (d) doExecuteTrade(d);
+                  }}
+                  className="flex-1 rounded-lg bg-rose-600 py-2 text-xs font-bold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Authorize LIVE Order
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {notification && (
           <div
@@ -1187,7 +1597,9 @@ export default function TradingConsole() {
       </header>
 
       {/* 2. MAIN WORKSPACE GRID: MARKET BAR + CHART + ORDER PANEL */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+      <div
+        className={`grid grid-cols-1 gap-3 ${portraitMode ? "lg:grid-cols-1" : "lg:grid-cols-12"}`}
+      >
         {/* LEFT COLUMN: MARKET SELECTION & WATCHLIST (3 COLS) */}
         <section className="lg:col-span-3 rounded-xl border border-white/10 bg-slate-900/60 p-3 backdrop-blur-md flex flex-col h-[580px]">
           <div className="flex items-center justify-between pb-2 border-b border-slate-800">
@@ -1280,7 +1692,7 @@ export default function TradingConsole() {
         </section>
 
         {/* CENTER COLUMN: TRADINGVIEW-GRADE INTERACTIVE CHART (6 COLS) */}
-        <section className="lg:col-span-6 rounded-xl border border-white/10 bg-slate-900/60 p-3 backdrop-blur-md flex flex-col h-[580px]">
+        <section className={`lg:col-span-6 rounded-xl border border-white/10 bg-slate-900/60 p-3 backdrop-blur-md flex flex-col ${portraitMode ? "h-[840px]" : "h-[580px]"}`}>
           {/* Chart Header Bar: Asset Info, Timeframe, Chart Styles, Indicators */}
           <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
             {/* Active Symbol Readout */}
@@ -1332,6 +1744,70 @@ export default function TradingConsole() {
                 >
                   <BarChart2 className="h-3.5 w-3.5" />
                 </button>
+                <button
+                  onClick={() => setChartStyle("hollow")}
+                  className={`p-1 rounded text-[9px] font-bold ${chartStyle === "hollow" ? "bg-slate-800 text-amber-300" : "text-slate-400"}`}
+                  title="Hollow Candles"
+                >
+                  H
+                </button>
+                <button
+                  onClick={() => setChartStyle("heikin_ashi")}
+                  className={`p-1 rounded text-[9px] font-bold ${chartStyle === "heikin_ashi" ? "bg-slate-800 text-amber-300" : "text-slate-400"}`}
+                  title="Heikin-Ashi (smoothed)"
+                >
+                  HA
+                </button>
+                <button
+                  onClick={() => setChartStyle("bars")}
+                  className={`p-1 rounded text-[9px] font-bold ${chartStyle === "bars" ? "bg-slate-800 text-amber-300" : "text-slate-400"}`}
+                  title="OHLC Bars"
+                >
+                  ▮
+                </button>
+              </div>
+
+              {/* Premium zoom + viewport controls */}
+              <div className="flex items-center gap-0.5 rounded-lg border border-slate-800 bg-slate-950/70 p-0.5">
+                <button
+                  onClick={() => setZoom((z) => Math.min(60, z * 1.25))}
+                  className="px-1.5 py-0.5 text-xs font-bold text-slate-400 hover:text-white"
+                  title="Zoom in (or scroll wheel)"
+                >
+                  +
+                </button>
+                <button
+                  onClick={() => setZoom((z) => Math.max(2.5, z / 1.25))}
+                  className="px-1.5 py-0.5 text-xs font-bold text-slate-400 hover:text-white"
+                  title="Zoom out (or scroll wheel)"
+                >
+                  −
+                </button>
+                <button
+                  onClick={() => { setZoom(9); setRightOffset(0); }}
+                  className="px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-white"
+                  title="Reset viewport (double-click chart)"
+                >
+                  FIT
+                </button>
+              </div>
+
+              {/* Portrait + flip modes */}
+              <div className="flex items-center gap-0.5 rounded-lg border border-slate-800 bg-slate-950/70 p-0.5">
+                <button
+                  onClick={() => setPortraitMode((v) => !v)}
+                  className={`px-1.5 py-0.5 text-[10px] font-semibold ${portraitMode ? "bg-slate-800 text-amber-300" : "text-slate-400 hover:text-white"}`}
+                  title="Portrait layout (stacked panels — for mobile / vertical screens)"
+                >
+                  PORTRAIT
+                </button>
+                <button
+                  onClick={() => setAxisFlip((v) => !v)}
+                  className={`px-1.5 py-0.5 text-[10px] font-semibold ${axisFlip ? "bg-slate-800 text-amber-300" : "text-slate-400 hover:text-white"}`}
+                  title="Flip the price axis to the left"
+                >
+                  FLIP
+                </button>
               </div>
 
               {/* Indicators Modal Button */}
@@ -1374,6 +1850,9 @@ export default function TradingConsole() {
                   { key: "bollingerBands", label: "Bollinger Bands (20, 2.0)" },
                   { key: "rsi", label: "RSI (14 Oscillator)" },
                   { key: "volume", label: "Volume Profile" },
+                  { key: "vwap", label: "VWAP (Session)" },
+                  { key: "atr", label: "ATR (14 Volatility)" },
+                  { key: "stoch", label: "Stochastic (14, 3, 3)" },
                 ].map(({ key, label }) => (
                   <label key={key} className="flex cursor-pointer items-center justify-between rounded p-1 hover:bg-slate-900">
                     <span className="text-slate-300 text-[11px]">{label}</span>
@@ -1440,6 +1919,60 @@ export default function TradingConsole() {
 
         {/* RIGHT COLUMN: EXNESS-STYLE ORDER TICKET & EXECUTION PANEL (3 COLS) */}
         <section className="lg:col-span-3 rounded-xl border border-white/10 bg-slate-900/60 p-3 backdrop-blur-md flex flex-col h-[580px]">
+          {/* ARCHIE MARKET INTELLIGENCE — real analysis, gate-grade evidence */}
+          <div className="mb-2 rounded-xl border border-cyan-400/25 bg-gradient-to-br from-cyan-950/40 to-slate-950/40 p-2.5">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-widest text-cyan-300">
+                <Activity className="h-3.5 w-3.5" /> ARCHIE Intelligence
+              </span>
+              <button
+                data-testid="archie-analyze-btn"
+                onClick={handleAnalyzeTrade}
+                disabled={analyzing || busy}
+                className="rounded-lg bg-cyan-500/20 px-2 py-1 text-[10px] font-bold text-cyan-200 ring-1 ring-cyan-400/40 transition-all hover:bg-cyan-500/30 disabled:opacity-50"
+              >
+                {analyzing ? "Analyzing…" : `Analyze ${currentInstrument.symbol}`}
+              </button>
+            </div>
+            {analysis && (
+              <div data-testid="archie-suggestion" className="mt-2 text-[10px] leading-relaxed">
+                {analysis.verdict === "suggested" && analysis.analysis ? (
+                  <>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`rounded px-1.5 py-0.5 font-extrabold ${analysis.analysis.direction === "long" ? "bg-emerald-500/25 text-emerald-300" : "bg-rose-500/25 text-rose-300"}`}>
+                        {analysis.analysis.direction.toUpperCase()}
+                      </span>
+                      <span className="font-mono text-slate-300">@ {analysis.analysis.entryPrice.toFixed(currentInstrument.digits)}</span>
+                      <span className="text-slate-500">SL <span className="font-mono text-rose-300">{analysis.analysis.stopPrice.toFixed(currentInstrument.digits)}</span></span>
+                      <span className="text-slate-500">TP <span className="font-mono text-emerald-300">{analysis.analysis.targetPrice.toFixed(currentInstrument.digits)}</span></span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 text-slate-400">
+                      <span>conf <strong className="text-slate-200">{(analysis.analysis.confidence * 100).toFixed(0)}%</strong></span>
+                      <span>· walk-forward <strong className="text-slate-200">{analysis.analysis.backtest.samples}</strong> samples</span>
+                      <span>· hit <strong className="text-slate-200">{(analysis.analysis.backtest.hitRate * 100).toFixed(1)}%</strong></span>
+                      <span>· brier <strong className="text-slate-200">{analysis.analysis.backtest.brier.toFixed(3)}</strong></span>
+                    </div>
+                    <ul className="mt-1 list-disc list-inside text-slate-400">
+                      {analysis.analysis.reasoning.slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}
+                    </ul>
+                    <button
+                      data-testid="archie-apply-btn"
+                      onClick={applyAnalysisToTicket}
+                      className="mt-1.5 w-full rounded-lg border border-cyan-400/40 bg-cyan-500/10 py-1 text-[10px] font-bold text-cyan-200 hover:bg-cyan-500/20"
+                    >
+                      Apply to Ticket (SL/TP + evidence)
+                    </button>
+                    {analysis.analysis.caveats.slice(0, 1).map((c, i) => (
+                      <p key={i} className="mt-1 text-slate-500 italic">{c}</p>
+                    ))}
+                  </>
+                ) : (
+                  <p className="text-amber-300/90">{analysis.message || "ARCHIE withheld the suggestion: no demonstrated edge on this instrument at the current bar depth."}</p>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-between pb-2 border-b border-slate-800">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Order Execution</span>
             <button
@@ -1576,6 +2109,7 @@ export default function TradingConsole() {
             <div>
               <span className="text-[10px] uppercase font-semibold text-rose-400/90 block">Stop Loss (SL)</span>
               <input
+                data-testid="ticket-stop-loss"
                 type="number"
                 placeholder="Price"
                 value={stopLoss}
@@ -1710,6 +2244,17 @@ export default function TradingConsole() {
               Markets
             </button>
             <button
+              onClick={() => setActiveTab("treasury")}
+              data-testid="tab-treasury"
+              className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
+                activeTab === "treasury"
+                  ? "bg-emerald-400/20 text-emerald-300 border border-emerald-400/30"
+                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+              }`}
+            >
+              Treasury
+            </button>
+            <button
               onClick={() => setActiveTab("feed_keys")}
               className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
                 activeTab === "feed_keys"
@@ -1732,6 +2277,21 @@ export default function TradingConsole() {
         {/* Positions Table */}
         {activeTab === "positions" && (
           <div className="mt-2 overflow-x-auto">
+            {tradingAccount === "demo" && (
+              <div className="mb-2 flex items-center justify-between rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-1.5">
+                <span className="text-[10px] text-slate-400">
+                  DEMO ledger: test ARCHIE's intelligence with simulated fills at real prices.
+                </span>
+                <button
+                  onClick={handleResetDemo}
+                  disabled={treasuryBusy}
+                  data-testid="reset-demo"
+                  className="rounded border border-sky-500/40 px-2 py-0.5 text-[10px] font-bold text-sky-300 hover:bg-sky-500/20 disabled:opacity-50"
+                >
+                  Reset Demo ($50k)
+                </button>
+              </div>
+            )}
             {positions.filter((p) => p.state === "OPEN").length === 0 ? (
               <div className="py-6 text-center text-xs text-slate-500">
                 No open positions. Use the order ticket above to place execution orders.
@@ -1785,6 +2345,7 @@ export default function TradingConsole() {
                           </td>
                           <td className="text-right">
                             <button
+                              data-testid={`close-position-${pos.id}`}
                               onClick={() => handleClosePosition(pos.id)}
                               className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] font-sans font-medium text-slate-300 hover:border-rose-500 hover:text-rose-300"
                             >
@@ -1938,6 +2499,163 @@ export default function TradingConsole() {
 
         {/* Market Feed Keys Configuration Tab */}
         {activeTab === "markets" && <MarketDataPanel />}
+
+        {/* TREASURY — deposit / withdraw / swap on the selected account */}
+        {activeTab === "treasury" && (
+          <div data-testid="treasury-panel" className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3">
+              <h4 className="text-xs font-extrabold uppercase tracking-widest text-emerald-300">Deposit · {tradingAccount.toUpperCase()}</h4>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {tradingAccount === "demo"
+                  ? "Funds your paper ledger with simulated cash for testing ARCHIE's intelligence."
+                  : "Live deposits arrive on-chain to your venue account. ARCHIE will fetch your deposit address and history from the venue."}
+              </p>
+              <input
+                data-testid="treasury-amount"
+                value={treasuryAmount}
+                onChange={(e) => setTreasuryAmount(e.target.value)}
+                placeholder="Amount (USD)"
+                className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200"
+              />
+              <button
+                data-testid="treasury-deposit-btn"
+                onClick={async () => {
+                  setTreasuryBusy(true);
+                  setTreasuryMsg(null);
+                  try {
+                    const amt = parseFloat(treasuryAmount);
+                    const res = await treasuryDeposit({ account: tradingAccount, amount: amt });
+                    setTreasuryMsg(JSON.stringify(res).slice(0, 300));
+                    loadBackend();
+                  } catch (e) {
+                    setTreasuryMsg((e as Error).message);
+                  } finally {
+                    setTreasuryBusy(false);
+                  }
+                }}
+                disabled={treasuryBusy}
+                className="mt-2 w-full rounded-lg bg-emerald-600/80 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+              >
+                {treasuryBusy ? "Working…" : "Deposit"}
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3">
+              <h4 className="text-xs font-extrabold uppercase tracking-widest text-rose-300">Withdraw · {tradingAccount.toUpperCase()}</h4>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {tradingAccount === "demo"
+                  ? "Debits the paper ledger; refuses to overdraw."
+                  : "REAL money. Triple-gated: armed live account + explicit confirmation + venue withdrawal whitelist. Refusals are surfaced verbatim."}
+              </p>
+              <input
+                value={treasuryAmount}
+                onChange={(e) => setTreasuryAmount(e.target.value)}
+                placeholder="Amount (USD)"
+                className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200"
+              />
+              <label className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-400">
+                <input type="checkbox" id="wd-authorize" className="accent-rose-500" />
+                I authorize this withdrawal of real funds
+              </label>
+              <button
+                onClick={async () => {
+                  setTreasuryBusy(true);
+                  setTreasuryMsg(null);
+                  try {
+                    const amt = parseFloat(treasuryAmount);
+                    const res = await treasuryWithdraw({
+                      account: tradingAccount,
+                      amount: amt,
+                      asset: "USDT",
+                      withdrawAuthorized: (document.getElementById("wd-authorize") as HTMLInputElement)?.checked === true,
+                    });
+                    setTreasuryMsg(JSON.stringify(res).slice(0, 300));
+                    loadBackend();
+                  } catch (e) {
+                    setTreasuryMsg((e as Error).message);
+                  } finally {
+                    setTreasuryBusy(false);
+                  }
+                }}
+                disabled={treasuryBusy}
+                className="mt-2 w-full rounded-lg bg-rose-600/80 py-1.5 text-xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
+              >
+                {treasuryBusy ? "Working…" : "Withdraw"}
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3">
+              <h4 className="text-xs font-extrabold uppercase tracking-widest text-cyan-300">Swap · {tradingAccount.toUpperCase()}</h4>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {tradingAccount === "demo"
+                  ? "Paper swap at the REAL daily-close ratio (0.1% fee). Never a fabricated ratio."
+                  : "Binance Convert: fresh quote, single-use, expires fast."}
+              </p>
+              <div className="mt-2 flex items-center gap-1.5">
+                <input value={treasuryFromAsset} onChange={(e) => setTreasuryFromAsset(e.target.value.toUpperCase())} className="w-1/3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200" />
+                <ArrowUpRight className="h-3.5 w-3.5 text-slate-500" />
+                <input value={treasuryToAsset} onChange={(e) => setTreasuryToAsset(e.target.value.toUpperCase())} className="w-1/3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200" />
+                <input value={treasuryAmount} onChange={(e) => setTreasuryAmount(e.target.value)} placeholder="Amt" className="w-1/4 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200" />
+              </div>
+              <div className="mt-2 flex gap-1.5">
+                <button
+                  onClick={async () => {
+                    setTreasuryBusy(true);
+                    setTreasuryMsg(null);
+                    try {
+                      const res = await treasurySwapQuote({
+                        account: tradingAccount,
+                        fromAsset: treasuryFromAsset,
+                        toAsset: treasuryToAsset,
+                        amount: parseFloat(treasuryAmount),
+                      });
+                      setTreasuryMsg(JSON.stringify(res).slice(0, 300));
+                    } catch (e) {
+                      setTreasuryMsg((e as Error).message);
+                    } finally {
+                      setTreasuryBusy(false);
+                    }
+                  }}
+                  disabled={treasuryBusy}
+                  className="flex-1 rounded-lg bg-slate-800 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                >
+                  Quote
+                </button>
+                <button
+                  onClick={async () => {
+                    setTreasuryBusy(true);
+                    setTreasuryMsg(null);
+                    try {
+                      const res = await treasurySwapExecute({
+                        account: tradingAccount,
+                        fromAsset: treasuryFromAsset,
+                        toAsset: treasuryToAsset,
+                        amount: parseFloat(treasuryAmount),
+                      });
+                      setTreasuryMsg(JSON.stringify(res).slice(0, 300));
+                      loadBackend();
+                    } catch (e) {
+                      setTreasuryMsg((e as Error).message);
+                    } finally {
+                      setTreasuryBusy(false);
+                    }
+                  }}
+                  disabled={treasuryBusy}
+                  className="flex-1 rounded-lg bg-cyan-600/80 py-1.5 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-50"
+                >
+                  Swap
+                </button>
+              </div>
+            </div>
+
+            {treasuryMsg && (
+              <div className="lg:col-span-3 rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Venue / Ledger Response</span>
+                <pre data-testid="treasury-msg" className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-slate-300">{treasuryMsg}</pre>
+              </div>
+            )}
+          </div>
+        )}
 
         {activeTab === "feed_keys" && (
           <div className="mt-2 space-y-3 text-xs">

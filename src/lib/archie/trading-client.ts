@@ -303,3 +303,196 @@ export async function saveFeedApiKey(payload: {
     apiKey: payload.apiKey,
   });
 }
+
+// =========================================================
+// TWO-ACCOUNT + TREASURY + INTELLIGENCE CLIENT (batch 36)
+// Every call carries the account context ('demo' | 'live',
+// default 'demo'). DEMO is the paper ledger; LIVE is the real
+// venue account. Nothing here fabricates balances — the edge
+// function is the only source of truth.
+// =========================================================
+
+export type TradingAccountType = "demo" | "live";
+
+export interface TradingAccountView {
+  id: string;
+  type: TradingAccountType;
+  label: string;
+  balance_quote: number;
+  starting_balance_quote: number;
+  currency: string;
+  trading_enabled: boolean;
+  emergency_stop: boolean;
+  venue_mode: string | null;
+}
+
+export interface TradingStatusV2 {
+  venue: {
+    configured: boolean;
+    venue: string | null;
+    mode: string | null;
+    reason: string | null;
+  };
+  state: TradingStateStatus;
+  accounts: TradingAccountView[];
+  positions: { open_count: number; closed_count: number } | null;
+}
+
+export async function fetchTradingStatusV2(): Promise<TradingStatusV2> {
+  return invokeTrading<TradingStatusV2>({ action: "status" });
+}
+
+export async function setAccountState(
+  account: TradingAccountType,
+  patch: { emergency_stop?: boolean; trading_enabled?: boolean },
+): Promise<{ ok: true }> {
+  return invokeTrading<{ ok: true }>({
+    action: "set_state",
+    account,
+    ...patch,
+  });
+}
+
+export async function fetchAccountPositions(
+  account: TradingAccountType,
+): Promise<PositionsResult> {
+  return invokeTrading<PositionsResult>({ action: "positions", account });
+}
+
+export async function executeAccountTrade(input: {
+  account: TradingAccountType;
+  request: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  mainnet_execution_authorized?: boolean;
+}): Promise<ExecuteResult> {
+  return invokeTrading<ExecuteResult>({ action: "execute", ...input });
+}
+
+export async function closePosition(
+  account: TradingAccountType,
+  position_id: string,
+): Promise<Record<string, unknown>> {
+  return invokeTrading<Record<string, unknown>>({
+    action: "close",
+    account,
+    position_id,
+  });
+}
+
+export async function resetDemoAccount(): Promise<Record<string, unknown>> {
+  return invokeTrading<Record<string, unknown>>({ action: "reset_demo" });
+}
+
+export interface TradeAnalysis {
+  id: string;
+  symbol: string;
+  direction: "long" | "short";
+  entryPrice: number;
+  stopPrice: number;
+  targetPrice: number;
+  positionSizeSuggestion: number;
+  confidence: number;
+  probability: number;
+  calibratedProbability: number;
+  horizon: string;
+  reasoning: string[];
+  caveats: string[];
+  backtest: { samples: number; hitRate: number; brier: number };
+}
+
+export interface AnalyzeResult {
+  verdict: "suggested" | "withheld";
+  analysis: TradeAnalysis | null;
+  evidence: Record<string, unknown> | null;
+  request: Record<string, unknown> | null;
+  message: string;
+}
+
+export async function analyzeTrade(input: {
+  symbol: string;
+  account?: TradingAccountType;
+  portfolioValue?: number;
+  direction?: "long" | "short";
+}): Promise<AnalyzeResult> {
+  return invokeTrading<AnalyzeResult>({ action: "analyze", ...input });
+}
+
+// ---- treasury ----
+
+export interface TreasuryStatus {
+  account: TradingAccountType;
+  mode: "PAPER_LEDGER" | "VENUE";
+  balanceQuote?: number;
+  startingBalance?: number;
+  ledger?: Array<Record<string, unknown>>;
+  balances?: Array<{ asset: string; free: number; locked: number }>;
+  recentDeposits?: Array<Record<string, unknown>>;
+  note?: string;
+}
+
+export async function fetchTreasuryStatus(
+  account: TradingAccountType,
+): Promise<TreasuryStatus> {
+  return invokeTrading<TreasuryStatus>({
+    action: "treasury_status",
+    account,
+  });
+}
+
+export async function treasuryDeposit(
+  account: TradingAccountType,
+  amount: number,
+): Promise<Record<string, unknown>> {
+  return invokeTrading<Record<string, unknown>>({
+    action: "treasury_deposit",
+    account,
+    amount,
+  });
+}
+
+export async function treasuryWithdraw(input: {
+  account: TradingAccountType;
+  amount: number;
+  address?: string;
+  network?: string;
+  withdraw_authorized?: boolean;
+}): Promise<Record<string, unknown>> {
+  return invokeTrading<Record<string, unknown>>({
+    action: "treasury_withdraw",
+    ...input,
+  });
+}
+
+export async function treasurySwapQuote(input: {
+  account: TradingAccountType;
+  fromAsset: string;
+  toAsset: string;
+  amount: number;
+}): Promise<Record<string, unknown>> {
+  return invokeTrading<Record<string, unknown>>({
+    action: "treasury_swap_quote",
+    ...input,
+  });
+}
+
+export async function treasurySwapExecute(input: {
+  account: TradingAccountType;
+  fromAsset: string;
+  toAsset: string;
+  amount: number;
+}): Promise<Record<string, unknown>> {
+  return invokeTrading<Record<string, unknown>>({
+    action: "treasury_swap_execute",
+    ...input,
+  });
+}
+
+export async function treasuryDepositAddress(
+  asset: string,
+): Promise<Record<string, unknown>> {
+  return invokeTrading<Record<string, unknown>>({
+    action: "treasury_deposit_address",
+    account: "live",
+    asset,
+  });
+}

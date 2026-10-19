@@ -188,7 +188,7 @@ function toMassiveTicker(symbol: string): string {
   if (m) {
     const base = m[1];
     const cryptoBase = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LTC", "LINK", "AVAX", "TRX", "TON"];
-    const forexBase = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU"];
+    const forexBase = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU", "USDT"];
     if (cryptoBase.includes(base)) return `X:${base}USD`;
     if (forexBase.includes(base)) return `C:${base}USD`;
   }

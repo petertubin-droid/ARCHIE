@@ -174,6 +174,10 @@ function accountTypeOf(raw: unknown): AccountType {
   return raw === "live" ? "live" : "demo";
 }
 
+function normalizeAccount(raw: unknown): AccountType {
+  return accountTypeOf(raw);
+}
+
 async function readAccount(type: AccountType): Promise<AccountRow> {
   // SAFE DEFAULTS when the row is absent: disabled, stopped,
   // zero balance. Never guess into a permissive state.
@@ -247,7 +251,7 @@ function toMassiveTicker(symbol: string): string {
   if (m) {
     const base = m[1];
     const cryptoBase = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LTC", "LINK", "AVAX", "TRX", "TON"];
-    const forexBase = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU"];
+    const forexBase = ["EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU", "USDT"];
     if (cryptoBase.includes(base)) return `X:${base}USD`;
     if (forexBase.includes(base)) return `C:${base}USD`;
   }
@@ -651,6 +655,115 @@ function redactVenue(venueRaw: unknown): Record<string, unknown> {
     fillQty: typeof v.fillQty === "number" ? v.fillQty : null,
     persisted: "redacted -- raw venue response not stored",
   };
+}
+
+
+/** Fresh paper-swap computation at the real daily close —
+ * used by BOTH treasury_swap_quote and treasury_swap_execute
+ * (execute never trusts a stale client-side quote). */
+async function handlerQuoteSwapDemo(
+  fromAsset: string,
+  toAsset: string,
+  amount: number,
+): Promise<
+  | { ok: true; toAmount: number; priceUsed: { from: number; to: number }; feePct: number }
+  | { ok: false; reason: string; message: string }
+> {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, reason: "invalid_amount", message: "A positive amount is required." };
+  }
+  const fromTicker = toMassiveTicker(fromAsset === "USD" ? "USD" : fromAsset + "USD");
+  const toTicker = toMassiveTicker(toAsset === "USD" ? "USD" : toAsset + "USD");
+  const [fromBars, toBars] = await Promise.all([
+    fetchDailyBars(fromTicker, 30),
+    fetchDailyBars(toTicker, 30),
+  ]);
+  if (fromBars.error || !fromBars.bars.length || toBars.error || !toBars.bars.length) {
+    return {
+      ok: false,
+      reason: "swap_price_unavailable",
+      message: "The real market price for this pair is not available — ARCHIE will not quote a swap on fabricated prices.",
+    };
+  }
+  const fromClose = fromBars.bars[fromBars.bars.length - 1].c;
+  const toClose = toBars.bars[toBars.bars.length - 1].c;
+  const feePct = 0.1;
+  const gross = (amount * fromClose) / toClose;
+  return {
+    ok: true,
+    toAmount: Number((gross * (1 - feePct / 100)).toFixed(8)),
+    priceUsed: { from: fromClose, to: toClose },
+    feePct,
+  };
+}
+
+// =========================================================
+// TREASURY (batch 36) — deposit / withdraw / swap for both
+// accounts. REAL money moves only on the LIVE venue path and
+// only through the adapter, with ARCHIE-side hard gates:
+// live account armed + global state enabled + not stopped +
+// an explicit per-request confirmation. DEMO movements are
+// paper-ledger entries at real prices — labeled as such.
+// =========================================================
+
+interface TreasuryLedgerRow {
+  id: string;
+  account: string;
+  kind: string;
+  asset: string;
+  amount: number;
+  status: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+async function recordTreasury(entry: {
+  account: string;
+  kind: string;
+  asset: string;
+  amount: number;
+  status: string;
+  detail: Record<string, unknown>;
+  venueRef?: string | null;
+}): Promise<string | null> {
+  const id = `tl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const r = await service("/rest/v1/frelux_archie_treasury_ledger", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({
+      id,
+      account: entry.account,
+      kind: entry.kind,
+      asset: entry.asset,
+      amount: entry.amount,
+      status: entry.status,
+      detail: entry.detail,
+      venue_ref: entry.venueRef ?? null,
+    }),
+  });
+  return r.error;
+}
+
+async function readTreasury(account: string, limit = 25): Promise<TreasuryLedgerRow[]> {
+  const r = await service<TreasuryLedgerRow[]>(
+    `/rest/v1/frelux_archie_treasury_ledger?account=eq.${account}&select=id,account,kind,asset,amount,status,detail,created_at&order=created_at.desc&limit=${limit}`,
+  );
+  return Array.isArray(r.data) ? r.data : [];
+}
+
+/** Binance treasury surface — null when the boot venue does
+ * not expose treasury endpoints (honest refusal upstream,
+ * never a fake treasury). */
+function binanceTreasury(boot: Awaited<ReturnType<typeof executionAdapterFromEnv>>) {
+  const adapter = boot.adapter as unknown as {
+    getDepositAddress?: (a: string, n?: string) => Promise<{ ok: boolean; address: string | null; tag: string | null; raw: unknown }>;
+    getDepositHistory?: (a?: string) => Promise<{ ok: boolean; deposits: Array<Record<string, unknown>>; raw: unknown }>;
+    withdraw?: (a: string, amt: number, addr: string, n?: string) => Promise<{ ok: boolean; withdrawalId: string | null; raw: unknown }>;
+    convertQuote?: (f: string, t: string, amt: number) => Promise<{ ok: boolean; quoteId: string | null; toAmount: number | null; ratio: number | null; raw: unknown }>;
+    convertAccept?: (q: string) => Promise<{ ok: boolean; orderId: string | null; raw: unknown }>;
+  } | null;
+  if (!boot.ok || !adapter || !adapter.getDepositAddress) return null;
+  return adapter;
 }
 
 // =========================================================
@@ -1732,8 +1845,271 @@ serveWithCors(async (req: Request) => {
     });
   }
 
+  // ---- action: treasury_* (deposit / withdraw / swap) ----
+  if (action === "treasury_status") {
+    const account = normalizeAccount(payload.account);
+    const ledger = await readTreasury(account);
+    if (account === "demo") {
+      const acct = await readAccount("demo");
+      return json(200, {
+        account,
+        mode: "PAPER_LEDGER",
+        balanceQuote: acct.balance_quote,
+        startingBalance: acct.starting_balance_quote,
+        ledger,
+      });
+    }
+    const boot = executionAdapterFromEnv();
+    if (!boot.ok) {
+      return json(200, { account, venue: null, reason: boot.reason, ledger });
+    }
+    const balances = await boot.adapter.getBalances();
+    return json(200, {
+      account,
+      venue: boot.venue,
+      mode: boot.mode,
+      balances: balances.filter((b) => b.free > 0 || b.locked > 0),
+      ledger,
+    });
+  }
+
+  if (action === "treasury_deposit_info") {
+    const account = normalizeAccount(payload.account);
+    if (account === "demo") {
+      return json(200, {
+        account,
+        mode: "PAPER_LEDGER",
+        message: "DEMO deposits credit the paper ledger directly — use treasury_deposit with an amount. No address exists: demo money never touches a chain.",
+      });
+    }
+    const boot = executionAdapterFromEnv();
+    const tr = binanceTreasury(boot);
+    if (!tr) {
+      return json(boot.ok ? 400 : 409, {
+        error: boot.ok ? "The booted venue does not expose deposit addresses." : boot.reason,
+      });
+    }
+    const asset = String(payload.asset ?? "USDT").toUpperCase();
+    const network = payload.network ? String(payload.network) : undefined;
+    const addr = await tr.getDepositAddress(asset, network);
+    const history = await tr.getDepositHistory(asset);
+    return json(200, {
+      account,
+      asset,
+      address: addr.address,
+      tag: addr.tag,
+      ok: addr.ok,
+      note: "Send only " + asset + " on the selected network to this address. Deposits arrive on-chain; the venue credits them.",
+      history: history.deposits.slice(0, 10),
+    });
+  }
+
+  if (action === "treasury_deposit") {
+    const account = normalizeAccount(payload.account);
+    const amount = Number(payload.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) {
+      return json(400, { error: "A positive amount (max 1,000,000) is required." });
+    }
+    if (account === "demo") {
+      const err = await recordTreasury({
+        account, kind: "deposit", asset: "USD", amount,
+        status: "completed",
+        detail: { mode: "paper", note: "demo ledger credit" },
+      });
+      if (err) return json(500, { error: "Failed to write treasury ledger: " + err });
+      const acct = await readAccount("demo");
+      const newBalance = acct.balance_quote + amount;
+      const wErr = await writeAccount("demo", { balance_quote: newBalance });
+      if (wErr) return json(500, { error: "Failed to update demo balance: " + wErr });
+      return json(200, { ok: true, account, credited: amount, newBalance, mode: "PAPER_LEDGER" });
+    }
+    return json(400, {
+      error: "Live deposits happen on-chain — use treasury_deposit_info for the venue deposit address and live deposit history. No API call can create money on the venue.",
+    });
+  }
+
+  if (action === "treasury_withdraw") {
+    const account = normalizeAccount(payload.account);
+    const amount = Number(payload.amount);
+    const asset = String(payload.asset ?? "USDT").toUpperCase();
+    const address = String(payload.address ?? "").trim();
+    const network = payload.network ? String(payload.network) : undefined;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return json(400, { error: "A positive amount is required." });
+    }
+    if (account === "demo") {
+      const acct = await readAccount("demo");
+      if (acct.balance_quote < amount) {
+        return json(200, {
+          ok: false,
+          reason: "insufficient_paper_funds",
+          balance: acct.balance_quote,
+          message: "The demo ledger cannot go negative. This is a paper account, not credit.",
+        });
+      }
+      const err = await recordTreasury({
+        account, kind: "withdraw", asset: "USD", amount,
+        status: "completed",
+        detail: { mode: "paper", note: "demo ledger debit" },
+      });
+      if (err) return json(500, { error: "Failed to write treasury ledger: " + err });
+      const newBalance = acct.balance_quote - amount;
+      const wErr = await writeAccount("demo", { balance_quote: newBalance });
+      if (wErr) return json(500, { error: "Failed to update demo balance: " + wErr });
+      return json(200, { ok: true, account, debited: amount, newBalance, mode: "PAPER_LEDGER" });
+    }
+
+    // ---- LIVE withdrawal: real money. Triple gate. ----
+    if (payload.withdraw_authorized !== true) {
+      return json(400, {
+        error: "Live withdrawals require withdraw_authorized=true set explicitly — this flag is ARCHIE's confirmation that the owner means to move REAL money.",
+      });
+    }
+    if (!address || address.length < 10) {
+      return json(400, { error: "A withdrawal address is required." });
+    }
+    const [state, acct] = await Promise.all([readState(), readAccount("live")]);
+    const limits = await limitsForAccount(state, acct);
+    if (limits.emergencyStop || !limits.tradingEnabled) {
+      return json(200, {
+        ok: false,
+        reason: "live_account_not_armed",
+        message: "Arm the LIVE account (enable trading + disengage its stop) before withdrawing. ARCHIE will not move real money while the account is disarmed or stopped.",
+      });
+    }
+    const boot = executionAdapterFromEnv();
+    const tr = binanceTreasury(boot);
+    if (!tr) {
+      return json(boot.ok ? 400 : 409, {
+        error: boot.ok ? "The booted venue does not expose withdrawals." : boot.reason,
+      });
+    }
+    const err = await recordTreasury({
+      account, kind: "withdraw", asset, amount, status: "requested",
+      detail: { address, network: network ?? null, mode: boot.mode },
+    });
+    if (err) return json(500, { error: "Failed to write treasury ledger: " + err });
+    const res = await tr.withdraw(asset, amount, address, network);
+    const err2 = await recordTreasury({
+      account, kind: "withdraw", asset, amount,
+      status: res.ok ? "completed" : "failed",
+      detail: { address, network: network ?? null, venueResponse: res.raw, mode: boot.mode },
+      venueRef: res.withdrawalId,
+    });
+    if (err2) return json(500, { error: "Failed to write treasury ledger: " + err2 });
+    return json(200, {
+      ok: res.ok,
+      withdrawalId: res.withdrawalId,
+      venueResponse: res.raw,
+      message: res.ok
+        ? "Withdrawal submitted to the venue. The venue's own withdrawal permissions and address whitelist are the final authority."
+        : "The venue refused the withdrawal — its response is attached verbatim. Nothing was fabricated.",
+    });
+  }
+
+  if (action === "treasury_swap_quote") {
+    const account = normalizeAccount(payload.account);
+    const fromAsset = String(payload.fromAsset ?? "USDT").toUpperCase();
+    const toAsset = String(payload.toAsset ?? "BTC").toUpperCase();
+    const amount = Number(payload.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return json(400, { error: "A positive amount is required." });
+    }
+    if (fromAsset === toAsset) {
+      return json(400, { error: "fromAsset and toAsset must differ." });
+    }
+    if (account === "demo") {
+      const q = await handlerQuoteSwapDemo(fromAsset, toAsset, amount);
+      if (!q.ok) return json(200, { ok: false, reason: q.reason, message: q.message });
+      return json(200, {
+        account, mode: "PAPER_LEDGER", ok: true,
+        fromAsset, toAsset, fromAmount: amount,
+        toAmount: q.toAmount, priceUsed: q.priceUsed, feePct: q.feePct,
+        note: "Daily-close prices (massive.com EOD). Paper swap executes at these real ratios.",
+      });
+    }
+    const boot = executionAdapterFromEnv();
+    const tr = binanceTreasury(boot);
+    if (!tr) {
+      return json(boot.ok ? 400 : 409, {
+        error: boot.ok ? "The booted venue does not expose convert quotes." : boot.reason,
+      });
+    }
+    const q = await tr.convertQuote(fromAsset, toAsset, amount);
+    return json(200, {
+      account, mode: boot.mode, ok: q.ok,
+      quoteId: q.quoteId, fromAsset, toAsset, fromAmount: amount,
+      toAmount: q.toAmount, ratio: q.ratio, venueResponse: q.raw,
+      note: "Live venue quote — quoteId is single-use and expires fast. Accept with treasury_swap_execute.",
+    });
+  }
+
+  if (action === "treasury_swap_execute") {
+    const account = normalizeAccount(payload.account);
+    if (account === "demo") {
+      const fromAsset = String(payload.fromAsset ?? "USDT").toUpperCase();
+      const toAsset = String(payload.toAsset ?? "BTC").toUpperCase();
+      const amount = Number(payload.amount);
+      const q = await handlerQuoteSwapDemo(fromAsset, toAsset, amount);
+      if (!q.ok) return json(200, { ok: false, reason: q.reason, message: q.message });
+      const err = await recordTreasury({
+        account, kind: "swap", asset: fromAsset + "/" + toAsset, amount,
+        status: "completed",
+        detail: { mode: "paper", received: q.toAmount, priceUsed: q.priceUsed, feePct: q.feePct },
+      });
+      if (err) return json(500, { error: "Failed to write treasury ledger: " + err });
+      return json(200, {
+        ok: true, account, mode: "PAPER_LEDGER",
+        fromAsset, toAsset, fromAmount: amount, toAmount: q.toAmount,
+        note: "Paper swap executed at the real daily-close ratio. Demo holdings are tracked in the ledger.",
+      });
+    }
+    const quoteId = String(payload.quoteId ?? "").trim();
+    if (!quoteId) {
+      return json(400, { error: "quoteId is required (from treasury_swap_quote)." });
+    }
+    const [state, acct] = await Promise.all([readState(), readAccount("live")]);
+    const limits = await limitsForAccount(state, acct);
+    if (limits.emergencyStop || !limits.tradingEnabled) {
+      return json(200, {
+        ok: false, reason: "live_account_not_armed",
+        message: "Arm the LIVE account before swapping real funds.",
+      });
+    }
+    const boot = executionAdapterFromEnv();
+    const tr = binanceTreasury(boot);
+    if (!tr) {
+      return json(boot.ok ? 400 : 409, {
+        error: boot.ok ? "The booted venue does not expose convert execution." : boot.reason,
+      });
+    }
+    const err = await recordTreasury({
+      account, kind: "swap",
+      asset: String(payload.fromAsset ?? "?") + "/" + String(payload.toAsset ?? "?"),
+      amount: Number(payload.amount ?? 0), status: "requested",
+      detail: { quoteId, mode: boot.mode },
+    });
+    if (err) return json(500, { error: "Failed to write treasury ledger: " + err });
+    const res = await tr.convertAccept(quoteId);
+    const err2 = await recordTreasury({
+      account, kind: "swap",
+      asset: String(payload.fromAsset ?? "?") + "/" + String(payload.toAsset ?? "?"),
+      amount: Number(payload.amount ?? 0),
+      status: res.ok ? "completed" : "failed",
+      detail: { quoteId, venueResponse: res.raw, mode: boot.mode },
+      venueRef: res.orderId,
+    });
+    if (err2) return json(500, { error: "Failed to write treasury ledger: " + err2 });
+    return json(200, {
+      ok: res.ok, orderId: res.orderId, venueResponse: res.raw,
+      message: res.ok
+        ? "Swap executed on the venue."
+        : "The venue refused the swap — its response is attached verbatim.",
+    });
+  }
+
   return json(400, {
     error:
-      "Unknown action. Valid: status | set_state | dry_run | execute | emergency_cancel | positions | broker_connections | dynamic_stops | signals_audit | feed_config | save_feed_key | analyze | close | reset_demo.",
+      "Unknown action. Valid: status | set_state | dry_run | execute | close | emergency_cancel | positions | broker_connections | dynamic_stops | signals_audit | feed_config | save_feed_key | analyze | reset_demo | treasury_status | treasury_deposit_info | treasury_deposit | treasury_withdraw | treasury_swap_quote | treasury_swap_execute.",
   });
 });

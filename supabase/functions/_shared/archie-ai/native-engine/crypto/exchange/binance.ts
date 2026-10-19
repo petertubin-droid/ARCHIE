@@ -326,6 +326,99 @@ export class BinanceSpotAdapter implements VenueAdapter {
     return { ok: res.ok, cancelled, raw: payload };
   }
 
+  // =====================================================
+  // TREASURY METHODS (batch 36, Oct 20, 2026) — deposit /
+  // withdraw / convert. Withdrawals move REAL money: the
+  // venue itself enforces withdrawal-enabled API keys and
+  // address whitelisting; ARCHIE adds its own explicit
+  // authorization + audit ledger on top. Every failure is
+  // surfaced raw, never fabricated.
+  // =====================================================
+
+  /** Deposit address for an asset (Binance sapi). */
+  async getDepositAddress(
+    asset: string,
+    network?: string,
+  ): Promise<{ ok: boolean; address: string | null; tag: string | null; raw: unknown }> {
+    const params: Array<[string, string | number]> = [["asset", asset.toUpperCase()]];
+    if (network) params.push(["network", network]);
+    const res = await this.signedRequest("GET", "/sapi/v1/capital/deposit/address", params);
+    const p = res.payload as { address?: string; tag?: string } | null;
+    return {
+      ok: res.ok,
+      address: p?.address ?? null,
+      tag: p?.tag ?? null,
+      raw: res.payload,
+    };
+  }
+
+  /** Recent deposit history (on-chain arrivals). */
+  async getDepositHistory(
+    asset?: string,
+  ): Promise<{ ok: boolean; deposits: Array<Record<string, unknown>>; raw: unknown }> {
+    const params: Array<[string, string | number]> = [];
+    if (asset) params.push(["asset", asset.toUpperCase()]);
+    const res = await this.signedRequest("GET", "/sapi/v1/capital/deposit/hisrec", params);
+    const list = Array.isArray(res.payload) ? res.payload : [];
+    return { ok: res.ok, deposits: list, raw: res.payload };
+  }
+
+  /**
+   * Initiate a withdrawal. REAL money movement — the caller
+   * (archie-trading) must have already enforced the live
+   * account arm + explicit per-request authorization; the
+   * venue additionally requires a withdrawal-enabled key and a
+   * whitelisted address.
+   */
+  async withdraw(
+    asset: string,
+    amount: number,
+    address: string,
+    network?: string,
+  ): Promise<{ ok: boolean; withdrawalId: string | null; raw: unknown }> {
+    const params: Array<[string, string | number]> = [
+      ["asset", asset.toUpperCase()],
+      ["amount", trimQuantity(amount)],
+      ["address", address],
+    ];
+    if (network) params.push(["network", network]);
+    const res = await this.signedRequest("POST", "/sapi/v1/capital/withdraw/apply", params);
+    const p = res.payload as { id?: string } | null;
+    return { ok: res.ok, withdrawalId: p?.id ?? null, raw: res.payload };
+  }
+
+  /** Binance Convert quote (swap). */
+  async convertQuote(
+    fromAsset: string,
+    toAsset: string,
+    fromAmount: number,
+  ): Promise<{ ok: boolean; quoteId: string | null; toAmount: number | null; ratio: number | null; raw: unknown }> {
+    const res = await this.signedRequest("GET", "/sapi/v1/convert/getQuote", [
+      ["fromAsset", fromAsset.toUpperCase()],
+      ["toAsset", toAsset.toUpperCase()],
+      ["fromAmount", fromAmount],
+    ]);
+    const p = res.payload as { quoteId?: string; toAmount?: string; ratio?: string } | null;
+    return {
+      ok: res.ok,
+      quoteId: p?.quoteId ?? null,
+      toAmount: p?.toAmount === undefined ? null : Number(p.toAmount),
+      ratio: p?.ratio === undefined ? null : Number(p.ratio),
+      raw: res.payload,
+    };
+  }
+
+  /** Binance Convert execute — accepts a live quoteId. */
+  async convertAccept(
+    quoteId: string,
+  ): Promise<{ ok: boolean; orderId: string | null; raw: unknown }> {
+    const res = await this.signedRequest("POST", "/sapi/v1/convert/acceptQuote", [
+      ["quoteId", quoteId],
+    ]);
+    const p = res.payload as { orderId?: string } | null;
+    return { ok: res.ok, orderId: p?.orderId ?? null, raw: res.payload };
+  }
+
   async getBalances(): Promise<VenueBalance[]> {
     const res = await this.signedRequest("GET", "/api/v3/account", []);
     const payload = res.payload as {
