@@ -37,6 +37,8 @@ import { configureNativeEngineWorldTimeline } from "../native-engine/engine.ts";
 import type { SupabaseLike } from "../native-engine/persistence.ts";
 import type { Fact } from "../native-engine/types.ts";
 import { understand } from "../native-engine/nlu.ts";
+import { understandSemantics } from "../semantic-engine/engine.ts";
+import type { SemanticInterpretation } from "../semantic-engine/types.ts";
 import {
   classifyLifeSafety,
   lifeSafetyStopMessage,
@@ -654,14 +656,30 @@ export class CognitiveKernel implements ArchieRuntime {
       return value;
     };
 
-    // ── UNDERSTAND (route first, from the shared NLU) ──
+    // ── UNDERSTAND (route first, from shared NLU + semantic reasoning) ──
     // P9: the NLU pass is real work — its duration is
     // measured, not defaulted to 0.
     const nluStarted = Date.now();
     const nlu = understand(input);
+    // Semantic Understanding supplement (stateless, deterministic, heuristic confidence)
+    let semantics: SemanticInterpretation | null = null;
+    try {
+      semantics = understandSemantics(input, {
+        ownerAuthorized: opts?.ownerAuthorized,
+        historyTurns: (history ?? []).map((t) => ({
+          role: t.role === "owner" ? "user" : "assistant",
+          content: t.parts.map((p) => p.text ?? "").join(" "),
+          timestamp: Date.now(),
+        })),
+      });
+    } catch {
+      semantics = null;
+    }
     const nluMs = Date.now() - nluStarted;
     const isComplex =
-      nlu.entities.filePaths.length > 0 || input.split(/\s+/).length > 12;
+      nlu.entities.filePaths.length > 0 ||
+      (semantics ? semantics.entities.length > 2 || semantics.constraints.length > 0 : false) ||
+      input.split(/\s+/).length > 12;
     const route = orchestrate({
       intent: nlu.intent,
       task: input,
@@ -689,7 +707,7 @@ export class CognitiveKernel implements ArchieRuntime {
       phase: "UNDERSTAND",
       organs: ["head"],
       status: "executed",
-      summary: `intent=${nlu.intent}, confidence=${nlu.confidence.toFixed(2)}`,
+      summary: `intent=${nlu.intent}, confidence=${nlu.confidence.toFixed(2)}${semantics ? ` (semantic: lang=${semantics.detectedLanguage.code}, entities=${semantics.entities.length}, action=${semantics.security.actionType})` : ""}`,
       durationMs: nluMs,
     });
     // READ-BEARING WORLD MODEL (audit fix I-1): ARCHIE's world
