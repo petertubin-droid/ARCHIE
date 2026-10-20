@@ -9,6 +9,7 @@
 // =========================================================
 
 import { useState, useEffect } from "react";
+import { archieEngineBus } from "@/lib/archie/unified-engine-bus";
 import {
   Cpu,
   Calculator,
@@ -41,6 +42,7 @@ import type { EngineResult } from "@/lib/ai-foundation/types";
 
 export default function ArchieEngines() {
   const [engines, setEngines] = useState<EngineDescriptor[]>([]);
+  const [showFederation, setShowFederation] = useState(true);
   const [selectedEngineId, setSelectedEngineId] = useState<string>("roof_geometry");
   const [running, setRunning] = useState(false);
   const [engineResult, setEngineResult] = useState<EngineResult | null>(null);
@@ -99,6 +101,12 @@ export default function ArchieEngines() {
     try {
       const res = await executeEngine(activeEngine.id, inputPayload);
       setEngineResult(res);
+      archieEngineBus.publish("CROSS_ENGINE_TASK", "execution", {
+        engineId: activeEngine.id,
+        input: inputPayload,
+        ok: res.ok,
+        calculatedAt: res.calculatedAt,
+      });
     } catch (err: any) {
       setEngineResult({
         ok: false,
@@ -120,6 +128,63 @@ export default function ArchieEngines() {
       title="Calculation Engines & Formulas"
       subtitle="Authoritative structural calculators. ARCHIE's AI is constitutionally barred from guessing quantities, routing all math through verified formulas."
     >
+      {/* Federation / Calculator mode switch */}
+      <div className="mb-5 flex items-center gap-2 border-b border-white/10 pb-3">
+        <button
+          data-testid="engine-federation-tab"
+          onClick={() => setShowFederation(true)}
+          className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors ${showFederation ? "bg-amber-400/15 text-amber-300 border border-amber-400/30" : "text-slate-400 hover:text-white"}`}
+        >
+          <Cpu className="mr-1.5 inline h-3.5 w-3.5" /> Unified Engine Federation
+        </button>
+        <button
+          data-testid="engine-calculators-tab"
+          onClick={() => setShowFederation(false)}
+          className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors ${!showFederation ? "bg-amber-400/15 text-amber-300 border border-amber-400/30" : "text-slate-400 hover:text-white"}`}
+        >
+          <Calculator className="mr-1.5 inline h-3.5 w-3.5" /> Deterministic Calculators
+        </button>
+      </div>
+
+      {showFederation && (() => {
+        const federation = archieEngineBus.getFederationHealth();
+        const registered = archieEngineBus.getAllEngines();
+        return (
+          <div data-testid="engine-federation" className="mb-6 space-y-4">
+            <ArchiePanel className="p-4 md:p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-4 w-4 text-cyan-300" />
+                    <h2 className="text-sm font-semibold text-slate-100">Unified Engine Federation</h2>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">Shared in-browser event bus for subsystem events. This is coordination telemetry, not proof of external service health.</p>
+                </div>
+                <div className="flex gap-2 text-[10px] font-mono">
+                  <span className="rounded border border-emerald-400/20 bg-emerald-400/5 px-2 py-1 text-emerald-300">{federation.onlineEngines}/{federation.totalEngines} registered</span>
+                  <span className="rounded border border-white/10 px-2 py-1 text-slate-300">{archieEngineBus.getHistory().length} bus events</span>
+                </div>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {registered.map((engine) => (
+                  <div key={engine.id} className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-100">{engine.name}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[9px] uppercase ${engine.state === "online" ? "bg-emerald-400/10 text-emerald-300" : "bg-amber-400/10 text-amber-300"}`}>{engine.state}</span>
+                    </div>
+                    <p className="mt-1 text-[10px] leading-relaxed text-slate-400">{engine.description}</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {engine.capabilities.slice(0, 3).map((capability) => <span key={capability} className="rounded bg-white/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-500">{capability}</span>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ArchiePanel>
+          </div>
+        );
+      })()}
+
+      {!showFederation && <>
       {/* High-level status metrics */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <ArchieStat
@@ -329,6 +394,7 @@ export default function ArchieEngines() {
           )}
         </ArchiePanel>
       )}
+      </>}
     </ArchiePage>
   );
 }
