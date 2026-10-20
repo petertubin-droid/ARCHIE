@@ -420,8 +420,10 @@ import { ArchieNativeEngine } from "../_shared/archie-ai/native-engine/engine.ts
 import {
   captureUnknownVocabulary,
   lookupTerms,
+  seedVocabularyEntry,
   teachTerm,
 } from "../_shared/archie-ai/knowledge/vocabulary.ts";
+import { lookupWord } from "../_shared/lexicon/retrieval.ts";
 import { serveWithCors } from "../_shared/serve.ts";
 
 // DISTRIBUTED RATE-LIMIT ENGINE (audit F-3, engine 14): token
@@ -611,24 +613,68 @@ const TOOLS: ToolDef[] = [
       }
       const term = String(input.term ?? "").slice(0, 60);
       const rows = await lookupTerms(db, term);
+      const results = rows.map((r) => ({
+        term: r.term,
+        type: r.term_type,
+        word_class: r.word_class,
+        meaning: r.meaning,
+        source: r.source,
+        confidence: r.confidence,
+        times_seen: r.times_seen,
+      }));
       if (rows.length === 0) {
+        // SEED VOCABULARY (owner directive, 2026-10-20): the
+        // 1600+ seed foundation answers registry misses in
+        // memory — no dead senses.
+        const seed = seedVocabularyEntry(term);
+        if (seed) {
+          results.push({
+            term: seed.term,
+            type: seed.termType,
+            word_class: seed.wordClass,
+            meaning: seed.meaning,
+            source: "seed vocabulary",
+            confidence: 0.9,
+            times_seen: null,
+          });
+        } else {
+          // UNIVERSAL LEXICON ENGINE (spec §LEXICON, owner
+          // directive 2026-10-20): VERIFIED senses from the
+          // lexicon words/senses tables back the registry.
+          // Lookup failures degrade to the honest miss.
+          try {
+            const hits = await lookupWord(db, term, {
+              statuses: ["VERIFIED"],
+              limit: 8,
+            });
+            const withSenses = hits.filter((h) => h.senses.length > 0);
+            if (withSenses.length > 0) {
+              for (const hit of withSenses.slice(0, 3)) {
+                for (const sense of hit.senses.slice(0, 3)) {
+                  results.push({
+                    term: hit.word.canonical,
+                    type: hit.word.unit_type,
+                    word_class: hit.word.part_of_speech,
+                    meaning: sense.definition,
+                    source: "verified lexicon",
+                    confidence: sense.confidence ?? 0.8,
+                    times_seen: hit.word.frequency,
+                  });
+                }
+              }
+            }
+          } catch {
+            /* lexicon failure degrades to the honest miss */
+          }
+        }
+      }
+      if (results.length === 0) {
         return {
           found: false,
-          note: "Not in the vocabulary registry. Say so honestly; offer to research it or ask the owner to teach it.",
+          note: "Not in the vocabulary registry, seed foundation or lexicon. Say so honestly; offer to research it or ask the owner to teach it.",
         };
       }
-      return {
-        found: true,
-        results: rows.map((r) => ({
-          term: r.term,
-          type: r.term_type,
-          word_class: r.word_class,
-          meaning: r.meaning,
-          source: r.source,
-          confidence: r.confidence,
-          times_seen: r.times_seen,
-        })),
-      };
+      return { found: true, results };
     },
   },
   {

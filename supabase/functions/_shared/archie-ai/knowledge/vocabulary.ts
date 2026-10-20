@@ -9357,6 +9357,55 @@ export function isKnownVocabularyTerm(term: string): boolean {
   return SEED_TERM_SET.has(t) || learnedTermSet.has(t);
 }
 
+/** Exact seed entry for a term (null = not seeded).
+ *  ACTIVATION (owner directive 2026-10-20): the 1600+ seed
+ *  foundation was loaded as a typo guard but never answered
+ *  definitions — a dead sense. Definition questions now
+ *  consult it FIRST, in memory, before the lexicon and any
+ *  external research. */
+export function seedVocabularyEntry(
+  term: string,
+): VocabularyEntry | null {
+  const t = term.toLowerCase().trim();
+  const hit = SEED_VOCABULARY.find((e) => e.term === t);
+  return hit ?? null;
+}
+
+/** Store a VERIFIED lexicon sense as a registry row.
+ *  First-writer-wins (ignoreDuplicates on term_key):
+ *  owner-taught, seed and researched rows are NEVER
+ *  overwritten by lexicon storage. */
+export async function storeLexiconSense(
+  db: VocabularyDb,
+  term: string,
+  meaning: string,
+  domain: string | null,
+): Promise<boolean> {
+  const clean = term.toLowerCase().trim().slice(0, 60);
+  const row: VocabRow = {
+    term_key: clean,
+    term: clean,
+    term_type: "word",
+    word_class: "unknown",
+    meaning: meaning.trim().slice(0, 500),
+    source: "lexicon",
+    provenance: `verified lexicon sense${domain ? ` (domain: ${domain})` : ""}, ${today()}`,
+    confidence: 0.8,
+    status: "ACTIVE",
+    times_seen: 1,
+    context: null,
+    created_by: null,
+  };
+  try {
+    const { error } = await db
+      .from(table("vocabulary"))
+      .upsert([row], { onConflict: "term_key", ignoreDuplicates: true });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 /** Seed entries as fact rows for the engine knowledge store
  *  (subject = term, predicate = means, object = meaning) —
  *  definitions become answerable through the normal honest

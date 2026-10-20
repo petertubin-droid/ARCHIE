@@ -75,7 +75,7 @@ import { NATIVE_CONFIG } from "./config.ts";
  *  2026-09-13). The engine's teaching route calls this;
  *  a registry failure falls back to the native fact
  *  store path, so teaching never fails closed. */
-import { teachTerm } from "../knowledge/vocabulary.ts";
+import { storeLexiconSense, teachTerm } from "../knowledge/vocabulary.ts";
 import { researchTerm } from "../knowledge/vocabulary-research.ts";
 
 export const FACTS_TABLE = table("archie_native_facts");
@@ -173,6 +173,21 @@ export class SupabasePersistence
         domains,
         confidence,
       );
+    } catch {
+      return false;
+    }
+  }
+
+  /** VERIFIED lexicon sense (spec §LEXICON) — stored with
+   *  lexicon provenance, FIRST-WRITER-WINS: owner-taught,
+   *  seed and researched rows are never overwritten. */
+  async storeLexiconVocabularyTerm(
+    term: string,
+    meaning: string,
+    domain: string | null,
+  ): Promise<boolean> {
+    try {
+      return await storeLexiconSense(this.db, term, meaning, domain);
     } catch {
       return false;
     }

@@ -148,6 +148,9 @@ import {
   type FetchLike,
   type MeaningResearchReport,
 } from "../knowledge/vocabulary-research.ts";
+import { seedVocabularyEntry } from "../knowledge/vocabulary.ts";
+import { lookupWord } from "../../lexicon/retrieval.ts";
+import type { LexiconClient } from "../../lexicon/retrieval.ts";
 import { CounterPersistence, EpisodicPersistence } from "./persistence.ts";
 import type { Fact, Plan, PlanLesson, RetrievedContext } from "./types.ts";
 
@@ -314,6 +317,21 @@ export interface CalculationTraceRecord {
   verdict: { result?: unknown; error?: string };
 }
 
+// ---------------------------------------------------------
+// UNIVERSAL LEXICON ENGINE (spec §LEXICON, owner directive
+// 2026-10-20): one VERIFIED sense for a term, retrieved from
+// lexicon_words + lexicon_senses. The lexicon is SOURCED
+// ground truth (provenance in the registry row), consulted
+// BEFORE external dictionary research — never after, never
+// instead of owner-taught or seed vocabulary.
+// ---------------------------------------------------------
+export interface LexiconSenseAnswer {
+  term: string;
+  partOfSpeech: string;
+  meaning: string;
+  domain: string | null;
+}
+
 export class ArchieNativeEngine implements ArchieRuntime {
   /** Session table — bounded, FIFO-evicted. */
   private sessions = new Map<string, EngineSession>();
@@ -413,6 +431,10 @@ export class ArchieNativeEngine implements ArchieRuntime {
    *  double. null = default real fetch. */
   private meaningResearch:
     ((term: string) => Promise<MeaningResearchReport>) | null;
+  /** UNIVERSAL LEXICON ENGINE — VERIFIED sense lookup over
+   *  lexicon_words/lexicon_senses (null = not consulted). */
+  private lexiconLookup:
+    ((term: string) => Promise<LexiconSenseAnswer | null>) | null;
   /** H-2 — crypto market-data fetcher (null = real fetch). */
   private cryptoFetcher: Fetcher | null;
   /** H-2 — trade-gate limits. */
@@ -470,6 +492,13 @@ export class ArchieNativeEngine implements ArchieRuntime {
      *  over multiple dictionary/reference sites. Injected by
      *  tests; default = the real multi-site fetcher. */
     meaningResearch?: (term: string) => Promise<MeaningResearchReport>;
+    /** UNIVERSAL LEXICON ENGINE (spec §LEXICON, owner
+     *  directive 2026-10-20): VERIFIED sense lookup over the
+     *  lexicon words/senses tables. Injectable like
+     *  meaningResearch: production wires the service-role DB
+     *  client; tests inject a labeled double. null = the
+     *  lexicon is not consulted (honest degradation). */
+    lexiconLookup?: (term: string) => Promise<LexiconSenseAnswer | null>;
     systemAdapters?: SystemAdapters;
     /** P6 Batch B — owner verbosity profile. Selects which
      *  OPTIONAL connectives are composed; content and
@@ -512,6 +541,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
     this.marketPriceLookup = options?.marketPriceLookup ?? null;
     this.worldTimeline = options?.worldTimeline ?? null;
     this.meaningResearch = options?.meaningResearch ?? null;
+    this.lexiconLookup = options?.lexiconLookup ?? null;
     this.lessonLookup = options?.lessonLookup ?? null;
     this.systemAdapters = options?.systemAdapters ?? {};
     this.persistence = options?.persistence
@@ -2590,6 +2620,68 @@ export class ArchieNativeEngine implements ArchieRuntime {
                 [f.id],
               );
             }
+            // SEED VOCABULARY ACTIVATION (owner directive,
+            // 2026-10-20): the 1600+ seed foundation (English,
+            // abbreviations, Nigerian English, idioms) was
+            // loaded as a typo guard but NEVER consulted for
+            // definitions — a dead sense. It now answers
+            // instantly, in memory, before the lexicon and
+            // before any external research. Owner-taught and
+            // stored meanings were already checked above, so
+            // provenance order holds: owner > stored > seed.
+            const seedEntry = seedVocabularyEntry(term);
+            if (seedEntry) {
+              return this.compose(
+                `${term} means: ${seedEntry.meaning}`,
+                0.9,
+                [],
+              );
+            }
+            // UNIVERSAL LEXICON ENGINE (spec §LEXICON, owner
+            // directive 2026-10-20): VERIFIED senses from the
+            // lexicon words/senses tables answer before the
+            // slower multi-site dictionary research. Sourced
+            // ground truth, never a guess. The sense is stored
+            // to the registry (first-writer-wins) so the next
+            // ask is answered from the means-fact path. Lexicon
+            // failure or miss falls through to auto-research.
+            if (this.lexiconLookup) {
+              try {
+                const sense = await this.lexiconLookup(term);
+                if (sense?.meaning) {
+                  if (this.persistence instanceof SupabasePersistence) {
+                    const stored =
+                      await this.persistence.storeLexiconVocabularyTerm(
+                        term,
+                        sense.meaning,
+                        sense.domain,
+                      );
+                    if (stored) {
+                      // OWNER DIRECTIVE (2026-09-16): just the
+                      // meaning — provenance lives in the registry.
+                      return this.compose(
+                        `${term} means: ${sense.meaning}`,
+                        0.85,
+                        [],
+                      );
+                    }
+                    return this.compose(
+                      `The verified lexicon says ${term} means: ${sense.meaning} But I could not save it, so teach me to keep it.`,
+                      0.6,
+                      [],
+                    );
+                  }
+                  return this.compose(
+                    `${term} means: ${sense.meaning}`,
+                    0.85,
+                    [],
+                  );
+                }
+              } catch {
+                // lexicon failure never breaks the chat path —
+                // honest degradation to auto-research
+              }
+            }
             // AUTO-RESEARCH (owner directive 2026-09-13,
             // knowledge-autonomy policy): learning is FREE —
             // a definition miss is an invitation, not a dead
@@ -2889,6 +2981,70 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // knowledge (owner turns persist them; a visitor
           // engine has no persistence and gets the researched
           // answer only).
+          // LEXICON FIRST ON BARE-NOUN QUESTIONS (owner
+          // directive, 2026-10-20): "what is momentum?" is a
+          // DEFINITION wearing a knowledge-question shape.
+          // The bare-noun form (what/who is/are/was/were X,
+          // excluding archie/this/that/the/your/behind) is
+          // answered from the seed vocabulary and the VERIFIED
+          // lexicon BEFORE the open web — instant, sourced,
+          // honest. Multiword and excluded forms fall through
+          // to the research path unchanged.
+          const bareNoun =
+            /^(?:what|who)\s+(?:is|are|was|were)\s+(?!archie\b|your\b|this\b|that\b|the\b|behind\b)([a-z][a-z' ]{0,60}?)[?!.,;]*$/i
+              .exec(input.trim()) ?? null;
+          if (bareNoun) {
+            const bareTerm = bareNoun[1]
+              .trim()
+              .replace(/^(?:a|an)\s+/i, "")
+              .replace(/\s+(?:word|phrase|term)$/i, "")
+              .trim()
+              .toLowerCase();
+            if (bareTerm.length > 0 && bareTerm.length <= 60) {
+              const seedHit = seedVocabularyEntry(bareTerm);
+              if (seedHit) {
+                return this.compose(
+                  `${bareTerm} means: ${seedHit.meaning}`,
+                  0.9,
+                  [],
+                );
+              }
+              if (this.lexiconLookup) {
+                try {
+                  const sense = await this.lexiconLookup(bareTerm);
+                  if (sense?.meaning) {
+                    if (this.persistence instanceof SupabasePersistence) {
+                      const stored =
+                        await this.persistence.storeLexiconVocabularyTerm(
+                          bareTerm,
+                          sense.meaning,
+                          sense.domain,
+                        );
+                      if (stored) {
+                        return this.compose(
+                          `${bareTerm} means: ${sense.meaning}`,
+                          0.85,
+                          [],
+                        );
+                      }
+                      return this.compose(
+                        `The verified lexicon says ${bareTerm} means: ${sense.meaning} But I could not save it, so teach me to keep it.`,
+                        0.6,
+                        [],
+                      );
+                    }
+                    return this.compose(
+                      `${bareTerm} means: ${sense.meaning}`,
+                      0.85,
+                      [],
+                    );
+                  }
+                } catch {
+                  // lexicon failure never breaks the chat path
+                }
+              }
+            }
+          }
           if (
             input.length <= 160 &&
             /\?|^(what|who|whom|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|will|would|should|tell me|explain|describe|define|name)\b/i.test(
@@ -4382,6 +4538,36 @@ export function configureNativeEngineLessonLookup(lookup: LessonLookup): void {
 /** Create a fresh engine using the deployment's immutable adapters,
  * while allowing request-owned state (especially persistence and the
  * world timeline) to be supplied without mutating isolate globals. */
+/** Production lexicon lookup (spec §LEXICON): VERIFIED
+ *  senses over lexicon_words/lexicon_senses through the same
+ *  db client as persistence (service role — the frequency
+ *  bump RPC rides along, fire-and-forget inside the
+ *  retrieval layer). No db → null → the lexicon is honestly
+ *  not consulted. Lookup failures surface to the engine's
+ *  try/catch and degrade to research, never to a crash. */
+function lexiconLookupFor(
+  db: SupabaseLike | null | undefined,
+): (term: string) => Promise<LexiconSenseAnswer | null> | null {
+  if (!db) return null;
+  return async (term: string): Promise<LexiconSenseAnswer | null> => {
+    const hits = await lookupWord(
+      db as unknown as LexiconClient,
+      term,
+      { statuses: ["VERIFIED"], limit: 8 },
+    );
+    const first = hits.find((h) => h.senses.length > 0);
+    if (!first) return null;
+    const sense = first.senses[0];
+    if (!sense.definition) return null;
+    return {
+      term,
+      partOfSpeech: first.word.part_of_speech,
+      meaning: sense.definition,
+      domain: sense.domain,
+    };
+  };
+}
+
 export function createConfiguredNativeEngine(
   overrides: {
     persistence?: SupabaseLike | null;
@@ -4394,11 +4580,12 @@ export function createConfiguredNativeEngine(
     verbosity?: Verbosity;
   } = {},
 ): ArchieNativeEngine {
+  const effectivePersistence =
+    "persistence" in overrides
+      ? overrides.persistence
+      : configuredPersistence;
   return new ArchieNativeEngine({
-    persistence:
-      "persistence" in overrides
-        ? overrides.persistence
-        : configuredPersistence,
+    persistence: effectivePersistence,
     strategyStore:
       "strategyStore" in overrides
         ? overrides.strategyStore
@@ -4409,6 +4596,7 @@ export function createConfiguredNativeEngine(
     worldTimeline: overrides.worldTimeline ?? configuredWorldTimeline,
     conversationId: overrides.conversationId,
     verbosity: overrides.verbosity,
+    lexiconLookup: lexiconLookupFor(effectivePersistence),
   });
 }
 
@@ -4421,6 +4609,7 @@ export function getNativeEngine(): ArchieNativeEngine {
       lessonLookup: configuredLessonLookup,
       systemAdapters: configuredSystemAdapters,
       strategyStore: configuredStrategyStore,
+      lexiconLookup: lexiconLookupFor(configuredPersistence),
     });
   }
   return singleton;
