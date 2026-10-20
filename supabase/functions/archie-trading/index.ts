@@ -245,9 +245,13 @@ function limitsForAccount(
 // ---------------------------------------------------------
 function toMassiveTicker(symbol: string): string {
   const s = symbol.trim().toUpperCase();
-  // Venue pairs (BTCUSDT) map to the USD daily series -- the
-  // USDT/USD deviation is a stated caveat, not a hidden error.
-  const m = s.match(/^([A-Z0-9]+)(USDT|USD)$/);
+  // Venue pairs (BTCUSDT) AND console pairs (BTC/USD) map to the
+  // USD daily series -- the USDT/USD deviation is a stated
+  // caveat, not a hidden error. ANALYZE FIX (Oct 20, 2026): the
+  // console's default crypto instruments are slash pairs; the
+  // old no-slash-only regex passed "BTC/USD" to massive.com
+  // verbatim (HTTP 404 -> 503 on every Analyze click).
+  const m = s.match(/^([A-Z0-9]+)\/?USDT?$/);
   if (m) {
     const base = m[1];
     const cryptoBase = ["BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "LTC", "LINK", "AVAX", "TRX", "TON"];

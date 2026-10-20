@@ -684,6 +684,32 @@ describe("archie-trading — ARCHIE market intelligence (analyze)", () => {
     }
   });
 
+  it("maps console slash pairs (BTC/USD) to the X:BTCUSD daily series — no 503", async () => {
+    // ANALYZE FIX regression (Oct 20, 2026): the console's
+    // default instruments are slash pairs. The old resolver
+    // passed them to massive.com verbatim -> HTTP 404 -> 503
+    // on every Analyze click.
+    stubMassive();
+    ownerStateRow();
+    demoAccountRow();
+    const seen: string[] = [];
+    const stubbed = (globalThis as any).fetch;
+    (globalThis as any).fetch = async (input: any, init?: any) => {
+      seen.push(decodeURIComponent(String(typeof input === "string" ? input : input?.url ?? input)));
+      return stubbed(input, init);
+    };
+    massiveResponses["/range/1/day"] = { body: uptrendBars(320, 100) };
+    const res = await handler(
+      req("POST", "", { action: "analyze", symbol: "BTC/USD" }, AUTH),
+    );
+    (globalThis as any).fetch = stubbed;
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(seen.some((u) => u.includes("X:BTCUSD"))).toBe(true);
+    expect(seen.some((u) => u.includes("BTC/USD"))).toBe(false);
+    expect(body.verdict ? ["suggested", "withheld"] : []).toContain(body.verdict);
+  });
+
   it("refuses thin history honestly instead of suggesting on few bars", async () => {
     stubMassive();
     ownerStateRow();
