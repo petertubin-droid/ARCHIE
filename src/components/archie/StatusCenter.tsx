@@ -145,6 +145,17 @@ export default function StatusCenter() {
         state={s.conversations > 0 ? "SAVED" : "EMPTY"}
         detail={`${s.conversations} conversation(s)`}
       />
+      {s.lexicon && (
+        <StatusTile
+          label="Lexicon Engine"
+          state={s.lexicon.state}
+          detail={
+            s.lexicon.note
+              ? s.lexicon.note
+              : `${s.lexicon.words} words · ${s.lexicon.senses_verified} verified / ${s.lexicon.senses_unverified} unverified senses`
+          }
+        />
+      )}
     </section>
   );
 }

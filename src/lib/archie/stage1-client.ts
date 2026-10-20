@@ -333,6 +333,15 @@ export interface ArchieSystemStatus {
     intel_sources: number;
     price_observations: number;
   };
+  lexicon?: {
+    state: string;
+    words: number;
+    senses_verified: number;
+    senses_unverified: number;
+    senses_learned: number;
+    senses_user_provided: number;
+    note?: string;
+  };
 }
 
 export async function fetchSystemStatus(): Promise<ArchieSystemStatus | null> {
