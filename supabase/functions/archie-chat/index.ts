@@ -513,27 +513,46 @@ const TOOLS: ToolDef[] = [
   {
     name: "frelux_status",
     description:
-      "Live FRELUX platform status: counts of user profiles, saved client estimates, active knowledge items, active ARCHIE domains, and ARCHIE internal agents grouped by lifecycle state.",
+      "Live FRELUX platform status: counts of user profiles, saved client estimates, active knowledge items, active ARCHIE domains, ARCHIE internal agents grouped by lifecycle state, and the lexicon sense-status distribution (verified/unverified/learned/owner-taught).",
     parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
     operational: true,
     execute: async () => {
-      const [profiles, estimates, knowledge, domains, agents, events] =
-        await Promise.all([
-          count("profiles"),
-          count("client_estimates"),
-          count("frelux_knowledge_items", ["status", "ACTIVE"]),
-          count("frelux_archie_domains", ["active", true]),
-          db
-            .from("frelux_archie_internal_agents")
-            .select("status")
-            .then(({ data }) => {
-              const by: Record<string, number> = {};
-              for (const a of data ?? [])
-                by[a.status] = (by[a.status] ?? 0) + 1;
-              return by;
-            }),
-          count("frelux_security_events"),
-        ]);
+      const [
+        profiles,
+        estimates,
+        knowledge,
+        domains,
+        agents,
+        events,
+        lexWords,
+        lexVerified,
+        lexUnverified,
+        lexLearned,
+        lexUser,
+      ] = await Promise.all([
+        count("profiles"),
+        count("client_estimates"),
+        count("frelux_knowledge_items", ["status", "ACTIVE"]),
+        count("frelux_archie_domains", ["active", true]),
+        db
+          .from("frelux_archie_internal_agents")
+          .select("status")
+          .then(({ data }) => {
+            const by: Record<string, number> = {};
+            for (const a of data ?? [])
+              by[a.status] = (by[a.status] ?? 0) + 1;
+            return by;
+          }),
+        count("frelux_security_events"),
+        // Lexicon sense-status distribution (2026-10-20): the
+        // definition path only presents VERIFIED senses; these
+        // counts expose the ingest-vs-presentation gap.
+        count("lexicon_words"),
+        count("lexicon_senses", ["knowledge_status", "VERIFIED"]),
+        count("lexicon_senses", ["knowledge_status", "UNVERIFIED"]),
+        count("lexicon_senses", ["knowledge_status", "LEARNED"]),
+        count("lexicon_senses", ["knowledge_status", "USER_PROVIDED"]),
+      ]);
       return {
         profiles,
         estimates,
@@ -541,6 +560,16 @@ const TOOLS: ToolDef[] = [
         domains,
         agents,
         security_events_total: events,
+        lexicon: {
+          // -1 = count query failed (distinct from a real 0)
+          words: lexWords.error ? -1 : (lexWords.count ?? -1),
+          senses_verified: lexVerified.error ? -1 : (lexVerified.count ?? -1),
+          senses_unverified: lexUnverified.error
+            ? -1
+            : (lexUnverified.count ?? -1),
+          senses_learned: lexLearned.error ? -1 : (lexLearned.count ?? -1),
+          senses_user_provided: lexUser.error ? -1 : (lexUser.count ?? -1),
+        },
       };
     },
   },
