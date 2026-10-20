@@ -2872,12 +2872,20 @@ async function executeChat(
       memoryConsentGranted = false;
     }
   }
+  // FORENSIC AUDIT 2026-10-20 (fix: momentum defect): the
+  // VERIFIED curated lexicon (87k words / 130k senses) is
+  // shared public knowledge, NOT personalization memory. The
+  // personalization consent gate stays on the registry and
+  // persistence (learned meanings, memory loads); the lexicon
+  // is wired for every owner request so definition questions
+  // answer instantly instead of defaulting to web research.
   const requestKernel = ownerUserId
     ? createRequestCognitiveEngine(
         memoryConsentGranted
           ? (db as unknown as import("../_shared/archie-ai/native-engine/persistence.ts").SupabaseLike)
           : null,
         conversationId,
+        (db as unknown as import("../_shared/archie-ai/native-engine/persistence.ts").SupabaseLike),
       )
     : null;
 
@@ -2975,11 +2983,21 @@ async function executeChat(
         },
         finishReason: cycle.toolCall ? "TOOL_CALL" : "COMPLETE",
       };
-    } catch {
+    } catch (err) {
       // Honest degradation: the substrate engine alone (same
       // native inference, no kernel phases) — never an external
       // provider, never a fabricated loop.
+      // FORENSIC AUDIT 2026-10-20: this degradation was SILENT —
+      // a swallowed exception is untraceable from the surface.
+      // The reply now states the degradation and the real
+      // reason, sanitized and bounded.
       result = await runtime.generate(request);
+      const degradeReason = err instanceof Error ? err.message : String(err);
+      const marker =
+        `[Cognitive loop degraded to single-pass substrate. Reason: ` +
+        `${sanitize(degradeReason).slice(0, 160)}]`;
+      const firstText = result.parts.find((p) => typeof p?.text === "string");
+      if (firstText) firstText.text = `${marker} ${firstText.text}`;
     }
 
     // Tool loop shares the native reasoning hop ceiling.

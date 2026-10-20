@@ -59,3 +59,29 @@ describe("archie-chat visitor isolation", () => {
     expect(source).toContain("const ownerUserId = isOwner && user ? user.id : null;");
   });
 });
+
+/** FORENSIC AUDIT 2026-10-20 (observability): the owner cycle's
+ *  degradation catch was SILENT — a swallowed exception is
+ *  untraceable from the surface. The catch must capture the
+ *  error and state the degradation (with reason) in the reply. */
+describe("owner cycle degradation honesty", () => {
+  it("the cycle catch is no longer silent: reason is captured and stated", () => {
+    expect(source).toContain("} catch (err) {");
+    expect(source).toContain(
+      "Cognitive loop degraded to single-pass substrate",
+    );
+    expect(source).toContain("degradeReason");
+  });
+
+  it("the verified lexicon is wired for owner requests regardless of consent", () => {
+    // the owner kernel call must pass the db as its third
+    // (lexiconDb) argument, separate from consent-gated persistence
+    const kernelCall = source.indexOf("createRequestCognitiveEngine(");
+    expect(kernelCall).toBeGreaterThan(-1);
+    const callBody = source.slice(kernelCall, kernelCall + 1200);
+    expect(callBody).toContain("conversationId,");
+    expect(callBody).toMatch(
+      /\(db as unknown as import\(["']\.\.\/_shared/,
+    );
+  });
+});

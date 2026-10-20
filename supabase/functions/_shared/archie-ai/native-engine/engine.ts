@@ -2529,12 +2529,22 @@ export class ArchieNativeEngine implements ArchieRuntime {
         const d = this.diagnostics();
         // OWNER DIRECTIVE (2026-09-16): no fact/knowledge counts
         // in answers — the owner does not want them surfaced.
+        // FORENSIC AUDIT 2026-10-20 (observability): this local
+        // fallback runs only when the caller's frelux_status
+        // tool was NOT declared for the conversation — the
+        // reply now says so honestly instead of hiding the
+        // missing tool surface behind a healthy-looking status.
+        const toolSurface =
+          requestToolNames.length > 0
+            ? ` Declared tool surface: ${requestToolNames.join(", ")}.`
+            : ` No tool surface was declared for this conversation.`;
         const text =
           `Engine: ${d.engineId}. ` +
           `Reasoning rules: ${d.counts.rules}. Operators: ${d.counts.operators}. Tools: ${d.counts.tools}. ` +
           `Memory turns: ${d.counts.memoryTurns}. Outcomes learned: ${d.counts.outcomes}. Inferences: ${d.counts.inferences}. ` +
           `Self-checks run: ${d.calibration.selfChecksRun}, contradictions caught: ${d.calibration.contradictionsCaught}. ` +
-          `Persistence: ${d.persistence.note}. Uptime: ${d.uptimeMs} ms.`;
+          `Persistence: ${d.persistence.note}. Uptime: ${d.uptimeMs} ms.` +
+          toolSurface;
         return this.compose(text, nlu.confidence, []);
       }
 
@@ -4704,12 +4714,23 @@ export function createConfiguredNativeEngine(
     conversationId?: string;
     strategyStore?: StrategyStatsStore | null;
     verbosity?: Verbosity;
+    /** FORENSIC AUDIT 2026-10-20 (fix: lexicon decoupled from
+     *  personalization consent): the VERIFIED curated lexicon
+     *  (lexicon_words/lexicon_senses) is shared public
+     *  knowledge, NOT personalization memory. The caller may
+     *  wire the lexicon db even when persistence is null
+     *  (personalization consent withheld). Undefined falls
+     *  back to the persistence adapter; null explicitly
+     *  disables the lexicon. */
+    lexiconDb?: SupabaseLike | null;
   } = {},
 ): ArchieNativeEngine {
   const effectivePersistence =
     "persistence" in overrides
       ? overrides.persistence
       : configuredPersistence;
+  const effectiveLexiconDb =
+    "lexiconDb" in overrides ? overrides.lexiconDb : effectivePersistence;
   return new ArchieNativeEngine({
     persistence: effectivePersistence,
     strategyStore:
@@ -4722,7 +4743,7 @@ export function createConfiguredNativeEngine(
     worldTimeline: overrides.worldTimeline ?? configuredWorldTimeline,
     conversationId: overrides.conversationId,
     verbosity: overrides.verbosity,
-    lexiconLookup: lexiconLookupFor(effectivePersistence),
+    lexiconLookup: lexiconLookupFor(effectiveLexiconDb),
   });
 }
 

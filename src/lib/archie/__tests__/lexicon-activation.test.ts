@@ -216,3 +216,113 @@ describe("first-writer-wins lexicon storage", () => {
     expect(ok).toBe(false);
   });
 });
+
+/** FORENSIC AUDIT 2026-10-20 — lexicon decoupled from
+ *  personalization consent (the live "momentum" defect):
+ *  a consent-withheld request kernel (persistence null)
+ *  with the lexicon db wired still answers from the
+ *  verified lexicon, never web research. */
+describe("lexicon decoupled from persistence consent", () => {
+  it("request kernel with null persistence + lexicon db serves the lexicon sense", async () => {
+    const { createRequestCognitiveEngine } = await import(
+      "@studio-shared/archie-ai/cognitive/kernel.ts"
+    );
+    const wordRow = {
+      id: "w-1",
+      canonical: "momentum",
+      normalized: "momentum",
+      spelling_variants: [],
+      language: "en",
+      regional_usage: null,
+      pronunciation: null,
+      part_of_speech: "noun",
+      unit_type: "",
+      inflection_metadata: {},
+      frequency: 5,
+    };
+    const senseRow = {
+      id: "s-1",
+      word_id: "w-1",
+      source_id: "src-1",
+      external_id: "x-1",
+      synset_key: "k-1",
+      definition: "the product of a body's mass and its velocity",
+      usage_examples: [],
+      domain: "physics",
+      register: null,
+      region: null,
+      grammatical: {},
+      confidence: 0.9,
+      knowledge_status: "VERIFIED",
+      version: 1,
+    };
+    const chain = (rows: unknown[]) => ({
+      select: () => chain(rows),
+      in: () => chain(rows),
+      eq: () => chain(rows),
+      order: () => chain(rows),
+      limit: () => Promise.resolve({ data: rows, error: null }),
+    });
+    let call = 0;
+    const lexiconStub = {
+      from: () => {
+        call += 1;
+        return chain(call === 1 ? [wordRow] : [senseRow]);
+      },
+    } as never;
+    const kernel = createRequestCognitiveEngine(
+      null,
+      "conv-lexicon-consent-false",
+      lexiconStub,
+    );
+    const res = await kernel.generate({
+      turns: [{ role: "owner", parts: [{ text: "what is momentum" }] }],
+      tools: [],
+      systemInstruction: "",
+      conversationId: "conv-lexicon-consent-false",
+    });
+    const reply = replyOf(res);
+    expect(reply).toContain("momentum");
+    expect(reply).toContain("product of");
+    expect(reply).not.toContain("research");
+  }, 20000);
+
+  it("null persistence and NO lexicon db stays honest (no lexicon)", async () => {
+    const { createRequestCognitiveEngine } = await import(
+      "@studio-shared/archie-ai/cognitive/kernel.ts"
+    );
+    const kernel = createRequestCognitiveEngine(null, "conv-lexicon-off");
+    const res = await kernel.generate({
+      turns: [{ role: "owner", parts: [{ text: "what is zzzzqqqqzz" }] }],
+      tools: [],
+      systemInstruction: "",
+      conversationId: "conv-lexicon-off",
+    });
+    expect(replyOf(res)).not.toContain("zzzzqqqqzz means:");
+  }, 20000);
+});
+
+/** FORENSIC AUDIT 2026-10-20 — honest tool-surface disclosure:
+ *  the local system_status fallback states whether any tool
+ *  surface was declared, so a dead declaration is visible
+ *  from the surface instead of masquerading as health. */
+describe("system_status fallback observability", () => {
+  it("fallback without declared tools says so honestly", async () => {
+    const engine = new ArchieNativeEngine({ persistence: null });
+    const res = (await engine.converse("system status", [], "", {
+      conversationId: "obs-none",
+    })) as unknown as { responseText?: string };
+    const reply = res.responseText ?? "";
+    expect(reply).toContain("No tool surface was declared for this conversation.");
+  });
+
+  it("fallback with a declared (non-frelux) surface names it", async () => {
+    const engine = new ArchieNativeEngine({ persistence: null });
+    engine.noteDeclaredTools(["vocabulary_lookup"], "obs-some");
+    const res = (await engine.converse("system status", [], "", {
+      conversationId: "obs-some",
+    })) as unknown as { responseText?: string };
+    const reply = res.responseText ?? "";
+    expect(reply).toContain("Declared tool surface: vocabulary_lookup.");
+  });
+});

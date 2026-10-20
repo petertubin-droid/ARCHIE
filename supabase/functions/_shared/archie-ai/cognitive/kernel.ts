@@ -137,12 +137,19 @@ export function getCognitiveEngine(): CognitiveKernel {
 
 /** A consent-sensitive chat request gets a fresh kernel and substrate.
  * Persistence is fixed at construction and cannot be changed by another
- * concurrent request in the same edge isolate. */
+ * concurrent request in the same edge isolate.
+ *
+ * lexiconDb (2026-10-20): the VERIFIED curated lexicon is shared
+ * public knowledge, not personalization memory. Callers with
+ * personalization consent withheld (persistence null) still pass
+ * the db here so definition questions answer from the 130k-sense
+ * lexicon instead of falling to web research. */
 export function createRequestCognitiveEngine(
   db: SupabaseLike | null,
   conversationId: string,
+  lexiconDb?: SupabaseLike | null,
 ): CognitiveKernel {
-  return new CognitiveKernel(db, { conversationId });
+  return new CognitiveKernel(db, { conversationId, lexiconDb });
 }
 
 /** Honest capability manifest of the unified engine. */
@@ -284,7 +291,7 @@ export class CognitiveKernel implements ArchieRuntime {
 
   constructor(
     db?: SupabaseLike | null,
-    requestScope?: { conversationId: string },
+    requestScope?: { conversationId: string; lexiconDb?: SupabaseLike | null },
   ) {
     // WORLD FIRST (audit HIGH-1 fix, 2026-09-13): the kernel
     // owns the WorldModel and exposes it to the substrate
@@ -333,6 +340,7 @@ export class CognitiveKernel implements ArchieRuntime {
         persistence: db ?? null,
         conversationId: requestScope.conversationId,
         worldTimeline,
+        lexiconDb: requestScope.lexiconDb,
         // The owner's STATED brevity preference drives the
         // substrate's verbosity — real consumption, not a
         // decorative profile. No statement, no override.
