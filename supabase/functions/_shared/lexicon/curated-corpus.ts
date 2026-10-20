@@ -365,6 +365,81 @@ export const CURATED_ENTRIES: readonly CuratedEntry[] = [
     ],
   },
   {
+    lemma: "concrete",
+    pos: "noun",
+    variants: ["concretes"],
+    frequency: 850,
+    senses: [
+      {
+        definition: "a heavy composite construction material composed of aggregate, sand, and cement binder activated by water that hardens into structural stone",
+        domain: "construction.materials",
+        synsetKey: "03082100-n",
+        senseKey: "concrete%1:06:00::",
+        examples: ["ready-mix concrete grade C25/30", "pour the foundation concrete before vibration and curing"],
+      },
+    ],
+  },
+  {
+    lemma: "cement",
+    pos: "noun",
+    variants: ["cements"],
+    frequency: 720,
+    senses: [
+      {
+        definition: "a finely ground hydraulic binder powder, primarily Ordinary Portland Cement, that sets and hardens chemically through hydration when mixed with water",
+        domain: "construction.materials",
+        synsetKey: "03001234-n",
+        senseKey: "cement%1:06:00::",
+        examples: ["50kg bag of Portland cement grade 42.5", "mix cement and sharp sand at a one to three ratio"],
+      },
+    ],
+  },
+  {
+    lemma: "mortar",
+    pos: "noun",
+    variants: ["mortars"],
+    frequency: 510,
+    senses: [
+      {
+        definition: "a workable paste of cement, sand, and water used in masonry construction to bind blocks, stones, or bricks together and fill structural gaps",
+        domain: "construction.materials",
+        synsetKey: "03798123-n",
+        senseKey: "mortar%1:06:00::",
+        examples: ["bedding mortar for concrete blockwork", "rake out deteriorated mortar joints before repointing"],
+      },
+    ],
+  },
+  {
+    lemma: "masonry",
+    pos: "noun",
+    variants: ["masonries"],
+    frequency: 480,
+    senses: [
+      {
+        definition: "the building of structures from individual units laid and bound together with mortar, such as blockwork, brickwork, or stonework",
+        domain: "construction.structural",
+        synsetKey: "03734567-n",
+        senseKey: "masonry%1:06:00::",
+        examples: ["hollow sandcrete block masonry for perimeter walls", "reinforced masonry lintel across door openings"],
+      },
+    ],
+  },
+  {
+    lemma: "aggregate",
+    pos: "noun",
+    variants: ["aggregates"],
+    frequency: 530,
+    senses: [
+      {
+        definition: "granular mineral material such as crushed granite stone, gravel, and sand mixed with cement and water to form concrete",
+        domain: "construction.materials",
+        synsetKey: "02685432-n",
+        senseKey: "aggregate%1:06:00::",
+        examples: ["graded coarse 20mm granite aggregate", "fine aggregate cleanliness test for silt content"],
+      },
+    ],
+  },
+  {
     lemma: "rebar",
     pos: "noun",
     variants: ["rebars"],

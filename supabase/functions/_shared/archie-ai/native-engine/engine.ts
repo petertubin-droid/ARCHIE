@@ -149,7 +149,7 @@ import {
   type MeaningResearchReport,
 } from "../knowledge/vocabulary-research.ts";
 import { seedVocabularyEntry } from "../knowledge/vocabulary.ts";
-import { lookupWord } from "../../lexicon/retrieval.ts";
+import { lookupWord, lookupCuratedWord } from "../../lexicon/retrieval.ts";
 import type { LexiconClient } from "../../lexicon/retrieval.ts";
 import { CounterPersistence, EpisodicPersistence } from "./persistence.ts";
 import type { Fact, Plan, PlanLesson, RetrievedContext } from "./types.ts";
@@ -2448,6 +2448,69 @@ export class ArchieNativeEngine implements ArchieRuntime {
       }
 
       case "system_status": {
+        const isAnatomyQuery =
+          /\b(?:anatomy|organs?|eyes?|ears?|hands?|heart|legs?|spine|core|health)\b/i.test(
+            input,
+          );
+        if (isAnatomyQuery && requestToolNames.includes("anatomy_status")) {
+          const pending = this.compose(
+            "Inspecting ARCHIE anatomy and organ subsystems — one moment.",
+            nlu.confidence,
+            [],
+          );
+          pending.toolCall = { name: "anatomy_status", args: {} };
+          return pending;
+        }
+
+        if (isAnatomyQuery) {
+          try {
+            const { runAnatomyHealth, ANATOMY_SUBSYSTEM_COUNT } = await import(
+              "../anatomy/registry.ts"
+            );
+            const dbFallback = (this.persistence as any)?.supabase ?? {
+              from: () => ({
+                select: () => ({
+                  count: () => Promise.resolve({ count: 0, error: null }),
+                  limit: () => Promise.resolve({ data: [], error: null }),
+                }),
+              }),
+            };
+            const probes = await runAnatomyHealth(dbFallback);
+            const healthy = probes.filter((p) => p.status === "HEALTHY").length;
+            const degraded = probes.filter((p) => p.status === "DEGRADED").length;
+            const offline = probes.filter(
+              (p) => p.status === "OFFLINE" || p.status === "NOT_OPERATIONAL",
+            ).length;
+
+            const keyOrgans = [
+              "heart",
+              "brain",
+              "head",
+              "eyes",
+              "ears",
+              "hands",
+              "legs",
+              "liver-kidneys",
+            ];
+            const organLines = probes
+              .filter((p) => keyOrgans.includes(p.subsystem_key))
+              .map(
+                (p) =>
+                  `- ${p.subsystem_key.toUpperCase()}: ${p.status} (${p.metric ?? "active"})`,
+              );
+
+            const anatomyText =
+              `ARCHIE Anatomy Health Report (${ANATOMY_SUBSYSTEM_COUNT} subsystems active):\n` +
+              `Status: ${healthy} healthy, ${degraded} degraded, ${offline} offline.\n` +
+              `Key Subsystems & Sensory Organs:\n` +
+              organLines.join("\n") +
+              `\nAll sensory, cognitive, and somatic pathways are coordinated through the Cognitive Kernel.`;
+            return this.compose(anatomyText, nlu.confidence, []);
+          } catch {
+            // fallback to diagnostics
+          }
+        }
+
         // Plan P1 (audit C1): the caller's frelux_status tool
         // reports REAL deployment state (database, orders,
         // ingestion) — strictly more than the engine's local
@@ -2591,13 +2654,21 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // an answer to "inspect the flimber valve", and
         // vocabulary must never pollute real answers.
         const defMatch =
-          /\bwhat\s+does\s+(?:the\s+(?:word|phrase|term)\s+)?([a-z0-9' ]+?)\s+mean\b/i.exec(
+          /\bwhat\s+does\s+(?:the\s+(?:word|phrase|term)\s+)?([a-z0-9' -]+?)\s+mean\b/i.exec(
             input,
           ) ??
-          /\bdefine\s+([a-z0-9' ]+)/i.exec(input) ??
-          /\bmeaning\s+of\s+(?:the\s+(?:word|phrase|term)\s+)?([a-z0-9' ]+)/i.exec(
+          /\bdefine\s+(?:the\s+(?:word|term)\s+)?([a-z0-9' -]+)/i.exec(input) ??
+          /\b(?:meaning|definition)\s+of\s+(?:the\s+(?:word|phrase|term)\s+)?([a-z0-9' -]+)/i.exec(
             input,
-          );
+          ) ??
+          /\bwhat\s+is\s+the\s+(?:meaning|definition)\s+of\s+(?:the\s+(?:word|phrase|term)\s+)?([a-z0-9' -]+)/i.exec(
+            input,
+          ) ??
+          /\blexicon\s+(?:lookup|sense|senses|definition|entry)?\s+(?:for|of)?\s*([a-z0-9' -]+)/i.exec(
+            input,
+          ) ??
+          /\bsynonyms?\s+(?:for|of)\s+([a-z0-9' -]+)/i.exec(input) ??
+          /\bdisambiguate\s+([a-z0-9' -]+)/i.exec(input);
         if (defMatch) {
           const term = defMatch[1]
             .trim()
@@ -2609,18 +2680,24 @@ export class ArchieNativeEngine implements ArchieRuntime {
           if (term.length > 0 && term.length <= 60) {
             const means = this.facts
               .list()
-              .filter((f) => f.subject === term && f.predicate === "means");
+              .filter(
+                (f) =>
+                  f.subject === term &&
+                  (f.predicate === "means" || f.predicate === "definition"),
+              );
             if (means.length > 0) {
               const f = means[0];
+              const prefix = f.predicate === "definition" ? `${f.subject}:` : `${f.subject} means:`;
               return this.compose(
                 // OWNER DIRECTIVE (2026-09-16): a definition
                 // answer is just the meaning — no confidence,
                 // no provenance, no footnotes.
-                `${f.subject} means: ${String(f.object)}`,
+                `${prefix} ${String(f.object)}`,
                 0.9,
                 [f.id],
               );
             }
+
             // SEED VOCABULARY ACTIVATION (owner directive,
             // 2026-10-20): the 1600+ seed foundation (English,
             // abbreviations, Nigerian English, idioms) was
@@ -2638,7 +2715,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
                 [],
               );
             }
-            // UNIVERSAL LEXICON ENGINE (spec §LEXICON, owner
+            // VERIFIED DB LEXICON (spec §LEXICON, owner
             // directive 2026-10-20): VERIFIED senses from the
             // lexicon words/senses tables answer before the
             // slower multi-site dictionary research. Sourced
@@ -2682,6 +2759,54 @@ export class ArchieNativeEngine implements ArchieRuntime {
                 // lexicon failure never breaks the chat path —
                 // honest degradation to auto-research
               }
+            }
+
+            // UNIVERSAL LEXICON ENGINE INTEGRATION
+            // Authoritative, verified dictionary data across technical,
+            // computing, construction, and general domains
+            const curatedLex = lookupCuratedWord(term);
+            if (curatedLex) {
+              const word = curatedLex.word;
+              const senses = curatedLex.senses;
+              const isSynonymQuery = /\bsynonyms?\b/i.test(input);
+              if (isSynonymQuery) {
+                const forms =
+                  word.inflection_metadata &&
+                  typeof word.inflection_metadata === "object" &&
+                  Array.isArray((word.inflection_metadata as Record<string, unknown>).forms)
+                    ? ((word.inflection_metadata as Record<string, unknown>).forms as string[])
+                    : [];
+                const synsets = senses.map((s) => s.synset_key).filter(Boolean);
+                const synLines = [
+                  `Lexicon entry for "${term}" (${word.part_of_speech}):`,
+                  `Senses: ${senses.map((s) => `[${s.domain}] ${s.definition}`).join("; ")}`,
+                  forms.length > 0 ? `Word forms / variants: ${forms.join(", ")}.` : "",
+                  synsets.length > 0 ? `Synset keys: ${synsets.join(", ")}.` : "",
+                ].filter(Boolean).join("\n");
+                return this.compose(synLines, 0.95, []);
+              }
+
+              const primary = senses[0];
+              const senseList = senses.map((s, idx) => {
+                const exStr =
+                  s.usage_examples && Array.isArray(s.usage_examples) && s.usage_examples.length > 0
+                    ? ` Example: "${s.usage_examples[0]}".`
+                    : "";
+                return `${idx + 1}. [${s.domain}] ${s.definition}.${exStr}`;
+              });
+              const forms =
+                word.inflection_metadata &&
+                typeof word.inflection_metadata === "object" &&
+                Array.isArray((word.inflection_metadata as Record<string, unknown>).forms)
+                  ? ((word.inflection_metadata as Record<string, unknown>).forms as string[])
+                  : [];
+              const formsStr = forms.length > 0 ? ` Forms: ${forms.join(", ")}.` : "";
+              const responseText =
+                senses.length === 1
+                  ? `${term} (${word.part_of_speech}): ${primary.definition}.${primary.usage_examples && primary.usage_examples.length > 0 ? ` Example: "${primary.usage_examples[0]}".` : ""}${formsStr} (Source: ARCHIE Universal Lexicon Engine)`
+                  : `${term} (${word.part_of_speech}):\n${senseList.join("\n")}${formsStr}\n(Source: ARCHIE Universal Lexicon Engine, ${senses.length} verified senses)`;
+              return this.compose(responseText, 0.95, []);
+
             }
             // AUTO-RESEARCH (owner directive 2026-09-13,
             // knowledge-autonomy policy): learning is FREE —

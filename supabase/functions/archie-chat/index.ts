@@ -417,6 +417,8 @@ import {
   getCognitiveEngine,
 } from "../_shared/archie-ai/cognitive/kernel.ts";
 import { ArchieNativeEngine } from "../_shared/archie-ai/native-engine/engine.ts";
+import { lookupCuratedWord } from "../_shared/lexicon/retrieval.ts";
+import { runAnatomyHealth, ANATOMY_SUBSYSTEM_COUNT } from "../_shared/archie-ai/anatomy/registry.ts";
 import {
   captureUnknownVocabulary,
   lookupTerms,
@@ -626,7 +628,7 @@ const TOOLS: ToolDef[] = [
   {
     name: "vocabulary_lookup",
     description:
-      "Look up a word, abbreviation, phrase, idiom or expression in ARCHIE's living vocabulary registry (seeded English foundation + Nigerian English + words learned from the owner's own usage + owner-taught meanings). Use FIRST for any what does X mean / define X / what is X question. Returns the meaning, word class and provenance, or an honest missing.",
+      "Look up a word, abbreviation, phrase, idiom or expression in ARCHIE's living vocabulary registry (Universal Lexicon Engine + seeded English foundation + Nigerian English + learned terms). Use FIRST for any what does X mean / define X / what is X question. Returns the meaning, word class, senses, and provenance.",
     parameters: {
       type: "object",
       properties: { term: { type: "string", minLength: 1, maxLength: 60 } },
@@ -635,12 +637,36 @@ const TOOLS: ToolDef[] = [
     },
     operational: true,
     execute: async (input, ctx) => {
-      if (!ctx.memoryConsentGranted) {
+      const term = String(input.term ?? "").slice(0, 60).trim();
+      if (!term) {
+        return { found: false, error: "No term provided." };
+      }
+
+      // 1. Universal Lexicon Engine (curated linguistic truth, no personalization consent needed)
+      const curated = lookupCuratedWord(term);
+      if (curated) {
         return {
-          error: "Personalization memory is not enabled for this account.",
+          found: true,
+          source: "archie_universal_lexicon",
+          term: curated.word.word,
+          part_of_speech: curated.word.part_of_speech,
+          inflections: curated.word.inflection_metadata,
+          senses: curated.senses.map((s) => ({
+            domain: s.domain,
+            definition: s.definition,
+            examples: s.usage_examples,
+            synset_key: s.synset_key,
+          })),
         };
       }
-      const term = String(input.term ?? "").slice(0, 60);
+
+      // 2. Personalization memory registry (consent-gated)
+      if (!ctx.memoryConsentGranted) {
+        return {
+          found: false,
+          note: `"${term}" is not present in the curated foundation lexicon, and personalization memory lookup is not enabled for this account.`,
+        };
+      }
       const rows = await lookupTerms(db, term);
       const results = rows.map((r) => ({
         term: r.term,
@@ -740,6 +766,68 @@ const TOOLS: ToolDef[] = [
       return ok
         ? { stored: true, term, provenance: "owner taught in chat" }
         : { stored: false, error: "registry write failed" };
+    },
+  },
+  {
+    name: "anatomy_status",
+    description:
+      "Inspect ARCHIE's 23 anatomical subsystems and sensory organs (eyes, ears, hands, mouth, brain, heart, nervous system, immune, skeleton, legs, etc.). Returns live health, operational state, metrics, and cognitive bindings.",
+    parameters: {
+      type: "object",
+      properties: {
+        filter: {
+          type: "string",
+          description:
+            "Optional filter for an organ or subsystem key (e.g. 'eyes', 'heart', 'brain', 'hands', 'ears').",
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    operational: true,
+    execute: async (input) => {
+      const probes = await runAnatomyHealth(db);
+      const filter =
+        typeof input.filter === "string"
+          ? input.filter.toLowerCase().trim()
+          : null;
+      const filtered = filter
+        ? probes.filter((p) => p.subsystem_key.toLowerCase().includes(filter))
+        : probes;
+      const healthy = probes.filter((p) => p.status === "HEALTHY").length;
+      const degraded = probes.filter((p) => p.status === "DEGRADED").length;
+      const offline = probes.filter(
+        (p) => p.status === "OFFLINE" || p.status === "NOT_OPERATIONAL",
+      ).length;
+
+      const summaryText =
+        `ARCHIE Anatomy & Subsystems (${ANATOMY_SUBSYSTEM_COUNT} subsystems monitored):\n` +
+        `• Status: ${healthy} healthy, ${degraded} degraded, ${offline} offline.\n` +
+        `• Core Organs:\n` +
+        filtered
+          .slice(0, 10)
+          .map(
+            (p) =>
+              `  - ${p.subsystem_key.toUpperCase()}: ${p.status}${p.metric ? ` (${p.metric})` : ""}`,
+          )
+          .join("\n") +
+        (filtered.length > 10
+          ? `\n  - ... and ${filtered.length - 10} other somatic pathways active.`
+          : "");
+
+      return {
+        total_subsystems: ANATOMY_SUBSYSTEM_COUNT,
+        summary: summaryText,
+        counts: { healthy, degraded, offline },
+        subsystems: filtered.map((p) => ({
+          key: p.subsystem_key,
+          status: p.status,
+          latency_ms: p.latencyMs,
+          metric: p.metric,
+          details: p.details,
+          error: p.error,
+        })),
+      };
     },
   },
   {

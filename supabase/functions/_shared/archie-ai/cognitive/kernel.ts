@@ -48,6 +48,9 @@ import {
   type ReasoningLoopReport,
 } from "../native-engine/reasoning-loop.ts";
 import { PerceptionEngine } from "./perception.ts";
+import { createCuratedLexiconClient } from "../../lexicon/curated-corpus.ts";
+import { lexicalGroundTruth } from "../../lexicon/retrieval.ts";
+
 import {
   MetaCognitionEngine,
   epistemicStatusOf,
@@ -717,13 +720,23 @@ export class CognitiveKernel implements ArchieRuntime {
     // data (same channel as the caller's system instruction):
     // honest framing, never persisted as knowledge.
     const worldCtx = this.worldContextFor(input);
-    const instructionWithContext =
-      worldCtx.block.length > 0 && systemInstruction
-        ? `${systemInstruction}
-${worldCtx.block}`
-        : worldCtx.block.length > 0
-          ? worldCtx.block
-          : systemInstruction;
+    let lexicalCtxBlock = "";
+    try {
+      const lexicalClient = createCuratedLexiconClient();
+      const gt = await lexicalGroundTruth(lexicalClient, input);
+      if (gt.block && gt.block.length > 0) {
+        lexicalCtxBlock = gt.block;
+      }
+    } catch {
+      // lexical ground truth lookup is non-blocking
+    }
+
+    const contextParts = [
+      systemInstruction,
+      worldCtx.block.length > 0 ? worldCtx.block : null,
+      lexicalCtxBlock.length > 0 ? lexicalCtxBlock : null,
+    ].filter(Boolean) as string[];
+    const instructionWithContext = contextParts.join("\n\n");
 
     // P5 Batch B: the kernel drives the real reasoning loop
     // (reason → act → observe → continue, budget-bounded) —
@@ -750,7 +763,7 @@ ${worldCtx.block}`
         (o?.report
           ? `reasoning loop: ${o.report.usedSteps} step pass(es), ${o.report.usedToolHops} tool hop(s)`
           : "substrate single-pass converse (loop not engaged)") +
-        `, ${worldCtx.used} world observation(s) injected as context`,
+        `, ${worldCtx.used} world observation(s) injected as context` + (lexicalCtxBlock.length > 0 ? ", lexical ground truth integrated" : ""),
     );
     const loopReport: ReasoningLoopReport | null = loopOutcome?.report ?? null;
     const core: ConverseResult =

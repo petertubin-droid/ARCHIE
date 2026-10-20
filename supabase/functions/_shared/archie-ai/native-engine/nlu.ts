@@ -1309,7 +1309,7 @@ const RULE_CASCADE: Array<{
     // subject after "is").
     intent: "time_query",
     pattern:
-      /^what\s+(?:time|day|month|year)\s+(?:is\s+(?:it|this)|are\s+(?:we|you)|do\s+we\s+have|have\s+we)\b|^what\s+day\s+of\s+the\s+week\b|^what\s+is\s+(?:the\s+)?(?:time|date)\b|\bwhats\s+the\s+time\b|^whats\s+todays?\s+(?:date|day|time)\b|^what\s+is\s+todays?\s+(?:date|day)\b|^which\s+(?:day|month|year)\b[^.?!]{0,30}\b(?:have\s+we|are\s+we|is\s+it)\b|^time\s+check\b|\btell\s+me\s+the\s+(?:hour|time)\b|^wat\s+time\b|\bwetin\s+be\s+the\s+time\b|^what\s+time\s+of\s+day\b/i,
+      /\b(?:what(?:'s|’s|\s+is)\s+(?:today(?:'s|’s)?\s+(?:date|day)|(?:the\s+)?(?:current\s+)?(?:date|time|day)\b(?!\s+(?:of|for|scheduled|expected))|date\s+today))\b|\b(?:what\s+(?:date|day)\s+is\s+(?:it|this|today))\b|\b(?:today(?:'s|’s)?\s+date)\b|\bwhat\s+(?:time|day|month|year)\s+(?:is\s+(?:it|this|today)|are\s+(?:we|you)|do\s+we\s+have|have\s+we)\b|\bwhat\s+day\s+of\s+the\s+week\b|\bwhats?\s+the\s+time\b|\bwhich\s+(?:day|month|year)\b[^.?!]{0,30}\b(?:have\s+we|are\s+we|is\s+it)\b|\btime\s+check\b|\btell\s+me\s+the\s+(?:hour|time|date|day)\b(?!\s+(?:of|for))\b|\bwat\s+time\b|\bwetin\s+be\s+the\s+time\b|\bwhat\s+time\s+of\s+day\b/i,
     confidence: 0.85,
   },
   {
@@ -1641,7 +1641,7 @@ const RULE_CASCADE: Array<{
     // Conversational system health probes.
     intent: "system_status",
     pattern:
-      /\b(?:how|is|are)\s+your\s+(?:systems?|engine|brain|memory|subsystems?|knowledge\s+base)\b|^everything\b[^.?!]*\bon\s+your\s+side\b|^are\s+you\s+(?:fully\s+)?(?:strong|functional)\b|^status\s+check\b|\b(?:any\s+)?system\s+(?:problems|issues)\b|\bsystems?\s+check\b/i,
+      /\b(?:how|is|are|check|what\s+is)\s+(?:the\s+status\s+of\s+)?(?:your\s+)?(?:systems?|engines?|brain|memory|subsystems?|knowledge\s+base|anatomy|organs?|health|eyes?|ears?|hands?|heart|legs?|spine|core)\b|\b(?:anatomy|health|subsystems?|systems?)\s+(?:status|check|inspection|report)\b|^everything\b[^.?!]*\bon\s+your\s+side\b|^are\s+you\s+(?:fully\s+)?(?:strong|functional|healthy|operational)\b|^status\s+check\b|\b(?:any\s+)?system\s+(?:problems|issues)\b|\bsystems?\s+check\b/i,
     confidence: 0.8,
   },
   {
