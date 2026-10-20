@@ -46,6 +46,36 @@ describe("archie-chat — request validation", () => {
     expect(attachments.status).toBe(400);
   });
 
+  it("normalizes legacy user/assistant history roles instead of 400ing the whole session", async () => {
+    // CHAT FIX regression (Oct 20, 2026): cached PWA bundles send
+    // visitor history with user/assistant roles. The contract
+    // expects owner/archie; rejecting the turn made every
+    // message after the first fail with "history must contain at
+    // most 100 valid conversation turns" — the "chat is broken"
+    // report. The server now normalizes instead of rejecting.
+    const res = await handler(
+      req("POST", "", {
+        message: "hello again",
+        history: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: "Hello." },
+        ],
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(typeof body.reply).toBe("string");
+    expect(body.reply.length).toBeGreaterThan(0);
+    // still rejects genuinely malformed history after normalization
+    const bad = await handler(
+      req("POST", "", {
+        message: "hello",
+        history: [{ role: "owner", content: 42 }],
+      }),
+    );
+    expect(bad.status).toBe(400);
+  });
+
   it("rejects an empty message with 400", async () => {
     const res = await handler(req("POST", "", { message: "" }));
     expect(res.status).toBe(400);

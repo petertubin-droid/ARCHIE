@@ -348,11 +348,16 @@ export default function Assistant() {
     // no canned text — ARCHIE answers or honestly says why not.
     setBusy(true);
     try {
+      // CHAT FIX (Oct 20, 2026): the archie-chat contract
+      // requires owner/archie history roles; this visitor path
+      // used to send user/assistant, so every message after
+      // the first failed validation with "history must contain
+      // at most 100 valid conversation turns".
       const history = messages
         .filter((m) => m.role !== "system")
         .slice(-10)
         .map((m) => ({
-          role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+          role: m.role === "user" ? ("owner" as const) : ("archie" as const),
           content: m.text,
         }));
       const { data, error: fnError } = await supabase.functions.invoke(

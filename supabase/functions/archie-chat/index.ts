@@ -2283,6 +2283,25 @@ async function executeChat(
   if (typeof body.message !== "string" || body.message.length > 8_000) {
     return respond(400, { error: "message must be a string of at most 8,000 characters." });
   }
+  // CHAT FIX (Oct 20, 2026): normalize legacy role names BEFORE
+  // validating. Cached/stale PWA bundles (installed service
+  // workers) send history with "user"/"assistant" roles, which
+  // this contract rejects — so the FIRST message of a session
+  // (empty history) succeeded and EVERY subsequent message died
+  // as "history must contain at most 100 valid conversation
+  // turns", which is what the owner saw as "chat is broken".
+  // Server-side normalization repairs every deployed client
+  // instantly, without waiting for caches to clear.
+  if (
+    Array.isArray(body.history) &&
+    body.history.some((turn) => turn?.role === "user" || turn?.role === "assistant")
+  ) {
+    body.history = (body.history as Record<string, unknown>[]).map((turn) =>
+      turn && typeof turn === "object" && (turn.role === "user" || turn.role === "assistant")
+        ? { ...turn, role: turn.role === "user" ? "owner" : "archie" }
+        : turn,
+    );
+  }
   if (body.history !== undefined && (!Array.isArray(body.history) || body.history.length > 100 || body.history.some((turn) =>
     !turn || typeof turn !== "object" || (turn.role !== "owner" && turn.role !== "archie") || typeof turn.content !== "string"
   ))) {
