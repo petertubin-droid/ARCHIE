@@ -9493,7 +9493,7 @@ export interface VocabularyDb {
     select(q: string): SelectBuilder;
     upsert(
       rows: unknown,
-      opts?: { onConflict?: string },
+      opts?: { onConflict?: string; ignoreDuplicates?: boolean },
     ): PromiseLike<{ data?: unknown; error: unknown }>;
   };
 }

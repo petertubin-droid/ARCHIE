@@ -498,7 +498,8 @@ export class ArchieNativeEngine implements ArchieRuntime {
      *  meaningResearch: production wires the service-role DB
      *  client; tests inject a labeled double. null = the
      *  lexicon is not consulted (honest degradation). */
-    lexiconLookup?: (term: string) => Promise<LexiconSenseAnswer | null>;
+    lexiconLookup?: ((term: string) => Promise<LexiconSenseAnswer | null>)
+      | null;
     systemAdapters?: SystemAdapters;
     /** P6 Batch B — owner verbosity profile. Selects which
      *  OPTIONAL connectives are composed; content and
@@ -4547,7 +4548,7 @@ export function configureNativeEngineLessonLookup(lookup: LessonLookup): void {
  *  try/catch and degrade to research, never to a crash. */
 function lexiconLookupFor(
   db: SupabaseLike | null | undefined,
-): (term: string) => Promise<LexiconSenseAnswer | null> | null {
+): ((term: string) => Promise<LexiconSenseAnswer | null>) | null {
   if (!db) return null;
   return async (term: string): Promise<LexiconSenseAnswer | null> => {
     const hits = await lookupWord(
