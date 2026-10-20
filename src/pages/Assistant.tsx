@@ -21,13 +21,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Brain,
   Mic,
-  Camera,
-  Image as ImageIcon,
-  FileText,
   MapPin,
   Bell,
   Clipboard,
-  ExternalLink,
   Calculator,
   Shield,
   Lock,
@@ -37,7 +33,6 @@ import {
   Smartphone,
   History,
   KeyRound,
-  Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { classNames } from "@/lib/utils";
@@ -156,18 +151,16 @@ function archieClientId(): string {
 
 type FamilyStatus = "checking" | "active" | "none";
 
-const GREETING =
-  "Hi, I'm ARCHIE — FRELUX's own assistant. Ask me anything about FRELUX: calculators, pricing plans, colors, projects, the marketplace, or any building and estimation question.";
-
 export default function Assistant() {
   const { user, isAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>("assistant");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [messages, setMessages] = useState<Msg[]>([
-    { role: "archie", text: GREETING },
-  ]);
+  // Owner directive 2026-10-20: ARCHIE speaks only when spoken
+  // to — no seeded greeting. The transcript starts empty and
+  // ARCHIE answers when a chat is initiated.
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   // Privileged chat: persistent Owner conversations through the
   // real chat-client (frelux_archie_conversations, RLS-scoped
@@ -179,8 +172,6 @@ export default function Assistant() {
   const [convOpen, setConvOpen] = useState(false);
   const [listening, setListening] = useState(false);
   const voiceBufferRef = useRef<string[]>([]);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const [consents, setConsents] = useState<Record<
     ArchieMobileCapability,
@@ -443,7 +434,7 @@ export default function Assistant() {
       const conv = await createConversation("Assistant chat");
       setActiveConv(conv);
       setConvOpen(false);
-      setMessages([{ role: "archie", text: GREETING }]);
+      setMessages([]);
       void loadConversations(convSearch.trim());
     } catch (err) {
       pushArchie(
@@ -472,7 +463,7 @@ export default function Assistant() {
     try {
       await archiveConversation(activeConv.id);
       setActiveConv(null);
-      setMessages([{ role: "archie", text: GREETING }]);
+      setMessages([]);
       void loadConversations(convSearch.trim());
     } catch {
       pushArchie("The conversation could not be archived.");
@@ -573,37 +564,6 @@ export default function Assistant() {
     recognition.onend = () => setListening(false);
     setListening(true);
     recognition.start();
-  }
-
-  async function handleCamera() {
-    if (!consentGate("CAMERA")) return;
-    photoInputRef.current?.setAttribute("capture", "environment");
-    photoInputRef.current?.click();
-  }
-
-  async function handlePhotoSelected(f: File | undefined) {
-    if (!f) return;
-    if (f.size > 25 * 1024 * 1024) {
-      pushArchie("That image is too large (max 25 MB).");
-      return;
-    }
-    pushArchie(
-      `Photo received (${f.name}, ${(f.size / 1024).toFixed(0)} KB). Ready to use with FRELUX calculators or ARCHIE training.`,
-    );
-  }
-
-  async function handleFileSelected(f: File | undefined) {
-    if (!f) return;
-    if (f.size > 100 * 1024 * 1024) {
-      pushArbie_safe();
-      return;
-    }
-    pushArchie(
-      `File received (${f.name}). Use it with ARCHIE Training or protect it in the Vault.`,
-    );
-  }
-  function pushArbie_safe() {
-    pushArchie("That file is too large (max 100 MB).");
   }
 
   async function handleLocation() {
@@ -863,28 +823,19 @@ export default function Assistant() {
   }
 
   return (
-    <div className="mx-auto max-w-lg px-4 pb-24 pt-4 font-sans text-slate-100">
-      <div className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-900/80 p-3.5 backdrop-blur-xl shadow-lg">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-400/10 border border-amber-400/30 text-amber-300">
-            <Brain className="h-5 w-5" aria-hidden="true" />
-          </div>
-          <div>
-            <h1 className="bg-gradient-to-r from-amber-200 via-amber-300 to-amber-100 bg-clip-text text-base font-bold tracking-tight text-transparent">
-              ARCHIE INTELLIGENCE
-            </h1>
-            <p className="text-[10px] text-slate-400 font-mono">Owner Unified Sensory & Command Console</p>
-          </div>
-        </div>
-        <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">
-          {isPrivileged ? "Owner Authority" : "FRELUX Assistant"}
-        </span>
-      </div>
+    // Owner directive 2026-10-20: full-screen chat, Base44-style.
+    // No console banner, no seeded greeting, no bottom-nav chrome —
+    // the transcript owns the viewport; the composer is pinned to
+    // the bottom. ARCHIE answers only when a chat is initiated.
+    <div
+      data-testid="archie-fullscreen-chat"
+      className="mx-auto flex h-[calc(100dvh-8.5rem)] w-full max-w-2xl flex-col font-sans text-slate-100 md:h-[calc(100dvh-7.5rem)]"
+    >
 
       {(error || notice) && (
         <div
           className={classNames(
-            "mt-3 flex items-start gap-2 rounded-lg border p-3 text-sm",
+            "mb-2 flex items-start gap-2 rounded-lg border p-2.5 text-sm",
             error
               ? "border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
               : "border-green-300 bg-green-50 text-green-700 dark:border-green-900 dark:bg-green-950 dark:text-green-300",
@@ -904,7 +855,7 @@ export default function Assistant() {
           visitors get a clean chat and nothing else. */}
       {isPrivileged && (
         <div
-          className="mt-3 grid grid-cols-4 gap-1.5 rounded-xl border border-white/10 bg-slate-950/70 p-1.5 backdrop-blur-md"
+          className="mb-2 flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-slate-950/70 p-1"
           role="tablist"
         >
           {TABS.map(({ key, label, icon: Icon }) => (
@@ -918,20 +869,20 @@ export default function Assistant() {
                 setNotice("");
               }}
               className={classNames(
-                "flex flex-col items-center gap-1 rounded-lg px-1.5 py-2 text-[11px] font-medium transition-all",
+                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-all",
                 tab === key
                   ? "bg-amber-400 text-slate-950 font-semibold shadow-md shadow-amber-400/20"
                   : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200",
               )}
             >
-              <Icon className="h-4 w-4" /> {label}
+              <Icon className="h-3.5 w-3.5" /> {label}
             </button>
           ))}
         </div>
       )}
 
       {busy && (
-        <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="mb-2 flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Working…
         </div>
       )}
@@ -940,13 +891,31 @@ export default function Assistant() {
       {/* ASSISTANT */}
       {/* ------------------------------------------------- */}
       {tab === "assistant" && (
-        <div className="mt-4 space-y-3" data-testid="archie-assistant">
-          <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border bg-card p-3">
+        <div
+          className="flex min-h-0 flex-1 flex-col gap-2"
+          data-testid="archie-assistant"
+        >
+          {/* TRANSCRIPT — owns the viewport, scrolls internally */}
+          <div
+            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-xl border bg-card p-3"
+            data-testid="archie-transcript"
+          >
+            {messages.length === 0 && (
+              <div
+                className="flex flex-1 flex-col items-center justify-center gap-1.5 py-8 text-muted-foreground"
+                data-testid="archie-empty-state"
+              >
+                <Brain className="h-6 w-6 text-amber-400/40" aria-hidden="true" />
+                <p className="text-xs">
+                  Message ARCHIE to start the conversation.
+                </p>
+              </div>
+            )}
             {messages.map((m, i) => (
               <div
                 key={i}
                 className={classNames(
-                  "max-w-[85%] rounded-xl px-3 py-2 text-sm",
+                  "max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm",
                   m.role === "user"
                     ? "ml-auto bg-primary text-primary-foreground"
                     : m.role === "system"
@@ -959,61 +928,10 @@ export default function Assistant() {
             ))}
           </div>
 
-          {isPrivileged && (
-            <div className="grid grid-cols-4 gap-2">
-              <ActionButton
-                icon={Mic}
-                label={listening ? "Listening…" : "Voice"}
-                onClick={startVoice}
-                active={listening}
-              />
-              <ActionButton
-                icon={Camera}
-                label="Camera"
-                onClick={handleCamera}
-              />
-              <ActionButton
-                icon={ImageIcon}
-                label="Photos"
-                onClick={() => {
-                  photoInputRef.current?.removeAttribute("capture");
-                  photoInputRef.current?.click();
-                }}
-              />
-              <ActionButton
-                icon={FileText}
-                label="Files"
-                onClick={() => fileInputRef.current?.click()}
-              />
-              <ActionButton
-                icon={MapPin}
-                label="Location"
-                onClick={handleLocation}
-              />
-              <ActionButton
-                icon={Bell}
-                label="Alerts"
-                onClick={handleNotifications}
-              />
-              <ActionButton
-                icon={Clipboard}
-                label="Paste"
-                onClick={handleClipboardPaste}
-              />
-              <ActionButton
-                icon={Calculator}
-                label="Calc"
-                onClick={() =>
-                  openLink(`${window.location.origin}/paint-calculator`)
-                }
-              />
-            </div>
-          )}
-
           {isPrivileged ? (
             <>
-              {/* Persistent-conversation bar — chat-client, RLS-scoped */}
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2 text-xs">
+              {/* Conversations bar (privileged, RLS-scoped) */}
+              <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-xl border bg-card p-2 text-xs">
                 <button
                   type="button"
                   onClick={() => setConvOpen((o) => !o)}
@@ -1078,15 +996,52 @@ export default function Assistant() {
                   </div>
                 )}
               </div>
+
+              {/* Composer with the + menu — every quick capability
+                  (photos, camera, files, voice, location, alerts,
+                  paste, calculator) lives behind one clean button. */}
               <ChatComposer
                 onSend={privilegedSend}
                 busy={busy}
                 draft={voiceDraft}
                 onDraftConsumed={() => setVoiceDraft("")}
+                extraActions={[
+                  {
+                    key: "voice",
+                    label: listening ? "Stop voice input" : "Voice input",
+                    icon: Mic,
+                    run: () => startVoice(),
+                  },
+                  {
+                    key: "location",
+                    label: "Share location",
+                    icon: MapPin,
+                    run: () => handleLocation(),
+                  },
+                  {
+                    key: "alerts",
+                    label: "Device alerts",
+                    icon: Bell,
+                    run: () => handleNotifications(),
+                  },
+                  {
+                    key: "paste",
+                    label: "Paste from clipboard",
+                    icon: Clipboard,
+                    run: () => handleClipboardPaste(),
+                  },
+                  {
+                    key: "calc",
+                    label: "Paint calculator",
+                    icon: Calculator,
+                    run: () =>
+                      openLink(`${window.location.origin}/paint-calculator`),
+                  },
+                ]}
               />
             </>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex shrink-0 gap-2">
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -1100,30 +1055,11 @@ export default function Assistant() {
                 className="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Send"
               >
-                <ExternalLink className="hidden" /> Send
+                Send
               </button>
             </div>
           )}
 
-          <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Sparkles className="h-3 w-3" />
-            ARCHIE answers with its own native intelligence engine, grounded in
-            FRELUX knowledge — no external AI, ever.
-          </p>
-
-          <input
-            ref={photoInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden focus:outline-none focus:ring-2 focus:ring-ring"
-            onChange={(e) => handlePhotoSelected(e.target.files?.[0])}
-          />
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden focus:outline-none focus:ring-2 focus:ring-ring"
-            onChange={(e) => handleFileSelected(e.target.files?.[0])}
-          />
         </div>
       )}
 
@@ -1553,28 +1489,3 @@ export default function Assistant() {
   );
 }
 
-function ActionButton({
-  icon: Icon,
-  label,
-  onClick,
-  active,
-}: {
-  icon: typeof Mic;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className={classNames(
-        "flex flex-col items-center gap-1 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-[11px] font-medium text-slate-300 transition-all hover:border-amber-400/40 hover:bg-slate-800/80 hover:text-white shadow-sm",
-        active && "border-amber-400 bg-amber-400/15 text-amber-300 shadow-md shadow-amber-400/10",
-      )}
-    >
-      <Icon className="h-4 w-4" /> {label}
-    </button>
-  );
-}

@@ -17,7 +17,7 @@ import { useAuth } from "@/lib/auth";
 import "@/styles/archie-premium.css";
 import ArchieInstallButton from "./ArchieInstallButton";
 import PersonalizationModal from "./PersonalizationModal";
-import { Sliders, Shield } from "lucide-react";
+import { Sliders, Shield, Menu, X } from "lucide-react";
 
 type NavItem = { to: string; label: string; icon: string };
 
@@ -211,6 +211,11 @@ function NavIcon({ name }: { name: string }) {
 
 export default function ArchieLayout() {
   const [personalizeOpen, setPersonalizeOpen] = useState(false);
+  // Mobile navigation drawer (owner directive 2026-10-20): the
+  // bottom nav bar is gone; every section lives in the hamburger
+  // menu instead, leaving the surfaces full-screen and clean.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const closeMenu = () => setMenuOpen(false);
   const { user } = useAuth();
   const location = useLocation();
   // AI transparency (AI Disclosure doc): one-time notice,
@@ -218,6 +223,10 @@ export default function ArchieLayout() {
   const [disclosureAck, setDisclosureAck] = useState(true);
   const [online, setOnline] = useState(true);
   const [updateReady, setUpdateReady] = useState(false);
+  // Route changes close the mobile drawer.
+  useEffect(() => {
+    closeMenu();
+  }, [location.pathname]);
   useEffect(() => {
     setDisclosureAck(localStorage.getItem("archie-ai-disclosure-ack") === "1");
     setOnline(navigator.onLine);
@@ -305,6 +314,16 @@ export default function ArchieLayout() {
       {/* ARCHIE header */}
       <header className="sticky top-0 z-20 border-b border-white/5 archie-surface-bg/80 backdrop-blur-xl after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-gradient-to-r after:from-transparent after:via-amber-400/30 after:to-transparent">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            aria-label="Open navigation menu"
+            aria-expanded={menuOpen}
+            data-testid="archie-hamburger"
+            onClick={() => setMenuOpen(true)}
+            className="archie-focusable -ml-1 rounded-lg p-1.5 text-slate-300 transition hover:bg-white/10 hover:text-white md:hidden"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
           <img
             src="/assets/archie/archie-icon-512.png"
             alt=""
@@ -440,39 +459,16 @@ export default function ArchieLayout() {
         </nav>
 
         <main
-          className="relative z-10 min-w-0 flex-1 pb-16 md:pb-0"
+          className="relative z-10 min-w-0 flex-1"
           key={location.pathname}
         >
           <Outlet />
         </main>
       </div>
 
-      <nav
-        aria-label="ARCHIE sections"
-        className="fixed inset-x-0 bottom-0 z-20 flex overflow-x-auto border-t border-white/10 archie-surface-bg/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl md:hidden"
-      >
-        {NAV.map((n) => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            aria-label={n.label}
-            className={({ isActive }) =>
-              `archie-focusable flex min-w-[68px] shrink-0 flex-col items-center gap-1 px-1 py-2 text-[10px] transition-colors ${
-                isActive
-                  ? "text-amber-200 drop-shadow-[0_0_8px_rgba(251,191,36,0.45)]"
-                  : "text-slate-500"
-              }`
-            }
-          >
-            <NavIcon name={n.icon} />
-            {n.label}
-          </NavLink>
-        ))}
-      </nav>
-
       {/* Legal & governance links — §12 access without
           cluttering the primary interface. */}
-      <footer className="border-t border-white/5 px-4 pb-20 pt-4 text-center text-[11px] text-slate-500 md:pb-4">
+      <footer className="border-t border-white/5 px-4 pb-4 pt-3 text-center text-[11px] text-slate-500">
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
           <Link to="/archie/legal" className="rounded archie-focusable hover:text-slate-300">
             Legal &amp; Governance
@@ -484,6 +480,80 @@ export default function ArchieLayout() {
         </div>
         <p className="mt-1.5">© 2026 FRENZY. All rights reserved.</p>
       </footer>
+      {/* Mobile hamburger drawer — every ARCHIE section, one menu */}
+      {menuOpen && (
+        <div className="fixed inset-0 z-50 md:hidden" data-testid="archie-drawer">
+          <button
+            type="button"
+            aria-label="Close navigation menu"
+            onClick={closeMenu}
+            className="absolute inset-0 h-full w-full cursor-default bg-black/60 backdrop-blur-sm"
+          />
+          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[82%] flex-col border-r border-white/10 archie-surface-bg shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <span className="text-sm font-semibold tracking-[0.2em] text-amber-200/90">
+                ARCHIE
+              </span>
+              <button
+                type="button"
+                aria-label="Close navigation menu"
+                onClick={closeMenu}
+                className="archie-focusable rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <nav
+              aria-label="ARCHIE sections"
+              className="flex-1 overflow-y-auto px-2 py-3"
+            >
+              {NAV_SECTIONS.map((section) => (
+                <div key={section.title}>
+                  <p className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                    {section.title}
+                  </p>
+                  {section.items.map((n) => (
+                    <NavLink
+                      key={n.to}
+                      to={n.to}
+                      onClick={closeMenu}
+                      className={({ isActive }) =>
+                        `archie-focusable flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all ${
+                          isActive
+                            ? "bg-amber-400/10 text-amber-200"
+                            : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"
+                        }`
+                      }
+                    >
+                      <NavIcon name={n.icon} />
+                      {n.label}
+                    </NavLink>
+                  ))}
+                </div>
+              ))}
+              <a
+                href="/"
+                className="archie-focusable mt-3 flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-500 transition-colors hover:text-slate-300"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  className="h-5 w-5"
+                >
+                  <path
+                    d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                FRELUX
+              </a>
+            </nav>
+          </div>
+        </div>
+      )}
       <PersonalizationModal
         isOpen={personalizeOpen}
         onClose={() => setPersonalizeOpen(false)}

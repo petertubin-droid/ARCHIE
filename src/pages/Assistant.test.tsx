@@ -127,20 +127,44 @@ import Assistant from "@/pages/Assistant";
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("Assistant page — the PWA front door (2026-10-19)", () => {
-  it("mounts the ARCHIE INTELLIGENCE shell for the signed-in owner", async () => {
+describe("Assistant page — the PWA front door (2026-10-20 full-screen chat)", () => {
+  it("mounts the full-screen chat shell with no console banner", async () => {
     const { container } = render(<Assistant />);
     await waitFor(
-      () => expect(screen.getByText("ARCHIE INTELLIGENCE")).toBeTruthy(),
+      () =>
+        expect(
+          container.querySelector('[data-testid="archie-fullscreen-chat"]'),
+        ).toBeTruthy(),
       { timeout: 5000 },
     );
+    // Owner directive: the ARCHIE INTELLIGENCE console box is gone.
+    expect(screen.queryByText("ARCHIE INTELLIGENCE")).toBeNull();
     expect(container.textContent).toContain("ARCHIE");
+  });
+
+  it("starts with NO seeded greeting — ARCHIE answers only when spoken to", async () => {
+    const { container } = render(<Assistant />);
+    await waitFor(
+      () =>
+        expect(
+          container.querySelector('[data-testid="archie-fullscreen-chat"]'),
+        ).toBeTruthy(),
+      { timeout: 5000 },
+    );
+    expect(
+      screen.queryByText(/Hi, I'm ARCHIE/i),
+    ).toBeNull();
+    // A quiet empty state invites the first message instead of
+    // ARCHIE speaking first.
+    expect(
+      container.querySelector('[data-testid="archie-empty-state"]'),
+    ).toBeTruthy();
   });
 
   it("renders all four feature tabs", async () => {
     render(<Assistant />);
     await waitFor(
-      () => expect(screen.getByText("ARCHIE INTELLIGENCE")).toBeTruthy(),
+      () => expect(screen.getByTestId("archie-fullscreen-chat")).toBeTruthy(),
       { timeout: 5000 },
     );
     for (const label of ["Assistant", "Capabilities", "Vault", "Security"]) {

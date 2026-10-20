@@ -8,13 +8,30 @@
 // archie-media bucket; only the Owner can read them.
 // =========================================================
 import { useEffect, useRef, useState } from "react";
-import { Paperclip, Camera, Mic, Square, X, Send, Loader2 } from "lucide-react";
+import {
+  Paperclip,
+  Camera,
+  Mic,
+  Square,
+  X,
+  Send,
+  Loader2,
+  Plus,
+  type LucideIcon,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { ArchieChatAttachment } from "@/lib/archie/chat-client";
 import { classNames } from "@/lib/utils";
 
 const MAX_FILE_MB = 20;
 const ACCEPTED_DOCS = ".pdf,.txt,.md,.csv,.json,.doc,.docx,.xls,.xlsx";
+
+export interface ComposerExtraAction {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  run: () => void;
+}
 
 interface Props {
   onSend: (text: string, attachments: ArchieChatAttachment[]) => Promise<void>;
@@ -23,6 +40,10 @@ interface Props {
    *  appended to the composer once, then consumed. */
   draft?: string;
   onDraftConsumed?: () => void;
+  /** Optional quick actions surfaced inside the + menu
+   *  (location, alerts, clipboard, tools…) alongside the
+   *  built-in attachment options. */
+  extraActions?: ComposerExtraAction[];
 }
 
 export default function ChatComposer({
@@ -30,12 +51,14 @@ export default function ChatComposer({
   busy,
   draft,
   onDraftConsumed,
+  extraActions = [],
 }: Props) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ArchieChatAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Voice transcripts and other external drafts land in the
   // composer exactly once — the caller clears the prop.
@@ -171,71 +194,130 @@ export default function ChatComposer({
         </p>
       )}
 
-      <div className="flex items-end gap-1.5">
-        <div className="flex">
+      <div className="relative flex items-end gap-1.5">
+        {/* The + menu (Base44-style): one button, every input
+            and quick capability behind it. */}
+        <button
+          type="button"
+          aria-label="Attachment and action options"
+          aria-expanded={menuOpen}
+          data-testid="archie-plus-btn"
+          onClick={() => setMenuOpen((o) => !o)}
+          disabled={busy || uploading}
+          className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+        >
+          <Plus className="h-5 w-5" aria-hidden="true" />
+        </button>
+        {recording && (
           <button
             type="button"
-            aria-label="Attach document or PDF"
-            title="Documents, PDF, spreadsheets"
-            onClick={() => fileRef.current?.click()}
-            disabled={busy || uploading}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <Paperclip className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label="Attach image from gallery"
-            onClick={() => imageRef.current?.click()}
-            disabled={busy || uploading}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-5 w-5"
-              aria-hidden="true"
-            >
-              <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-              <circle cx="9" cy="9" r="2" />
-              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            aria-label="Take a photo with camera"
-            onClick={() => cameraRef.current?.click()}
-            disabled={busy || uploading}
-            className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            <Camera className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label={
-              recording ? "Stop voice recording" : "Record a voice message"
-            }
+            aria-label="Stop voice recording"
             onClick={toggleRecording}
-            disabled={busy || uploading}
-            aria-pressed={recording}
-            className={classNames(
-              "rounded-lg p-2 transition-colors disabled:opacity-50",
-              recording
-                ? "bg-destructive/10 text-destructive animate-pulse"
-                : "text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            )}
+            aria-pressed={true}
+            className="shrink-0 rounded-lg bg-destructive/10 p-2 text-destructive animate-pulse focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {recording ? (
-              <Square className="h-5 w-5" aria-hidden="true" />
-            ) : (
-              <Mic className="h-5 w-5" aria-hidden="true" />
-            )}
+            <Square className="h-5 w-5" aria-hidden="true" />
           </button>
-        </div>
+        )}
+        {menuOpen && (
+          <>
+            <button
+              type="button"
+              aria-label="Close options menu"
+              onClick={() => setMenuOpen(false)}
+              className="fixed inset-0 z-30 h-full w-full cursor-default"
+            />
+            <div
+              role="menu"
+              data-testid="archie-plus-menu"
+              className="absolute bottom-14 left-0 z-40 w-56 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-xl"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  imageRef.current?.click();
+                }}
+                disabled={busy || uploading}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+                  <circle cx="9" cy="9" r="2" />
+                  <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                </svg>
+                Photos
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  cameraRef.current?.click();
+                }}
+                disabled={busy || uploading}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                <Camera className="h-4 w-4" aria-hidden="true" />
+                Camera
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  fileRef.current?.click();
+                }}
+                disabled={busy || uploading}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                <Paperclip className="h-4 w-4" aria-hidden="true" />
+                Document / PDF
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  void toggleRecording();
+                }}
+                disabled={busy || uploading}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                <Mic className="h-4 w-4" aria-hidden="true" />
+                Record voice note
+              </button>
+              {extraActions.length > 0 && (
+                <div className="my-1 border-t border-border" />
+              )}
+              {extraActions.map((a) => (
+                <button
+                  key={a.key}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    a.run();
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+                >
+                  <a.icon className="h-4 w-4" aria-hidden="true" />
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <textarea
           value={text}

@@ -25,6 +25,7 @@ vi.mock("@/lib/supabase", () => ({
 }));
 
 import ChatComposer from "@/components/archie/ChatComposer";
+import { MapPin as MapPinIcon } from "lucide-react";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -45,6 +46,49 @@ function renderComposer(
   render(<ChatComposer onSend={onSend as never} busy={over.busy ?? false} />);
   return { onSend: onSend as ReturnType<typeof vi.fn> };
 }
+
+describe("ChatComposer — the + options menu (2026-10-20)", () => {
+  it("opens the + menu on demand and lists the attachment options", async () => {
+    renderComposer();
+    // Nothing is open before the Owner asks for it.
+    expect(screen.queryByTestId("archie-plus-menu")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("archie-plus-btn"));
+    const menu = screen.getByTestId("archie-plus-menu");
+    for (const label of ["Photos", "Camera", "Document / PDF", "Record voice note"]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(menu).toBeTruthy();
+  });
+
+  it("closes the menu after choosing an option and after an outside click", async () => {
+    renderComposer();
+    fireEvent.click(screen.getByTestId("archie-plus-btn"));
+    fireEvent.click(screen.getByText("Photos"));
+    expect(screen.queryByTestId("archie-plus-menu")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("archie-plus-btn"));
+    fireEvent.click(screen.getByRole("button", { name: /close options menu/i }));
+    expect(screen.queryByTestId("archie-plus-menu")).toBeNull();
+  });
+
+  it("surfaces extra quick actions from the host page inside the + menu", async () => {
+    const run = vi.fn();
+    render(
+      <ChatComposer
+        onSend={vi.fn() as never}
+        busy={false}
+        extraActions={[
+          { key: "location", label: "Share location", icon: MapPinIcon, run },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("archie-plus-btn"));
+    fireEvent.click(screen.getByText("Share location"));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("archie-plus-menu")).toBeNull();
+  });
+});
 
 describe("ChatComposer", () => {
   it("renders the composer and never sends an empty message", async () => {
