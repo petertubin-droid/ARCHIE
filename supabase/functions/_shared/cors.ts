@@ -28,8 +28,16 @@
 //     of the apikey/auth checks — never a replacement.
 // =========================================================
 
-/** The production webapp origin (Supabase config: Netlify deployment). */
-export const PRODUCTION_ORIGINS = ["https://freluxtools.netlify.app"] as const;
+/** The production webapp origin (Supabase config: Netlify deployment).
+ *  CHAT FIX (Oct 20, 2026): archiet.netlify.app is the live ARCHIE
+ *  PWA deployment. Installed-PWA service workers can serve older
+ *  bundles that invoke the gateway DIRECTLY (pre-/archie-fn proxy);
+ *  without this entry those origins get no ACAO and every browser
+ *  invoke dies as "Failed to send a request to the Edge Function". */
+export const PRODUCTION_ORIGINS = [
+  "https://freluxtools.netlify.app",
+  "https://archiet.netlify.app",
+] as const;
 
 /** Local development origins (vite dev server common ports). */
 export const DEV_ORIGINS = [
@@ -65,7 +73,7 @@ export function allowedOrigins(): string[] {
 export function resolveCorsHeaders(req: Request): Record<string, string> {
   const base: Record<string, string> = {
     "Access-Control-Allow-Headers":
-      "authorization, x-client-info, apikey, content-type",
+      "authorization, x-client-info, apikey, content-type, x-supabase-api-version",
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   };
   const origins = allowedOrigins();
@@ -89,7 +97,7 @@ export function resolveCorsHeaders(req: Request): Record<string, string> {
  *  serveWithCors boundary is the single authority for ACAO. */
 export const corsHeaders = {
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+    "authorization, x-client-info, apikey, content-type, x-supabase-api-version",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
 } as const;
 

@@ -37,6 +37,19 @@ describe("CORS allowlist (audit M-5)", () => {
     expect(origins).not.toContain("*");
   });
 
+  it("allows the live ARCHIE PWA origin (chat fix, Oct 20, 2026)", () => {
+    // The deployed PWA (archiet.netlify.app) must be allowed so
+    // old cached bundles that bypass the /archie-fn proxy still
+    // reach the gateway instead of dying at CORS.
+    const origins = allowedOrigins();
+    expect(origins).toContain("https://archiet.netlify.app");
+    const h = resolveCorsHeaders(req("https://archiet.netlify.app"));
+    expect(h["Access-Control-Allow-Origin"]).toBe(
+      "https://archiet.netlify.app",
+    );
+    expect(h["Vary"]).toContain("Origin");
+  });
+
   it("echoes an allowed origin exactly, with Vary", () => {
     const h = resolveCorsHeaders(req("https://freluxtools.netlify.app"));
     expect(h["Access-Control-Allow-Origin"]).toBe(
