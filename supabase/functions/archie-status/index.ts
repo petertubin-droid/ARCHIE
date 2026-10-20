@@ -477,6 +477,63 @@ serveWithCors(async (req: Request) => {
     // dependence on any external key would violate ARCHIE's
     // independence.
 
+
+    // LEXICON ENGINE DIAGNOSTIC (2026-10-20, owner directive):
+    // real sense-status distribution + a live probe for the
+    // word the owner just tested in chat. The chat definition
+    // path only presents VERIFIED senses; this reports what
+    // statuses the ingested corpus actually carries so the
+    // gap between ingest and presentation is visible, not
+    // guessed.
+    let lexiconDiag: Record<string, unknown>;
+    try {
+      const wordsTotal = await count("lexicon_words");
+      const sensesVerified = await count("lexicon_senses", {
+        knowledge_status: "VERIFIED",
+      });
+      const sensesUnverified = await count("lexicon_senses", {
+        knowledge_status: "UNVERIFIED",
+      });
+      const sensesLearned = await count("lexicon_senses", {
+        knowledge_status: "LEARNED",
+      });
+      const sensesUser = await count("lexicon_senses", {
+        knowledge_status: "USER_PROVIDED",
+      });
+      const { data: probeWord } = await service
+        .from("lexicon_words")
+        .select("id,normalized,part_of_speech")
+        .eq("normalized", "momentum")
+        .limit(3);
+      const probeRows = probeWord ?? [];
+      let probeSenses: Array<Record<string, unknown>> = [];
+      if (probeRows.length > 0) {
+        const { data: probeSenseRows } = await service
+          .from("lexicon_senses")
+          .select("knowledge_status,definition")
+          .in("word_id", probeRows.map((w: { id: string }) => w.id))
+          .limit(3);
+        probeSenses = (probeSenseRows ?? []) as Array<Record<string, unknown>>;
+      }
+      lexiconDiag = {
+        state: sensesVerified > 0 ? "OPERATIONAL" : "INERT",
+        words: wordsTotal,
+        senses_verified: sensesVerified,
+        senses_unverified: sensesUnverified,
+        senses_learned: sensesLearned,
+        senses_user_provided: sensesUser,
+        probe_momentum: {
+          words: probeRows,
+          senses: probeSenses,
+        },
+      };
+    } catch (lexErr) {
+      lexiconDiag = {
+        state: "UNAVAILABLE",
+        note: lexErr instanceof Error ? lexErr.message : "lexicon query failed",
+      };
+    }
+
     return json(200, {
       ok: true,
       generated_at: new Date().toISOString(),
@@ -535,6 +592,7 @@ serveWithCors(async (req: Request) => {
         strategy_learning: strategyLearning,
         goal_engine: goalEngine,
         knowledge_repository: await knowledgeRepositoryPromise,
+        lexicon: lexiconDiag,
       },
     });
   } catch (err) {
