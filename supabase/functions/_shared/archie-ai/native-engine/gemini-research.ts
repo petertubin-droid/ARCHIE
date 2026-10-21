@@ -22,7 +22,26 @@
 
 import type { ResearchAdapter, ResearchHit } from "./webresearch.ts";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+// BATCH 43 (2026-10-21): the pinned gemini-2.0-flash was
+// retired upstream and every call began returning 404
+// (live-verified from production). The model is now
+// env-overridable (GEMINI_RESEARCH_MODEL) so a retirement
+// never needs a code change again; the default tracks the
+// current stable flash model.
+const GEMINI_MODEL = resolveModelName();
+function resolveModelName(): string {
+  // Deno edge runtime in production; never throws under vitest.
+  try {
+    const d = (globalThis as { Deno?: { env?: { get(k: string): string | undefined } } })
+      .Deno;
+    if (d?.env?.get) {
+      return d.env.get("GEMINI_RESEARCH_MODEL") ?? "gemini-2.5-flash";
+    }
+  } catch {
+    /* not the edge runtime */
+  }
+  return "gemini-2.5-flash";
+}
 const DEFAULT_TIMEOUT_MS = 4000;
 const SNIPPET_MAX = 400;
 

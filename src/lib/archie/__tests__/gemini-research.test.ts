@@ -55,7 +55,11 @@ describe("Gemini learning source (owner directive 2026-10-18)", () => {
     expect(out.hits[0].snippet).toContain("femto slab");
     expect(out.hits[0].domain).toBe("generativelanguage.googleapis.com");
     // the key rides the query string, model in the URL
-    expect(calledUrl).toContain("gemini-2.0-flash");
+    // BATCH 43: gemini-2.0-flash was retired upstream (404 on
+    // every production call, live-verified 2026-10-21); the
+    // default model now tracks the current stable flash.
+    expect(calledUrl).toContain("gemini-2.5-flash");
+    expect(calledUrl).not.toContain("gemini-2.0-flash");
     expect(calledUrl).toContain("key=test-key");
     expect(out.note).toContain("candidate, not validated");
   });

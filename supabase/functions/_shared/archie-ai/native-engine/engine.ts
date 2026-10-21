@@ -359,6 +359,28 @@ export interface LexiconSenseAnswer {
   domain: string | null;
 }
 
+/** BATCH 43 (live-verified 2026-10-21): the priority-wave
+ *  sites share one composite adapter chain, so the SAME
+ *  300-char child-failure note repeated per site tripled the
+ *  visible reply. Identical notes collapse to one line with
+ *  the affected sites grouped; distinct notes stay separate.
+ *  The full per-site record remains in the machine-readable
+ *  toolRuns metadata. */
+export function summarizeSourceFailures(
+  failures: ReadonlyArray<{ domain: string; note: string }>,
+): string {
+  const byNote = new Map<string, string[]>();
+  for (const f of failures) {
+    const sites = byNote.get(f.note) ?? [];
+    sites.push(f.domain);
+    byNote.set(f.note, sites);
+  }
+  const parts = [...byNote.entries()].map(
+    ([note, sites]) => `${sites.join(", ")} (${note})`,
+  );
+  return parts.join("; ");
+}
+
 export class ArchieNativeEngine implements ArchieRuntime {
   /** Session table — bounded, FIFO-evicted. */
   private sessions = new Map<string, EngineSession>();
@@ -3873,7 +3895,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
           );
           if (report.sourceFailures.length > 0) {
             lines.push(
-              `Failed/declined: ${report.sourceFailures.map((f) => `${f.domain} (${f.note})`).join("; ")}.`,
+              `Failed/declined: ${summarizeSourceFailures(report.sourceFailures)}.`,
             );
           }
           lines.push(

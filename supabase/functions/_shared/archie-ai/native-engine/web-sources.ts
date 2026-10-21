@@ -592,11 +592,15 @@ export class WebSourceRegistry {
         score += (9 - s.authorityLevel) * 0.05 + s.reliability * 0.1;
         // A priority category never leaks into unrelated
         // queries (e.g. pubmed is NOT searched for a CSS
-        // question) unless nothing matched at all.
+        // question). BATCH 43: the old "unless nothing matched
+        // at all" escape let docs.python.org into a
+        // gold-price query (live-verified 2026-10-21) — an
+        // empty subject match is the NORM for natural
+        // questions, not a signal that every registered site
+        // is fair game. Category match + the general
+        // encyclopedia tier, nothing else.
         const related =
-          s.category === category ||
-          s.category === "general-knowledge" ||
-          matched.length === 0;
+          s.category === category || s.category === "general-knowledge";
         return { source: s, score, related };
       })
       .filter((x) => x.related);

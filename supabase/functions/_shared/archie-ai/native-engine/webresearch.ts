@@ -247,6 +247,20 @@ export interface DuckDuckGoLiteAdapterOptions {
  *    / genuinely no results) instead of a silent zero-hit
  *    "search completed".
  *  - retry/backoff on network errors, 429 and 5xx. */
+// CIRCUIT BREAKER (batch 43): DDG's anomaly block is an
+// IP-CLASS refusal, not a per-query flake — every site-scoped
+// priority pass was paying the full retry ladder just to be
+// refused again (live-verified 2026-10-21: three passes, one
+// research call, ~9s of the 12s budget). After 3 consecutive
+// refusals the circuit opens for the life of the isolate and
+// declines instantly with the honest reason; a single success
+// closes it again.
+const ddgCircuit = { consecutiveRefusals: 0 };
+const DDG_CIRCUIT_THRESHOLD = 3;
+export function resetDdgCircuitForTests(): void {
+  ddgCircuit.consecutiveRefusals = 0;
+}
+
 export class DuckDuckGoLiteAdapter implements ResearchAdapter {
   readonly id = "duckduckgo-lite";
   private readonly maxRetries: number;
@@ -263,6 +277,12 @@ export class DuckDuckGoLiteAdapter implements ResearchAdapter {
   }
 
   async search(query: string): Promise<{ hits: ResearchHit[]; note: string }> {
+    if (ddgCircuit.consecutiveRefusals >= DDG_CIRCUIT_THRESHOLD) {
+      return {
+        hits: [],
+        note: `search declined: anomaly-protection circuit open (${ddgCircuit.consecutiveRefusals} consecutive refusals) — this client class is blocked by the endpoint`,
+      };
+    }
     let lastNetworkNote = "";
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       if (attempt > 0) {
@@ -302,6 +322,7 @@ export class DuckDuckGoLiteAdapter implements ResearchAdapter {
         // the composite can fall through to the next adapter,
         // never reported as drift and never as a real search.
         if (res.status === 202 || /anomaly/i.test(html.slice(0, 4000))) {
+          ddgCircuit.consecutiveRefusals += 1;
           return {
             hits: [],
             note: `search endpoint refused this client: anomaly protection (status ${res.status}) — server/datacenter traffic is blocked, not a markup drift`,
@@ -315,6 +336,7 @@ export class DuckDuckGoLiteAdapter implements ResearchAdapter {
         }
         return { hits: [], note };
       }
+      ddgCircuit.consecutiveRefusals = 0;
       return { hits, note: "search completed" };
     }
     return {

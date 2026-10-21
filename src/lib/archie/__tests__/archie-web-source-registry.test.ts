@@ -123,6 +123,20 @@ describe("intelligent source selection", () => {
     );
   });
 
+  // BATCH 43 regression (live-verified 2026-10-21): the old
+  // "nothing matched at all" escape let unrelated-category
+  // sites (docs.python.org) into general-knowledge queries.
+  it("a general-knowledge question with no subject-keyword match never selects programming docs", () => {
+    const registry = new WebSourceRegistry();
+    const selection = registry.select("current price of gold");
+    expect(selection.category).toBe("general-knowledge");
+    const domains = selection.sources.map((s) => s.domain);
+    expect(domains).not.toContain("docs.python.org");
+    expect(domains).not.toContain("stackoverflow.com");
+    expect(domains).not.toContain("nodejs.org");
+    expect(domains.length).toBeGreaterThan(0);
+  });
+
   it("a security question selects security sources — NOT pubmed or python docs", () => {
     const registry = new WebSourceRegistry();
     const selection = registry.select(

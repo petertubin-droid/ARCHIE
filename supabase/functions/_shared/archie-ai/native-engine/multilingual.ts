@@ -133,6 +133,11 @@ const LATIN_SETS: Record<
       "daadaa", "dára", "oḍọ", "ese", "eṣé", "oḍo", "wa", "wá",
       "nla", "ńlá", "pupọ", "púpọ̀", "gbogbo", "yẹn", "yìí", "mi",
       "ọkọ", "iyawo", "ìyàwó", "kú", "ọdún", "ojo", "ọjọ́",
+      // BATCH 43 recall expansion (live probes 2026-10-21):
+      // the most common everyday question words were missing.
+      "ta", "yi", "ile", "olú", "olo", "oruko", "orúkọ", "jẹ",
+      "jẹ́", "nlo", "ńlọ", "wo", "gbọ", "gbọ́", "nkan", "ńkàn",
+      "owo", "owó", "ṣílẹ̀", "sile", "lọ",
     ]),
   },
   ig: {
@@ -142,6 +147,9 @@ const LATIN_SETS: Record<
       "kedu", "ọ", "gịnị", "biko", "daa", "nke", "m", "mụ", "anyị",
       "unu", "ha", "nkịta", "mmadụ", "eze", "chi", "ukwu", "ọma",
       "ọjọọ", "ụbọchị", "taa", "echi", "ọga", "eze", "ụlọ", "ahịa",
+      // BATCH 43 recall expansion: name/house/who/how tokens
+      // that dominate everyday Igbo questions.
+      "aha", "ulo", "onye", "olee", "kê", "mgbe", "ego",
     ]),
   },
   ha: {
@@ -193,11 +201,19 @@ export function detectLanguage(message: string): LanguageDetection {
     return { language: "en", confidence: 0, method: "default-english" };
   }
   const scores = new Map<string, number>();
+  // LENGTH-NORMALIZED (batch 43): these sets are function-word
+  // lists; a raw hits/tokens ratio DILUTES as the sentence
+  // grows, so natural 8+ word questions in Yoruba scored below
+  // threshold while 4-word ones passed (live-verified
+  // 2026-10-21). Scoring normalizes to the first 8 tokens —
+  // the function-word density of a natural question — capped
+  // at 1. A distinctive language still has to beat English.
+  const denominator = Math.min(tokens.length, 8);
   for (const setKey of Object.keys(LATIN_SETS)) {
     const { words } = LATIN_SETS[setKey];
     let hits = 0;
     for (const t of tokens) if (words.has(t)) hits++;
-    scores.set(setKey, hits / tokens.length);
+    scores.set(setKey, Math.min(hits / denominator, 1));
   }
   // English wins ties and low-confidence cases — never attach a
   // foreign notice to an ambiguous or short English message.

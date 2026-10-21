@@ -11,12 +11,13 @@
 // silent again.
 // =========================================================
 
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   DuckDuckGoLiteAdapter,
   ResearchPipeline,
+  resetDdgCircuitForTests,
   type ResearchAdapter,
 } from "@studio-shared/archie-ai/native-engine/webresearch.ts";
 import { FactStore } from "@studio-shared/archie-ai/native-engine/knowledge.ts";
@@ -39,6 +40,12 @@ function jsonResponse(status: number): Response {
     headers: { "content-type": "application/json" },
   });
 }
+
+// BATCH 43: the DDG anomaly circuit breaker is module state;
+// every test starts with a closed circuit.
+beforeEach(() => {
+  resetDdgCircuitForTests();
+});
 
 describe("DuckDuckGoLiteAdapter — quote/order-flexible parsing (drift regression)", () => {
   it("parses hits from the REAL live page markup (old parser: 0 hits)", () => {
@@ -325,5 +332,71 @@ describe("batch 12 — research honesty + bounded cache", () => {
     await pipeline.research("topic number 0 screeding");
     await pipeline.research("topic number 69 screeding");
     expect(calls).toBe(71); // only the evicted one re-searched
+  });
+});
+
+// ============================================================
+// BATCH 43 — DDG ANOMALY-PROTECTION CIRCUIT BREAKER
+// The anomaly block is an IP-class refusal; after 3
+// consecutive refusals the adapter must decline instantly
+// (no fetch, no retry backoff) and a single success must
+// close the circuit again.
+// ============================================================
+
+describe("DDG-lite anomaly circuit breaker", () => {
+  const refusalResponse = (): Response =>
+    // status 202 + anomaly challenge, as captured live
+    okResponse("<html><body>anomaly protection challenge</body></html>", 202);
+
+  it("opens after 3 consecutive refusals and declines without fetching", async () => {
+    resetDdgCircuitForTests();
+    const fetched: number[] = [];
+    const fetchFn = async (_url: unknown, _init?: unknown): Promise<Response> => {
+      fetched.push(1);
+      return refusalResponse();
+    };
+    const sleeps: number[] = [];
+    const adapter = new DuckDuckGoLiteAdapter({
+      fetchFn: fetchFn as unknown as typeof fetch,
+      sleepFn: async (ms) => {
+        sleeps.push(ms);
+      },
+      maxRetries: 0,
+    });
+    const r1 = await adapter.search("gold price");
+    expect(r1.note).toContain("anomaly protection");
+    await adapter.search("gold price");
+    await adapter.search("gold price");
+    expect(fetched.length).toBe(3);
+    // circuit now open: 4th call declines without fetching
+    const r4 = await adapter.search("gold price");
+    expect(r4.hits.length).toBe(0);
+    expect(r4.note).toContain("circuit open");
+    expect(fetched.length).toBe(3);
+  });
+
+  it("a single success closes the circuit", async () => {
+    resetDdgCircuitForTests();
+    let calls = 0;
+    const fetchFn = async (_url: unknown, _init?: unknown): Promise<Response> => {
+      calls += 1;
+      // calls 1-2 refused, call 3 succeeds with the real
+      // captured page shape, call 4 refused again
+      if (calls === 3) return okResponse(fixture("ddg-lite-results.html"));
+      return refusalResponse();
+    };
+    const adapter = new DuckDuckGoLiteAdapter({
+      fetchFn: fetchFn as unknown as typeof fetch,
+      sleepFn: async () => {},
+      maxRetries: 0,
+    });
+    await adapter.search("a");
+    await adapter.search("b");
+    const ok = await adapter.search("c");
+    expect(ok.hits.length).toBeGreaterThan(0);
+    // circuit closed: a refusal counts from zero again
+    const refused = await adapter.search("d");
+    expect(refused.note).toContain("anomaly protection");
+    expect(refused.note).not.toContain("circuit open");
   });
 });

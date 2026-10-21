@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 // =========================================================
 // REAL PAGE FETCHING (audit Phase 2.2): robots.txt
 // compliance, hard timeouts, size caps, content extraction,
@@ -16,6 +16,7 @@ import {
   robotsPermits,
 } from "@studio-shared/archie-ai/native-engine/page-fetch.ts";
 import { FactStore } from "@studio-shared/archie-ai/native-engine/knowledge.ts";
+import { resetDdgCircuitForTests } from "@studio-shared/archie-ai/native-engine/webresearch.ts";
 import {
   ResearchAdapter,
   ResearchHit,
@@ -26,6 +27,13 @@ import { WebSourceRegistry } from "@studio-shared/archie-ai/native-engine/web-so
 // ---------------------------------------------------------
 // robots.txt parsing
 // ---------------------------------------------------------
+// BATCH 43: the DDG anomaly circuit breaker is module
+// state; each test starts with it closed so an earlier
+// suite's refusals cannot leak into this file's expectations.
+beforeEach(() => {
+  resetDdgCircuitForTests();
+});
+
 describe("parseRobots", () => {
   it("reads the User-agent: * group and ignores other agents' rules", () => {
     const rules = parseRobots(

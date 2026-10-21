@@ -64,6 +64,33 @@ describe("detectLanguage — Latin script wordlist detection", () => {
     // one foreign word in an English sentence is not a language
     expect(detectLanguage("What is the meaning of bonjour in English?").language).toBe("en");
   });
+
+  // BATCH 43 recall regression (live-verified 2026-10-21):
+  // raw hits/tokens dilution let natural long questions slip
+  // below threshold; scoring is now normalized to 8 tokens.
+  it("long Yoruba question detects despite content-word dilution", () => {
+    expect(detectLanguage("Bawo ni o se n wo owo riri nile yi ojoojumọ?").language).toBe("yo");
+  });
+
+  it("short common Yoruba question detects", () => {
+    expect(detectLanguage("Ta ni olo ile yi?").language).toBe("yo");
+    expect(detectLanguage("Kini oruko ile yi?").language).toBe("yo");
+  });
+
+  it("everyday Igbo question detects", () => {
+    expect(detectLanguage("Kedu aha ulo yi?").language).toBe("ig");
+  });
+
+  it("long English sentence stays English", () => {
+    expect(
+      detectLanguage("Please tell me what the current price of gold is today in the market")
+        .language,
+    ).toBe("en");
+  });
+
+  it("English with a stray foreign function word stays English", () => {
+    expect(detectLanguage("I know the water ni the river flows deep today").language).toBe("en");
+  });
 });
 
 describe("detectLanguage — script detection", () => {
