@@ -114,6 +114,19 @@ jobs:
               )
               print(f"applied {version}")
           print("migrations reconciled")
+
+          # STANDARD GRANT REPAIR (forensic audit 2026-10-20):
+          # migrations applied via the Management API run as the
+          # table owner without the CLI's automatic grants, so
+          # tables created on that path are invisible to
+          # service_role/authenticated/anon until re-granted.
+          # Re-run the idempotent grant repair after every
+          # reconcile so drift can never accumulate again.
+          repair = open(
+              "supabase/migrations/20261020054500_repair_standard_role_grants.sql"
+          ).read()
+          query(repair)
+          print("standard role grants repaired")
           PYEOF
 
       - name: Deploy every archie-* + ai-* function (Freluxtools only — Frelukx disconnected 2026-09-13, left intact)
