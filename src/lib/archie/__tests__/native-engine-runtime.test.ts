@@ -139,7 +139,7 @@ describe("Engine inference (end-to-end)", () => {
     // epistemic MARKER, not the connective wording.
     expect(text).toMatch(/validated knowledge/i);
     // OWNER DIRECTIVE (2026-09-16): plain answers, no fact counts.
-    expect(text).toMatch(/found nothing/i);
+    expect(text).toMatch(/ask me to research it, or teach me the answer directly/);
     expect(text).toMatch(/research|teach/i);
   });
 
@@ -171,7 +171,7 @@ describe("Engine inference (end-to-end)", () => {
       const text = result.parts[0].text ?? "";
       // the honest unknown line still stands — generation
       // APPENDS, it never replaces the epistemic truth.
-      expect(text).toMatch(/found nothing/i);
+      expect(text).toMatch(/ask me to research it, or teach me the answer directly/);
       // the generated content is present AND labeled.
       expect(text).toContain("42K");
       expect(text).toMatch(/GENERATED/);
@@ -199,7 +199,7 @@ describe("Engine inference (end-to-end)", () => {
         systemInstruction: "",
       });
       const text = result.parts[0].text ?? "";
-      expect(text).toMatch(/found nothing/i);
+      expect(text).toMatch(/ask me to research it, or teach me the answer directly/);
       expect(text).not.toMatch(/GENERATED/);
       expect(text).not.toContain("should never appear");
     } finally {
@@ -222,7 +222,7 @@ describe("Engine inference (end-to-end)", () => {
         ownerAuthorized: true,
       });
       const text = result.parts[0].text ?? "";
-      expect(text).toMatch(/found nothing/i);
+      expect(text).toMatch(/ask me to research it, or teach me the answer directly/);
       expect(text).not.toMatch(/GENERATED/);
     } finally {
       globalThis.fetch = realFetch;

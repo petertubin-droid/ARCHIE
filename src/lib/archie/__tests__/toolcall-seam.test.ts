@@ -97,7 +97,7 @@ describe("toolCall seam (C1 / plan P1)", () => {
     expect(call?.name ?? "none").not.toBe("sentry_diagnostics");
   });
 
-  it("a trailing toolResult composes the final answer from REAL output, verbatim + provenance-labeled", async () => {
+  it("a trailing toolResult composes the final answer from REAL output, clean professional text", async () => {
     const engine = new ArchieNativeEngine();
     const result = await engine.generate({
       turns: [
@@ -134,7 +134,9 @@ describe("toolCall seam (C1 / plan P1)", () => {
     const text = result.parts.map((p) => p.text ?? "").join("\n");
     expect(result.parts.find((p) => p.toolCall)).toBeUndefined();
     expect(text).toContain("9,200 NGN per bag");
-    expect(text).toContain("market_intelligence tool — real system output");
+    // OWNER DIRECTIVE (2026-10-21): professional replies — no
+    // self-referential footer; the real output itself is the answer.
+    expect(text).not.toContain("[Source:");
     expect(result.finishReason).toBe("COMPLETE");
   });
 

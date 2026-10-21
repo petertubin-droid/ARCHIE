@@ -26,6 +26,7 @@
 //   * No secrets in, no secrets out.
 // =========================================================
 
+import { professionalText } from "../_shared/archie-ai/text-hygiene.ts";
 import { verifyAuthorityJwt } from "../_shared/archie-ai/security/cross-project-auth.ts";
 import { createClient, User } from "npm:@supabase/supabase-js@2.45.4";
 import {
@@ -485,7 +486,9 @@ const SECRET_PATTERNS = [
 function sanitize(text: string): string {
   let out = text;
   for (const p of SECRET_PATTERNS) out = out.replace(p, "[redacted]");
-  return out;
+  // Professional voice gate (owner directive 2026-10-21): every
+  // outbound text, whichever path produced it, leaves clean.
+  return professionalText(out);
 }
 
 // =========================================================

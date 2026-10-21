@@ -47,13 +47,13 @@ const KNOWLEDGE_OPENINGS = [
   "From my validated knowledge:",
   "Here is what I hold as validated knowledge on that:",
   "What my validated knowledge store says (with provenance):",
-  "Straight from my validated knowledge, with provenance:",
+  "Validated knowledge, with provenance:",
 ];
 
 const HOWTO_FOOTERS = [
-  "If you need deeper steps than this, say so — I will plan the work and report any capability gaps honestly.",
-  "Want this broken into a full step-by-step plan? Ask and I will plan it — and report honestly where my capabilities end.",
-  "I can take this deeper: say the word and I will plan the full work, flagging any capability gaps up front.",
+  "For a full step-by-step plan, just ask.",
+  "A detailed plan can be prepared on request.",
+  "Ask if you want this expanded into a complete plan.",
 ];
 
 // P8 derived-vs-taught: openings for answers that cite
