@@ -11,6 +11,7 @@
 import { useState, useEffect } from "react";
 import { Sparkles, Sliders, Volume2, ShieldCheck, Palette, X, Check } from "lucide-react";
 import { ArchieButton, ArchieGhostButton } from "./premium";
+import { loadPersonalization as loadCloudPersonalization, savePersonalization as saveCloudPersonalization } from "@/lib/archie/personalization-store";
 
 export interface PersonalizationConfig {
   accentColor: "gold" | "violet" | "emerald" | "sapphire";
@@ -53,29 +54,43 @@ export function savePersonalization(cfg: PersonalizationConfig) {
 export default function PersonalizationModal({
   isOpen,
   onClose,
+  userId,
 }: {
   isOpen: boolean;
   onClose: () => void;
+  userId?: string;
 }) {
   const [cfg, setCfg] = useState<PersonalizationConfig>(loadPersonalization);
   const [savedMessage, setSavedMessage] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     if (isOpen) {
       setCfg(loadPersonalization());
       setSavedMessage(false);
+      setLoadError("");
+      if (userId) {
+        void loadCloudPersonalization(userId).then((cloud) => {
+          if (cloud) { setCfg({ ...DEFAULT_CONFIG, ...cloud }); document.documentElement.dataset.archieAccent = cloud.accentColor; }
+        }).catch(() => setLoadError("Cloud preferences are unavailable. Cached preferences are shown."));
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, userId]);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    savePersonalization(cfg);
-    setSavedMessage(true);
-    setTimeout(() => {
-      setSavedMessage(false);
-      onClose();
-    }, 600);
+  const handleSave = async () => {
+    setSaving(true);
+    setLoadError("");
+    try {
+      if (userId) await saveCloudPersonalization(userId, cfg);
+      savePersonalization(cfg);
+      setSavedMessage(true);
+      setTimeout(() => { setSavedMessage(false); onClose(); }, 600);
+    } catch (error) {
+      setLoadError(error instanceof Error ? `Could not save preferences: ${error.message}` : "Could not save preferences.");
+    } finally { setSaving(false); }
   };
 
   return (
@@ -99,6 +114,8 @@ export default function PersonalizationModal({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {loadError && <p role="alert" className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-200">{loadError}</p>}
 
         <div className="mt-5 space-y-5">
           {/* Accent Color */}
@@ -204,13 +221,13 @@ export default function PersonalizationModal({
 
         <div className="mt-6 flex items-center justify-end gap-3 border-t border-white/10 pt-4">
           <ArchieGhostButton onClick={onClose}>Cancel</ArchieGhostButton>
-          <ArchieButton onClick={handleSave} className="flex items-center gap-1.5">
+          <ArchieButton onClick={() => void handleSave()} disabled={saving} className="flex items-center gap-1.5">
             {savedMessage ? (
               <>
                 <Check className="h-4 w-4" /> Applied!
               </>
             ) : (
-              "Save Preferences"
+              saving ? "Saving…" : "Save Preferences"
             )}
           </ArchieButton>
         </div>

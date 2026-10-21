@@ -124,6 +124,7 @@ vi.mock("@/lib/archie/mobile/owner-authorization", () => ({
 }));
 
 import Assistant from "@/pages/Assistant";
+import { listConversations, listMessages } from "@/lib/archie/chat-client";
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -159,6 +160,25 @@ describe("Assistant page — the PWA front door (2026-10-20 full-screen chat)", 
     expect(
       container.querySelector('[data-testid="archie-empty-state"]'),
     ).toBeTruthy();
+  });
+
+
+  it("restores the last saved conversation and its database messages", async () => {
+    const conversation = {
+      id: "conversation-1",
+      title: "Saved work",
+      archived: false,
+      last_message_at: "2026-10-21T00:00:00Z",
+      created_date: "2026-10-20T00:00:00Z",
+    };
+    vi.mocked(listConversations).mockResolvedValue([conversation]);
+    vi.mocked(listMessages).mockResolvedValue([
+      { id: "m1", conversation_id: conversation.id, role: "owner", content: "Remember this", attachments: [], tool_runs: [], engine: "system", created_date: "2026-10-21T00:00:00Z" },
+      { id: "m2", conversation_id: conversation.id, role: "archie", content: "I have restored it", attachments: [], tool_runs: [], engine: "archie-native", created_date: "2026-10-21T00:01:00Z" },
+    ] as never);
+    render(<Assistant />);
+    expect(await screen.findByText("Saved work")).toBeTruthy();
+    expect(await screen.findByText("I have restored it")).toBeTruthy();
   });
 
   it("renders all four feature tabs", async () => {

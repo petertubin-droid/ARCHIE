@@ -81,10 +81,9 @@ describe("ARCHIE PWA — legal & AI-disclosure surfaces", () => {
     expect(layout).toContain("archie-ai-disclosure-ack");
   });
 
-  it("carries the legal footer: governance + memory rights + FRENZY copyright", () => {
-    expect(layout).toContain("Legal &amp; Governance");
-    expect(layout).toContain("Privacy &amp; Memory Rights");
-    expect(layout).toContain("© 2026 FRENZY. All rights reserved.");
+  it("keeps legal routes available without rendering the removed footer", () => {
+    expect(layout).not.toContain("© 2026 FRENZY. All rights reserved.");
+    expect(layout).not.toContain("<footer");
   });
 
   // Same gate: skipped only when the host router file is absent (standalone

@@ -219,7 +219,7 @@ export default function ArchieLayout() {
   const { user } = useAuth();
   const location = useLocation();
   // AI transparency (AI Disclosure doc): one-time notice,
-  // permanently discoverable in the footer links.
+  // permanently discoverable through Legal & Privacy navigation.
   const [disclosureAck, setDisclosureAck] = useState(true);
   const [online, setOnline] = useState(true);
   const [updateReady, setUpdateReady] = useState(false);
@@ -466,20 +466,6 @@ export default function ArchieLayout() {
         </main>
       </div>
 
-      {/* Legal & governance links — §12 access without
-          cluttering the primary interface. */}
-      <footer className="border-t border-white/5 px-4 pb-4 pt-3 text-center text-[11px] text-slate-500">
-        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-          <Link to="/archie/legal" className="rounded archie-focusable hover:text-slate-300">
-            Legal &amp; Governance
-          </Link>
-          <span aria-hidden>·</span>
-          <Link to="/archie/privacy" className="rounded archie-focusable hover:text-slate-300">
-            Privacy &amp; Memory Rights
-          </Link>
-        </div>
-        <p className="mt-1.5">© 2026 FRENZY. All rights reserved.</p>
-      </footer>
       {/* Mobile hamburger drawer — every ARCHIE section, one menu */}
       {menuOpen && (
         <div className="fixed inset-0 z-50 md:hidden" data-testid="archie-drawer">
@@ -531,6 +517,11 @@ export default function ArchieLayout() {
                   ))}
                 </div>
               ))}
+              <div className="mt-4 border-t border-white/10 pt-3">
+                <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Trust &amp; Privacy</p>
+                <Link to="/archie/legal" onClick={closeMenu} className="archie-focusable block rounded-lg px-3 py-2 text-sm text-slate-400 hover:bg-white/[0.04] hover:text-slate-200">Legal &amp; Governance</Link>
+                <Link to="/archie/privacy" onClick={closeMenu} className="archie-focusable block rounded-lg px-3 py-2 text-sm text-slate-400 hover:bg-white/[0.04] hover:text-slate-200">Privacy &amp; Memory Rights</Link>
+              </div>
               <a
                 href="/"
                 className="archie-focusable mt-3 flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-500 transition-colors hover:text-slate-300"
@@ -557,6 +548,7 @@ export default function ArchieLayout() {
       <PersonalizationModal
         isOpen={personalizeOpen}
         onClose={() => setPersonalizeOpen(false)}
+        userId={user?.id}
       />
     </div>
   );

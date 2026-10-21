@@ -172,6 +172,8 @@ export default function Assistant() {
   const [convOpen, setConvOpen] = useState(false);
   const [listening, setListening] = useState(false);
   const voiceBufferRef = useRef<string[]>([]);
+  const restoredConversationUserRef = useRef<string | null>(null);
+  const conversationsLoadedForUserRef = useRef<string | null>(null);
 
   const [consents, setConsents] = useState<Record<
     ArchieMobileCapability,
@@ -217,6 +219,13 @@ export default function Assistant() {
   const [authTrail, setAuthTrail] = useState<OwnerAuthorizationRecord[]>([]);
 
   const userId = user?.id;
+  useEffect(() => {
+    setActiveConv(null);
+    setMessages([]);
+    setConversations([]);
+    restoredConversationUserRef.current = null;
+    conversationsLoadedForUserRef.current = null;
+  }, [userId]);
   useEffect(() => {
     let cancelled = false;
     if (!userId) {
@@ -403,8 +412,10 @@ export default function Assistant() {
           ? await searchConversations(term)
           : await listConversations();
         setConversations(list);
+        conversationsLoadedForUserRef.current = userId ?? null;
       } catch {
         setConversations([]); // honest boundary — the list stays empty
+        conversationsLoadedForUserRef.current = userId ?? null;
       }
     },
     [user],
@@ -415,8 +426,27 @@ export default function Assistant() {
     void loadConversations(convSearch.trim());
   }, [isPrivileged, convSearch, loadConversations]);
 
+  // Restore the user's last selected thread from the database-backed list.
+  // localStorage contains only the thread id; messages are always reloaded from RLS-scoped database rows.
+  useEffect(() => {
+    if (!isPrivileged || !userId || restoredConversationUserRef.current === userId) return;
+    if (conversationsLoadedForUserRef.current !== userId || conversations.length === 0) return;
+    restoredConversationUserRef.current = userId;
+    let preferredId: string | null = null;
+    try { preferredId = localStorage.getItem(`archie:last-conversation:${userId}`); } catch { /* optional convenience */ }
+    const chosen = conversations.find((conversation) => conversation.id === preferredId) ?? conversations[0];
+    setActiveConv(chosen);
+    void listMessages(chosen.id).then((rows) => {
+      setMessages(rows.map((row) => ({
+        role: row.role === "owner" ? "user" as const : row.role as "archie" | "system",
+        text: row.content,
+      })));
+    }).catch(() => setError("Your saved conversation could not be restored. Try opening it from Conversations."));
+  }, [isPrivileged, userId, conversations]);
+
   async function openConversation(conv: ArchieConversation) {
     setActiveConv(conv);
+    try { if (userId) localStorage.setItem(`archie:last-conversation:${userId}`, conv.id); } catch { /* optional convenience */ }
     setConvOpen(false);
     try {
       const rows = await listMessages(conv.id);
@@ -438,6 +468,7 @@ export default function Assistant() {
     try {
       const conv = await createConversation("Assistant chat");
       setActiveConv(conv);
+      try { if (userId) localStorage.setItem(`archie:last-conversation:${userId}`, conv.id); } catch { /* optional convenience */ }
       setConvOpen(false);
       setMessages([]);
       void loadConversations(convSearch.trim());
@@ -502,6 +533,7 @@ export default function Assistant() {
       if (!conv) {
         conv = await createConversation("Assistant chat");
         setActiveConv(conv);
+        try { if (userId) localStorage.setItem(`archie:last-conversation:${userId}`, conv.id); } catch { /* optional convenience */ }
       }
       const history = messages
         .filter((m) => m.role !== "system")
@@ -834,7 +866,7 @@ export default function Assistant() {
     // the bottom. ARCHIE answers only when a chat is initiated.
     <div
       data-testid="archie-fullscreen-chat"
-      className="mx-auto flex h-[calc(100dvh-8.5rem)] w-full max-w-2xl flex-col font-sans text-slate-100 md:h-[calc(100dvh-7.5rem)]"
+      className="mx-auto flex h-[calc(100dvh-4.5rem)] w-full max-w-4xl flex-col font-sans text-slate-100 md:h-[calc(100dvh-4rem)]"
     >
 
       {(error || notice) && (
@@ -897,12 +929,12 @@ export default function Assistant() {
       {/* ------------------------------------------------- */}
       {tab === "assistant" && (
         <div
-          className="flex min-h-0 flex-1 flex-col gap-2"
+          className="flex min-h-0 flex-1 flex-col gap-3"
           data-testid="archie-assistant"
         >
           {/* TRANSCRIPT — owns the viewport, scrolls internally */}
           <div
-            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-xl border bg-card p-3"
+            className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-gradient-to-b from-slate-950/80 via-slate-950/55 to-slate-900/70 p-4 shadow-inner shadow-black/20"
             data-testid="archie-transcript"
           >
             {messages.length === 0 && (
@@ -920,15 +952,24 @@ export default function Assistant() {
               <div
                 key={i}
                 className={classNames(
-                  "max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm",
-                  m.role === "user"
-                    ? "ml-auto bg-primary text-primary-foreground"
-                    : m.role === "system"
-                      ? "w-full bg-transparent px-0 py-0 text-center text-xs italic text-muted-foreground"
-                      : "bg-muted text-foreground",
+                  "group flex w-full items-end gap-2 animate-in fade-in slide-in-from-bottom-1 duration-200",
+                  m.role === "user" ? "justify-end" : "justify-start",
                 )}
               >
-                {m.text}
+                {m.role === "archie" && <div className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-amber-300/20 bg-amber-300/10 text-[10px] font-bold text-amber-200">A</div>}
+                <div
+                  className={classNames(
+                    "max-w-[min(88%,42rem)] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ring-1 ring-inset",
+                    m.role === "user"
+                      ? "rounded-br-md bg-gradient-to-br from-amber-300 to-amber-500 text-slate-950 ring-amber-200/30"
+                      : m.role === "system"
+                        ? "w-full bg-transparent px-0 py-1 text-center text-xs italic text-muted-foreground shadow-none ring-0"
+                        : "rounded-bl-md bg-slate-900/80 text-slate-100 ring-white/10",
+                  )}
+                >
+                  {m.role !== "system" && <div className={classNames("mb-1 text-[10px] font-semibold uppercase tracking-[0.14em]", m.role === "user" ? "text-slate-900/55" : "text-amber-200/70")}>{m.role === "user" ? "You" : "ARCHIE"}</div>}
+                  {m.text}
+                </div>
               </div>
             ))}
           </div>
