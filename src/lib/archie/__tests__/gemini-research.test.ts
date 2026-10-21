@@ -64,6 +64,22 @@ describe("Gemini learning source (owner directive 2026-10-18)", () => {
     expect(out.note).toContain("candidate, not validated");
   });
 
+  // BATCH 43: 2.5-flash thinking blows the 4s edge budget; the
+  // research lookup must disable thinking explicitly.
+  it("disables thinking for the latency-critical research lookup", async () => {
+    let body = "";
+    const a = mk({
+      apiKey: "test-key",
+      fetchFn: ((_url: string, init?: RequestInit) => {
+        body = String(init?.body);
+        return Promise.resolve(res(geminiBody("fast answer")));
+      }) as unknown as typeof fetch,
+    });
+    await a.search("what is a femto slab");
+    expect(body).toContain('"thinkingBudget":0');
+    expect(JSON.parse(body).generationConfig.thinkingConfig.thinkingBudget).toBe(0);
+  });
+
   it("a network/timeout failure is a failure note (falls through)", async () => {
     const a = mk({
       apiKey: "test-key",

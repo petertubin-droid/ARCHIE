@@ -146,7 +146,15 @@ export class GeminiResearchAdapter implements ResearchAdapter {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: knowledgePrompt(query) }] }],
-            generationConfig: { temperature: 0 },
+            // BATCH 43 (live-verified 2026-10-21): 2.5-flash is a
+            // thinking model; default thinking blew the 4s edge
+            // budget (TimeoutError) where non-thinking 2.0-flash
+            // fit. This is a latency-critical single-fact lookup,
+            // so thinking is disabled for it.
+            generationConfig: {
+              temperature: 0,
+              thinkingConfig: { thinkingBudget: 0 },
+            },
           }),
           signal: AbortSignal.timeout(this.timeoutMs),
         },
