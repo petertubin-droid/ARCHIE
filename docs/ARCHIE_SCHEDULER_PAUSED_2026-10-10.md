@@ -1,5 +1,12 @@
 # ARCHIE Scheduler — PAUSED (2026-10-10)
 
+> **SUPERSEDED 2026-10-21 (batch 40):** the heartbeat is
+> resumed, now provably Gemini-free — the maintenance
+> function hard-disables the Gemini research adapter for its
+> entire invocation, and every pass is deterministic DB work.
+> See migration 20261021084500 and the DR runbook (R3).
+> The pause below is kept as history.
+
 ## Status
 
 The hourly ARCHIE maintenance cron (`archie-maintenance-hourly`, defined in

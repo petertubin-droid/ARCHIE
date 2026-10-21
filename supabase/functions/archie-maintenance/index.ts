@@ -45,6 +45,7 @@ import type { SupabaseLike } from "../_shared/archie-ai/native-engine/persistenc
 import { runTuningCycle } from "../_shared/archie-ai/cognitive/self-tuning.ts";
 import { runObservabilityPass } from "../_shared/archie-ai/cognitive/observability.ts";
 import { runBriefingPass } from "../_shared/archie-ai/cognitive/briefing.ts";
+import { isGeminiResearchEnabled, setGeminiResearchEnabled } from "../_shared/archie-ai/native-engine/gemini-research.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -236,7 +237,19 @@ serveWithCors(async (req: Request) => {
     return json(400, { error: `Unknown mode: ${mode}` });
   }
 
-  const result: Record<string, unknown> = { mode };
+  // OWNER DIRECTIVE 2026-10-21: the scheduled heartbeat must
+  // NOT consume Gemini quota. Gemini research is hard-disabled
+  // for the ENTIRE invocation (every mode) BEFORE any pass
+  // runs and restored after, so even a future maintenance
+  // mode that reaches the research chain can never spend
+  // model quota. The guard state is reported in the result:
+  // quota-free is verified, not claimed.
+  const geminiWasEnabled = isGeminiResearchEnabled();
+  setGeminiResearchEnabled(false);
+  const result: Record<string, unknown> = {
+    mode,
+    gemini_research: "disabled for maintenance pass (quota-free by construction)",
+  };
   let ok = true;
   try {
     if (mode === "consolidate" || mode === "all") {
@@ -285,6 +298,11 @@ serveWithCors(async (req: Request) => {
   } catch (err) {
     ok = false;
     result.error = `maintenance pass failed honestly: ${(err as Error).message}`;
+  } finally {
+    // Restore the isolate's guard state even on failure —
+    // the disable is scoped to this invocation, never leaking
+    // into any other request the isolate serves.
+    setGeminiResearchEnabled(geminiWasEnabled);
   }
   await logRun(mode, ok, JSON.stringify(result).slice(0, 500));
   return json(ok ? 200 : 500, { ok, ...result });

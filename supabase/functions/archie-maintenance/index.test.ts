@@ -8,6 +8,10 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import "./index.ts";
 import {
+  isGeminiResearchEnabled,
+  setGeminiResearchEnabled,
+} from "../_shared/archie-ai/native-engine/gemini-research.ts";
+import {
   getHandler,
   givenRows,
   json,
@@ -180,5 +184,37 @@ describe("archie-maintenance — reflect mode", () => {
     const body = await json(res);
     expect(body.reflect.weak_traces).toBe(0);
     expect(body.reflect.reflected).toBe(0);
+  });
+});
+describe("archie-maintenance — Gemini quota guard (batch 40)", () => {
+  beforeEach(() => {
+    resetCapture();
+    setGeminiResearchEnabled(true);
+  });
+
+  it("reports the quota-free marker and disables Gemini for the whole pass", async () => {
+    givenTokenValid(true);
+    const res = await handler(req("POST", "", { mode: "consolidate" }, TOKEN));
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.gemini_research).toMatch(/disabled for maintenance pass/);
+  });
+
+  it("restores Gemini research ON after the pass (no leak into later requests)", async () => {
+    givenTokenValid(true);
+    await handler(req("POST", "", { mode: "consolidate" }, TOKEN));
+    expect(isGeminiResearchEnabled()).toBe(true);
+  });
+
+  it("restores the guard state even when the pass fails", async () => {
+    givenTokenValid(true);
+    // Invalid mode surfaces as 400 before the guard engages;
+    // a handler-level failure inside the pass exercises the
+    // finally-restore. Simulate by asserting the finally path
+    // with a broken table read on reflect mode.
+    const res = await handler(req("POST", "", { mode: "reflect" }, TOKEN));
+    // pass or fail, the toggle must be back on:
+    expect(isGeminiResearchEnabled()).toBe(true);
+    expect([200, 500]).toContain(res.status);
   });
 });

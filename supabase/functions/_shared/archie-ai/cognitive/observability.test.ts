@@ -25,6 +25,8 @@ function baseSignals(over: Partial<ObservabilitySignals> = {}): ObservabilitySig
     taskFailed: 0,
     calibrationKeys: [],
     tuningDecisions: 0,
+    secretRotationOverdue: [],
+    secretsTracked: 0,
     ...over,
   };
 }
@@ -231,5 +233,65 @@ describe("runObservabilityPass — lifecycle + snapshot", () => {
     const b = await runObservabilityPass(mk().client);
     expect(a.alerts).toEqual(b.alerts);
     expect(a.metrics).toEqual(b.metrics);
+  });
+});
+
+describe("secrets rotation detection (audit gap F-6, batch 40)", () => {
+  it("A6 alert fires per overdue secret with honest day counts", () => {
+    const alerts = evaluateAlerts(
+      baseSignals({
+        secretRotationOverdue: [
+          { name: "BINANCE_API_KEY", daysOverdue: 12 },
+          { name: "GEMINI_API_KEY", daysOverdue: 3 },
+        ],
+        secretsTracked: 4,
+      }),
+    );
+    const a6 = alerts.filter((a) => a.code.startsWith("A6_SECRET_ROTATION_OVERDUE"));
+    expect(a6.map((a) => a.code).sort()).toEqual([
+      "A6_SECRET_ROTATION_OVERDUE:BINANCE_API_KEY",
+      "A6_SECRET_ROTATION_OVERDUE:GEMINI_API_KEY",
+    ]);
+    expect(a6.every((a) => a.severity === "WARNING")).toBe(true);
+    expect(a6[0].message).toContain("12 day(s)");
+  });
+
+  it("no A6 alerts when every tracked secret is within interval", () => {
+    const alerts = evaluateAlerts(
+      baseSignals({ secretsTracked: 3, secretRotationOverdue: [] }),
+    );
+    expect(alerts.filter((a) => a.code.startsWith("A6")).length).toBe(0);
+  });
+
+  it("readSignals computes overdue from registry rows against the clock", async () => {
+    const now = Date.now();
+    const iso = (daysAgo: number) =>
+      new Date(now - daysAgo * 86_400_000).toISOString();
+    const { client } = mockClient({
+      archie_secret_registry: [
+        // rotated 120 days ago, 90-day interval -> 30 days overdue
+        { secret_name: "OLD_KEY", last_rotated_at: iso(120), rotation_interval_days: 90 },
+        // rotated 10 days ago, 90-day interval -> fine
+        { secret_name: "FRESH_KEY", last_rotated_at: iso(10), rotation_interval_days: 90 },
+        // interval null -> not tracked
+        { secret_name: "NO_INTERVAL", last_rotated_at: iso(500), rotation_interval_days: null },
+        // never rotated -> overdue from zero
+        { secret_name: "NEVER_ROTATED", last_rotated_at: null, rotation_interval_days: 90 },
+      ],
+    });
+    const signals = await readSignals(client);
+    expect(signals.secretsTracked).toBe(4);
+    const names = signals.secretRotationOverdue.map((r) => r.name).sort();
+    expect(names).toEqual(["NEVER_ROTATED", "OLD_KEY"]);
+    const oldKey = signals.secretRotationOverdue.find((r) => r.name === "OLD_KEY")!;
+    expect(oldKey.daysOverdue).toBeGreaterThanOrEqual(29);
+    expect(oldKey.daysOverdue).toBeLessThanOrEqual(31);
+  });
+
+  it("a missing registry table contributes an empty, honest registry", async () => {
+    const { client } = mockClient({}); // no archie_secret_registry table rows
+    const signals = await readSignals(client);
+    expect(signals.secretsTracked).toBe(0);
+    expect(signals.secretRotationOverdue).toEqual([]);
   });
 });

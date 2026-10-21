@@ -65,6 +65,28 @@ function knowledgePrompt(query: string): string {
   ].join("\n");
 }
 
+// ---------------------------------------------------------
+// SCHEDULED-PATH GUARD (batch 40, owner directive
+// 2026-10-21: the resumed cron must NOT consume Gemini):
+// a module-level switch the maintenance edge function turns
+// OFF for its whole invocation. While off, search() returns
+// a zero-hit disabled note WITHOUT touching the network —
+// even if a future maintenance mode ever reaches the
+// research chain, Gemini quota is provably untouched.
+// Chat (owner/visitor) keeps the default ON; the toggle is
+// synchronous module state, so it affects every adapter
+// instance in the isolate for the duration of the pass.
+// ---------------------------------------------------------
+let geminiResearchEnabled = true;
+
+export function setGeminiResearchEnabled(on: boolean): void {
+  geminiResearchEnabled = on;
+}
+
+export function isGeminiResearchEnabled(): boolean {
+  return geminiResearchEnabled;
+}
+
 export class GeminiResearchAdapter implements ResearchAdapter {
   readonly id = "gemini-knowledge";
   private readonly injectedKey?: string;
@@ -80,6 +102,14 @@ export class GeminiResearchAdapter implements ResearchAdapter {
   async search(
     query: string,
   ): Promise<{ hits: ResearchHit[]; note: string }> {
+    if (!geminiResearchEnabled) {
+      // Guard engaged: no key resolution, no network, no
+      // quota — an honest zero with the reason stated.
+      return {
+        hits: [],
+        note: "gemini research disabled for this context (scheduled maintenance is quota-free by construction)",
+      };
+    }
     const key = this.injectedKey ?? resolveEnvKey();
     if (!key) {
       return {

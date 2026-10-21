@@ -37,7 +37,7 @@ import {
 } from "../_shared/archie-ai/runtime.ts";
 import {
   BUCKET_PRESETS,
-  InMemoryBucketStore,
+  SupabaseBucketStore,
   TokenBucketRateLimiter,
 } from "../_shared/archie-ai/security/rate-limiter.ts";
 import { isToolHopWithinBudget } from "../_shared/archie-ai/native-engine/tool-budget.ts";
@@ -431,13 +431,18 @@ import { serveWithCors } from "../_shared/serve.ts";
 
 // DISTRIBUTED RATE-LIMIT ENGINE (audit F-3, engine 14): token
 // bucket with continuous refill — no fixed-window edge bursts.
-// Store is IN-MEMORY (per isolate) while ARCHIE is
-// DB-disconnected — the Supabase adapter and table
-// (20261018070000) make this drop-in distributed when the new
-// database is wired; the volatility boundary is stated, never
-// implied. Visitor policy preserved: 12 burst, refill 12/min.
+// Store is the SUPABASE adapter (migration 20261018070000
+// applied; RPC archie_rate_limit_take live) — one atomic
+// conditional UPDATE in the database is the single source of
+// truth across ALL isolates, so concurrent isolates enforce
+// ONE shared ceiling, not N independent ones. Fail-open
+// honestly: a store error admits the request rather than
+// blocking every visitor on infrastructure failure.
+// Visitor policy preserved: 12 burst, refill 12/min.
 const chatRateLimiter = new TokenBucketRateLimiter(
-  new InMemoryBucketStore(),
+  new SupabaseBucketStore(
+    db as unknown as import("../_shared/archie-ai/security/rate-limiter.ts").SupabaseLikeClient,
+  ),
 );
 // The default kernel is for non-consent-sensitive utility paths only.
 // Owner chat constructs a fresh request-scoped kernel after consent lookup.

@@ -56,6 +56,10 @@ export interface ObservabilitySignals {
   taskFailed: number;
   calibrationKeys: Array<{ key: string; successes: number; failures: number }>;
   tuningDecisions: number;
+  /** F-6 secrets rotation: names past their rotation
+   *  interval, from the owner-maintained registry. */
+  secretRotationOverdue: Array<{ name: string; daysOverdue: number }>;
+  secretsTracked: number;
 }
 
 export interface ObservabilityResult {
@@ -123,6 +127,17 @@ export function evaluateAlerts(signals: ObservabilitySignals): Alert[] {
     }
   }
 
+  // A6 secrets rotation overdue (audit gap F-6): one alert per
+  // registry secret past its rotation interval. The registry
+  // is owner-maintained; the pass only reports truthfully.
+  for (const secret of signals.secretRotationOverdue) {
+    alerts.push({
+      code: `A6_SECRET_ROTATION_OVERDUE:${secret.name}`,
+      severity: "WARNING",
+      message: `secret ${secret.name} is ${secret.daysOverdue} day(s) past its rotation interval — rotate it`,
+    });
+  }
+
   return alerts;
 }
 
@@ -143,6 +158,8 @@ export async function readSignals(
     taskFailed: 0,
     calibrationKeys: [],
     tuningDecisions: 0,
+    secretRotationOverdue: [],
+    secretsTracked: 0,
   };
 
   const safe = async <T>(op: () => Promise<T>): Promise<T | null> => {
@@ -203,6 +220,34 @@ export async function readSignals(
   );
   signals.tuningDecisions = ((tune as { count?: number } | null)?.count ?? 0) as number;
 
+  // secrets rotation registry (audit gap F-6): owner-maintained
+  // rows in archie_secret_registry. A missing table
+  // contributes an empty registry — the alert set stays
+  // honest, never fabricated.
+  const secrets = await safe(() =>
+    client.from("archie_secret_registry").select("secret_name, last_rotated_at, rotation_interval_days")
+  );
+  const secretRows = (((secrets as { data?: Array<{ secret_name: string; last_rotated_at: string | null; rotation_interval_days: number | null }> } | null)?.data ?? [])).map(
+    (r) => ({ name: r.secret_name, lastRotated: r.last_rotated_at ? Date.parse(r.last_rotated_at) : null, intervalDays: r.rotation_interval_days }),
+  );
+  signals.secretsTracked = secretRows.length;
+  const nowMs = Date.now();
+  for (const r of secretRows) {
+    if (r.intervalDays == null || r.intervalDays <= 0) continue; // no interval set: not tracked
+    if (r.lastRotated == null || Number.isNaN(r.lastRotated)) {
+      // never rotated on record: treat as overdue from zero
+      signals.secretRotationOverdue.push({ name: r.name, daysOverdue: -1 });
+      continue;
+    }
+    const dueMs = r.lastRotated + r.intervalDays * 86_400_000;
+    if (nowMs > dueMs) {
+      signals.secretRotationOverdue.push({
+        name: r.name,
+        daysOverdue: Math.floor((nowMs - dueMs) / 86_400_000),
+      });
+    }
+  }
+
   return signals;
 }
 
@@ -226,6 +271,8 @@ export async function runObservabilityPass(
     task_failed: signals.taskFailed,
     calibration_keys: signals.calibrationKeys.length,
     tuning_decisions: signals.tuningDecisions,
+    secrets_tracked: signals.secretsTracked,
+    secrets_rotation_overdue: signals.secretRotationOverdue.length,
     alerts_active: alerts.length,
   };
 

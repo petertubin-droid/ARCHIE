@@ -3,6 +3,10 @@ import {
   GeminiResearchAdapter,
   type GeminiResearchAdapterOptions,
 } from "@studio-shared/archie-ai/native-engine/gemini-research.ts";
+import {
+  isGeminiResearchEnabled,
+  setGeminiResearchEnabled,
+} from "@studio-shared/archie-ai/native-engine/gemini-research.ts";
 import { isSearchFailureNote } from "@studio-shared/archie-ai/native-engine/webresearch.ts";
 
 function res(text: string, status = 200): Response {
@@ -98,5 +102,44 @@ describe("Gemini learning source (owner directive 2026-10-18)", () => {
     const out = await a.search("test");
     expect(out.hits).toHaveLength(0);
     expect(isSearchFailureNote(out.note)).toBe(true);
+  });
+});
+
+describe("Gemini scheduled-path guard (batch 40, owner directive 2026-10-21)", () => {
+  it("toggle OFF: zero-hit disabled note and NO network call even with a key", async () => {
+    let called = 0;
+    const a = mk({
+      apiKey: "k-test",
+      fetchFn: (() => {
+        called += 1;
+        throw new Error("must not be called");
+      }) as unknown as typeof fetch,
+    });
+    setGeminiResearchEnabled(false);
+    try {
+      const r = await a.search("what is momentum");
+      expect(r.hits).toEqual([]);
+      expect(r.note).toMatch(/disabled for this context/);
+      expect(called).toBe(0);
+    } finally {
+      setGeminiResearchEnabled(true);
+    }
+  });
+
+  it("toggle ON (default): the adapter consults the network as before", async () => {
+    expect(isGeminiResearchEnabled()).toBe(true);
+    const a = mk({
+      apiKey: "k-test",
+      fetchFn: (async () => new Response(geminiBody("ok"), { status: 200 })) as unknown as typeof fetch,
+    });
+    const r = await a.search("what is momentum");
+    expect(r.hits.length).toBe(1);
+  });
+
+  it("toggle state is synchronous module state (set/get round-trip)", () => {
+    setGeminiResearchEnabled(false);
+    expect(isGeminiResearchEnabled()).toBe(false);
+    setGeminiResearchEnabled(true);
+    expect(isGeminiResearchEnabled()).toBe(true);
   });
 });
