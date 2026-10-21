@@ -2919,6 +2919,19 @@ export class ArchieNativeEngine implements ArchieRuntime {
                 [],
               );
             }
+            if (this.persistence === null) {
+              // ISOLATED runtime (no persistence — the visitor
+              // path): teaching cannot be kept and research does
+              // not run, so the miss must not promise either.
+              // Honest one-liner, no capability claims the
+              // runtime cannot honor (owner directive
+              // 2026-10-21, verification sweep).
+              return this.compose(
+                `I do not have "${term}" in my vocabulary yet.`,
+                nlu.confidence * 0.6,
+                [],
+              );
+            }
             return this.compose(
               `I have not learned "${term}" yet — it is not in my vocabulary registry. Teach me what it means or ask me to research it, and I will keep it with provenance.`,
               nlu.confidence * 0.6,

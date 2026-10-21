@@ -96,11 +96,21 @@ describe("deterministic alert rules", () => {
 
 function mockClient(tables: Record<string, unknown[]>) {
   const upserts: Record<string, Record<string, unknown>[]> = {};
+  const updates: Record<string, Array<{ patch: Record<string, unknown>; filter: Record<string, unknown> }>> = {};
   const client: ObservabilityClient = {
     from: (table: string) => {
       // universal chainable query builder: works for direct
-      // await, .eq(), .order().limit(), and head-counts
+      // await, .eq(), .order().limit(), head-counts, and
+      // filtered .update() chains (records the patch)
+      let pendingUpdate: Record<string, unknown> | null = null;
+      let pendingFilter: Record<string, unknown> = {};
       const result = (cols?: unknown[]) => {
+        if (pendingUpdate !== null) {
+          const patch = pendingUpdate;
+          const filter = pendingFilter;
+          (updates[table] ??= []).push({ patch, filter });
+          return { data: null, error: null };
+        }
         const opts = (cols?.[1] ?? {}) as { head?: boolean };
         if (opts.head) {
           return {
@@ -121,23 +131,41 @@ function mockClient(tables: Record<string, unknown[]>) {
         then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
           Promise.resolve(result(captured)).then(res, rej),
         limit: () => Promise.resolve(result(captured)),
-        eq: () => Promise.resolve(result(captured)),
+        eq: (col?: unknown, val?: unknown) => {
+          if (col !== undefined && col !== null) pendingFilter[col as string] = val;
+          return Promise.resolve(result(captured));
+        },
         order: () => builder,
       };
       Object.assign(builder, self);
       return {
         select: (...cols: unknown[]) => {
+          pendingUpdate = null;
+          pendingFilter = {};
           captured = cols;
           return builder;
         },
+        update: (patch: Record<string, unknown>) => {
+          pendingUpdate = patch;
+          pendingFilter = {};
+          return builder;
+        },
         upsert: (row: Record<string, unknown>) => {
+          // PRODUCTION PARITY (batch 41 regression): the
+          // archie_alerts table has severity NOT NULL with NO
+          // default. PostgREST rejects an upsert whose candidate
+          // row lacks it with 23502 BEFORE conflict routing,
+          // and supabase-js reports that as a silent error.
+          if (table.endsWith("archie_alerts") && row.severity === undefined) {
+            return Promise.resolve({ data: null, error: { code: "23502" } });
+          }
           (upserts[table] ??= []).push(row);
           return Promise.resolve({ data: null, error: null });
         },
       };
     },
   };
-  return { client, upserts };
+  return { client, upserts, updates };
 }
 
 describe("readSignals — real counts, honest degradation", () => {
@@ -184,7 +212,7 @@ describe("readSignals — real counts, honest degradation", () => {
 
 describe("runObservabilityPass — lifecycle + snapshot", () => {
   it("upserts active alerts and auto-resolves cleared codes", async () => {
-    const { client, upserts } = mockClient({
+    const { client, upserts, updates } = mockClient({
       archie_scheduler_runs: [{ ok: false }, { ok: false }, { ok: false }, { ok: false }],
       frelux_archie_audit_events: [],
       archie_reasoning_runs: [],
@@ -211,11 +239,47 @@ describe("runObservabilityPass — lifecycle + snapshot", () => {
     expect(active?.resolved).toBe(false);
     expect(active?.severity).toBe("CRITICAL");
 
-    // the cleared A5 code is auto-resolved
-    const resolved = alertUpserts.find(
-      (u) => u.alert_code === "A5_CALIBRATION_DEGRADED:reasoning:MATH",
+    // the cleared A5 code is auto-resolved via a filtered
+    // UPDATE (batch 41: an upsert cannot work here — severity
+    // is NOT NULL with no default; Postgres rejects the
+    // candidate tuple with 23502 before conflict routing)
+    const alertUpdates = updates["archie_alerts"] ?? [];
+    const resolvedUpdate = alertUpdates.find(
+      (u) => u.filter.alert_code === "A5_CALIBRATION_DEGRADED:reasoning:MATH",
     );
-    expect(resolved?.resolved).toBe(true);
+    expect(resolvedUpdate?.patch.resolved).toBe(true);
+    expect(resolvedUpdate?.patch.resolved_at).toBeTruthy();
+    // and every recorded alert upsert carries severity
+    // (nothing silently failed the NOT NULL constraint)
+    for (const u of alertUpserts) {
+      expect(u.severity).toBeDefined();
+    }
+  });
+
+  it("models the production NOT NULL constraint: alert upserts without severity fail silently (batch 41)", async () => {
+    // the exact shape runObservabilityPass USED to send when
+    // resolving: no severity. Production PostgREST rejects the
+    // candidate tuple with 23502 (severity NOT NULL, no
+    // default) and supabase-js reports it as an error result,
+    // so the mock must NOT record it as a successful write.
+    const { client, upserts, updates } = mockClient({
+      archie_scheduler_runs: [{ ok: true }],
+      frelux_archie_audit_events: [],
+      archie_reasoning_runs: [],
+      archie_task_states: [],
+      archie_calibration: [],
+      archie_tuning_events: [],
+      "archie_alerts:eq": [{ alert_code: "STALE_CODE" }],
+    });
+    const result = await runObservabilityPass(client);
+    expect(result.alerts).toHaveLength(0);
+    // STALE_CODE resolved through UPDATE, never an upsert
+    const viaUpdate = (updates["archie_alerts"] ?? []).find(
+      (u) => u.filter.alert_code === "STALE_CODE",
+    );
+    expect(viaUpdate?.patch.resolved).toBe(true);
+    // no alert upsert at all was attempted (nothing active)
+    expect(upserts["archie_alerts"] ?? []).toHaveLength(0);
   });
 
   it("is deterministic given the same real inputs", async () => {

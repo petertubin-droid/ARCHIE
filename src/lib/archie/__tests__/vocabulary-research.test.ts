@@ -521,8 +521,10 @@ describe("meaning research across multiple sites", () => {
         ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
         "";
       expect(called).toBe(0);
-      expect(reply).toContain('I have not learned "nothingburger" yet');
-      expect(reply).toContain("ask me to research it");
+      // batch 41: isolated runtime (no persistence) cannot keep
+      // teaching or run research, so the miss makes no promises
+      expect(reply).toContain('do not have "nothingburger" in my vocabulary yet');
+      expect(reply).not.toContain("Teach me");
     });
   });
 
@@ -595,5 +597,57 @@ describe("meaning research across multiple sites", () => {
     expect(reply).toContain("Researched");
     expect(reply).toContain("Meaning kept");
     expect(upserts.some((r) => r.term_key === "blorptastic")).toBe(true);
+  });
+});
+
+describe("isolated runtime definition miss (verification sweep 2026-10-21)", () => {
+  it("no persistence: honest miss without teach/research promises", async () => {
+    // the visitor path constructs the engine with NO persistence:
+    // teaching cannot be kept and research never runs, so the
+    // miss message must not promise either capability.
+    const engine = new ArchieNativeEngine({ persistence: null });
+    const res = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "define momentum" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toContain('do not have "momentum"');
+    expect(reply).not.toContain("Teach me");
+    expect(reply).not.toContain("ask me to research");
+  });
+
+  it("durable runtime runs the research chain and reports unreachable sites honestly", async () => {
+    const stubDb = () => ({
+      from: () => ({
+        select: () => ({
+          then: (r: (v: unknown) => unknown) =>
+            Promise.resolve(r({ data: [], error: null })),
+          range: () => ({
+            then: (r: (v: unknown) => unknown) =>
+              Promise.resolve(r({ data: [], error: null })),
+          }),
+        }),
+        insert: () => ({ error: null }),
+        update: () => ({ eq: () => ({ error: null }) }),
+        upsert: () => ({ error: null }),
+      }),
+    });
+    const engine = new ArchieNativeEngine({ persistence: stubDb() as never });
+    const res = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "define momentum" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    // in the test environment all research sites are
+    // unreachable: the miss names them, hides nothing
+    expect(reply).toContain("I have not learned");
+    expect(reply).toContain("Could not reach");
+    expect(reply).toContain("I will not invent a definition");
   });
 });

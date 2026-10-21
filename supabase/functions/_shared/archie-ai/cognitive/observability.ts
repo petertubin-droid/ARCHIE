@@ -305,20 +305,23 @@ export async function runObservabilityPass(
         { onConflict: "alert_code" },
       );
     }
-    // resolve alerts whose condition no longer holds
+    // resolve alerts whose condition no longer holds.
+    // BATCH 41 FIX: this was an upsert missing severity and
+    // message. Both are NOT NULL and severity has NO default,
+    // so Postgres rejected the candidate tuple with 23502
+    // BEFORE the conflict routing — the catch swallowed it
+    // and alerts NEVER auto-resolved in production (verified
+    // live 2026-10-21: A1_HEARTBEAT_FAILING stuck unresolved
+    // across 9+ passes). A filtered UPDATE only touches the
+    // columns it names, so NOT NULL columns are never at risk.
     const existing = await client.from(ALERTS_TABLE).select("alert_code").eq("resolved", false);
     const rows = ((existing as { data?: Array<{ alert_code: string }> } | null)?.data ?? []) as Array<{ alert_code: string }>;
     for (const row of rows) {
       if (!seenCodes.has(row.alert_code)) {
-        await client.from(ALERTS_TABLE).upsert(
-          {
-            alert_code: row.alert_code,
-            resolved: true,
-            resolved_at: new Date().toISOString(),
-            last_seen_at: new Date().toISOString(),
-          },
-          { onConflict: "alert_code" },
-        );
+        const stamp = new Date().toISOString();
+        await client.from(ALERTS_TABLE)
+          .update({ resolved: true, resolved_at: stamp, last_seen_at: stamp })
+          .eq("alert_code", row.alert_code);
       }
     }
   } catch {
