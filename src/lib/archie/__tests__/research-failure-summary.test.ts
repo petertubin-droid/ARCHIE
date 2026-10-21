@@ -11,7 +11,7 @@ describe("summarizeSourceFailures (batch 43 dedup)", () => {
       { domain: "docs.python.org", note },
     ]);
     expect(out).toBe(`britannica.com, wikipedia.org, docs.python.org (${note})`);
-    expect(out.match(new RegExp(note.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")).length).toBe(1);
+    expect(out.indexOf(note)).toBe(out.lastIndexOf(note));
   });
 
   it("keeps distinct notes separate", () => {

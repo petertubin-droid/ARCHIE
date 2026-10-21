@@ -11,7 +11,7 @@
 // silent again.
 // =========================================================
 
-import { beforeAll, describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
