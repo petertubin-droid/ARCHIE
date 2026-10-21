@@ -95,6 +95,10 @@ export interface ResearchAdapter {
 export function isSearchFailureNote(note: string): boolean {
   return (
     note.startsWith("network unavailable") ||
+    // TOTAL BUDGET (batch 41): a deadline-stopped search NEVER
+    // EXECUTED to completion — an honest failure, never a
+    // successful (let alone zero-hit) search of that source.
+    note.startsWith("research deadline") ||
     note.startsWith("adapter layout changed") ||
     note.startsWith("search endpoint returned") ||
     note.startsWith("search endpoint refused") ||
@@ -471,6 +475,11 @@ interface ScoredHit {
   overlap: number;
 }
 
+/** TOTAL RESEARCH BUDGET default (batch 41). The response-
+ *  time pass halved per-site timeouts; this is the same
+ *  direction applied to the chain as a whole. */
+const DEFAULT_TOTAL_BUDGET_MS = 12_000;
+
 export class ResearchPipeline {
   private registry: WebSourceRegistry | null;
   /** Recent findings cache — reuse while still current.
@@ -505,12 +514,14 @@ export class ResearchPipeline {
   private readonly facts: FactStore;
   private readonly adapter: ResearchAdapter;
   private readonly pageFetcher: PageFetcher | null;
+  private readonly totalBudgetMs: number;
 
   constructor(
     facts: FactStore,
     adapter: ResearchAdapter,
     registry?: WebSourceRegistry,
     pageFetcher?: PageFetcher | null,
+    totalBudgetMs?: number,
   ) {
     // Explicit null = legacy single-search mode (backward
     // compatible). The production engine wires the shared
@@ -519,6 +530,14 @@ export class ResearchPipeline {
     this.adapter = adapter;
     this.registry = registry ?? null;
     this.pageFetcher = pageFetcher ?? null;
+    // TOTAL RESEARCH BUDGET (batch 41): one wall-clock
+    // deadline over the WHOLE chain — priority wave, fallback
+    // wave and deepening. Individual fetch timeouts bound each
+    // hop; this bounds the CHAIN: a slow network can no longer
+    // stretch a chat reply into a minute-plus wait (75s
+    // observed 2026-10-21). Injectable so tests can prove the
+    // bound with a tiny budget.
+    this.totalBudgetMs = totalBudgetMs ?? DEFAULT_TOTAL_BUDGET_MS;
   }
 
   /** Run the §4 pipeline for a query. Findings are stored as
@@ -546,6 +565,35 @@ export class ResearchPipeline {
     const selection = registry.select(trimmed);
     const category = selection.category;
 
+    // ── TOTAL BUDGET (batch 41): one deadline for the whole
+    //    chain. Every network phase races it; a stopped phase
+    //    records an honest failure, never a fake success.
+    const deadline = Date.now() + this.totalBudgetMs;
+    const boundedSearch = async (
+      q: string,
+    ): Promise<{ hits: ResearchHit[]; note: string }> => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return {
+          hits: [],
+          note: "research deadline: total budget exhausted",
+        };
+      }
+      return Promise.race([
+        this.adapter.search(q),
+        new Promise<{ hits: ResearchHit[]; note: string }>((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                hits: [],
+                note: "research deadline: search exceeded total budget",
+              }),
+            remaining,
+          );
+        }),
+      ]);
+    };
+
     // ── PRIORITY WAVE — parallel, site-scoped, independent
     //    sources retrieved concurrently (maximum practical
     //    speed). Failures are honest, never fatal.
@@ -561,7 +609,7 @@ export class ResearchPipeline {
               hits: [],
               note: "source marked restricted — not searched",
             })
-          : this.adapter.search(`${trimmed} site:${source.domain}`),
+          : boundedSearch(`${trimmed} site:${source.domain}`),
       ),
     );
     const waveResults = selection.sources.map((source, i) => ({
@@ -596,12 +644,12 @@ export class ResearchPipeline {
     // ── FALLBACK WAVE — only when the priority wave did not
     //    reach cross-validated agreement.
     if (!crossChecked && selection.allowFallback) {
-      const unrestricted = await this.adapter
-        .search(trimmed)
-        .catch((err: unknown) => ({
+      const unrestricted = await boundedSearch(trimmed).catch(
+        (err: unknown) => ({
           hits: [] as ResearchHit[],
           note: `search failed: ${String(err).slice(0, 120)}`,
-        }));
+        }),
+      );
       // Honest success check: a zero-hit response from a dead
       // network OR from a drifted page shape is a failure —
       // never claimed as a successful search (audit phase 8).
@@ -634,6 +682,7 @@ export class ResearchPipeline {
           crossChecked,
           sourceFailures,
           discoveredSources,
+          deadline,
         );
       }
       sourceFailures.push({
@@ -650,6 +699,7 @@ export class ResearchPipeline {
       crossChecked,
       sourceFailures,
       [],
+      deadline,
     );
   }
 
@@ -710,6 +760,7 @@ export class ResearchPipeline {
     crossChecked: boolean,
     sourceFailures: Array<{ domain: string; note: string }>,
     discoveredSources: string[],
+    deadline: number,
   ): Promise<ResearchReport> {
     scored.sort((a, b) => b.score - a.score);
     // Deduplicate by domain — diverse sources beat one loud
@@ -747,7 +798,16 @@ export class ResearchPipeline {
     //    honestly, never silently skipped.
     const pageFetches: Array<{ url: string; ok: boolean; note: string }> = [];
     let contentCrossChecked = false;
-    if (this.pageFetcher && hits.length > 0) {
+    if (this.pageFetcher && hits.length > 0 && Date.now() >= deadline) {
+      // HONEST SKIP (batch 41): the total budget is spent —
+      // the report says deepening did not happen, it does not
+      // pretend the snippets are page contents.
+      pageFetches.push({
+        url: "(deepening skipped)",
+        ok: false,
+        note: "research deadline: deepening skipped, budget exhausted",
+      });
+    } else if (this.pageFetcher && hits.length > 0) {
       // Distinct domains first — diverse evidence beats one
       // loud domain; at most 3 pages per query.
       const deepenTargets: typeof hits = [];

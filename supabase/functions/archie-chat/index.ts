@@ -2602,8 +2602,13 @@ async function executeChat(
             mode: "api_credential",
           });
         }
+        // MULTILINGUAL ENGINE on the API-credential path too
+        // (E-2, engine 11): same honest notice, no fabricated
+        // fluency. English messages are untouched.
+        const credLang = detectLanguage(message);
+        const credReply = multilingualReply(credLang, text);
         return respond(200, {
-          reply: sanitize(text),
+          reply: sanitize(credReply),
           mode: "api_credential",
           application: cred.application,
         });
@@ -2692,8 +2697,14 @@ async function executeChat(
           engine: result.engine,
         });
       }
+      // MULTILINGUAL ENGINE on the VISITOR path too (E-2,
+      // engine 11): a non-English visitor gets the same honest
+      // limitation notice in their own language, prepended to
+      // the English answer. English messages are untouched.
+      const visitorLang = detectLanguage(message);
+      const visitorReply = multilingualReply(visitorLang, text);
       return respond(200, {
-        reply: sanitize(text),
+        reply: sanitize(visitorReply),
         engine: result.engine,
         mode: "visitor",
       });

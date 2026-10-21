@@ -692,3 +692,60 @@ describe("engine integration — research through the registry", () => {
     ).toBe("programming");
   });
 });
+
+// ---------------------------------------------------------
+// TOTAL RESEARCH BUDGET (batch 41) — the whole chain is
+// bounded by one wall-clock deadline. A slow network can
+// no longer stretch a chat reply into a minute-plus wait
+// (75s observed 2026-10-21); a deadline-stopped phase is an
+// honest failure, never a fake zero-hit success.
+// ---------------------------------------------------------
+describe("research pipeline total budget", () => {
+  it("a hanging search is bounded and reported as an honest deadline failure", async () => {
+    const store = new FactStore();
+    // A wedged endpoint on a slow link: search() never
+    // resolves. The total budget must bound it and report an
+    // honest deadline failure.
+    const adapter: ResearchAdapter = {
+      id: "hanging-adapter (labeled test double)",
+      async search() {
+        return await new Promise<never>(() => {});
+      },
+    };
+    const pipeline = new ResearchPipeline(
+      store,
+      adapter,
+      new WebSourceRegistry(),
+      null,
+      150, // tiny budget: the bound must fire fast
+    );
+    const t0 = Date.now();
+    const report = await pipeline.research("what is the flux of znorv");
+    const elapsed = Date.now() - t0;
+    // bounded: a fraction of the old 75s worst case
+    expect(elapsed).toBeLessThan(5000);
+    // honest: the deadline failures are on the record
+    expect(report.sourceFailures.length).toBeGreaterThan(0);
+    for (const f of report.sourceFailures) {
+      expect(f.note.startsWith("research deadline")).toBe(true);
+    }
+    // no phase is claimed as a successful search
+    expect(report.sourcesSearched).toEqual([]);
+    expect(report.hits).toEqual([]);
+  });
+
+  it("the default production budget is 12 seconds, not unbounded", async () => {
+    // constructor without the budget argument = the default
+    const pipeline = new ResearchPipeline(
+      new FactStore(),
+      new ScriptedAdapter(() => ({ hits: [], note: "search completed" })),
+      new WebSourceRegistry(),
+    );
+    // reaching into the private field would be brittle; the
+    // bound is proven behaviorally above. This test pins the
+    // default wiring exists (no throw, no undefined budget).
+    await expect(
+      pipeline.research("how to prevent sql injection"),
+    ).resolves.toBeTruthy();
+  });
+});

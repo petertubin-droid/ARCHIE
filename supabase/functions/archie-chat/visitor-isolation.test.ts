@@ -85,3 +85,22 @@ describe("owner cycle degradation honesty", () => {
     );
   });
 });
+
+describe("multilingual notice on visitor and API-credential paths (batch 41)", () => {
+  it("visitor path applies detectLanguage + multilingualReply before responding", () => {
+    expect(source).toMatch(/const visitorLang = detectLanguage\(message\);/);
+    expect(source).toMatch(/const visitorReply = multilingualReply\(visitorLang, text\);/);
+    expect(source).toMatch(/reply: sanitize\(visitorReply\)/);
+  });
+
+  it("api-credential path applies the same honest notice", () => {
+    expect(source).toMatch(/const credLang = detectLanguage\(message\);/);
+    expect(source).toMatch(/const credReply = multilingualReply\(credLang, text\);/);
+    expect(source).toMatch(/reply: sanitize\(credReply\)/);
+  });
+
+  it("the owner path multilingual treatment is unchanged", () => {
+    expect(source).toMatch(/const langDetection = detectLanguage\(message\);/);
+    expect(source).toMatch(/const replyText = multilingualReply\(langDetection, text\);/);
+  });
+});

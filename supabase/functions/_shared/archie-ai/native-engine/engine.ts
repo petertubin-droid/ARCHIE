@@ -111,11 +111,11 @@ import { constructionSkill } from "./domains/construction.ts";
 import { ToolOrchestrator, registerBuiltInTools } from "./tools.ts";
 import {
   ResearchPipeline,
-  salientTokens,
   type ResearchAdapter,
   DuckDuckGoLiteAdapter,
   DomainAwareSearchAdapter,
   MultiSearchAdapter,
+  salientTokens,
 } from "./webresearch.ts";
 import { getWebSourceRegistry } from "./web-sources.ts";
 import { analyzeSource, generateUnitTestScaffold } from "./coding.ts";
@@ -3239,7 +3239,30 @@ export class ArchieNativeEngine implements ArchieRuntime {
               status: "validated",
             });
             const questionReport = await this.research.research(input);
-            if (questionReport.hits.length > 0) {
+            // RELEVANCE GATE (batch 42): search engines return
+            // fuzzy near-matches for nonsense queries ("flux"
+            // papers for "blorptastic flux of znorv"). A hit
+            // that shares NO salient token with the question is
+            // not an answer — presenting it would dress garbage
+            // up as findings. Only question-relevant hits are
+            // presented; none qualify = the honest unknown line.
+            const qTokens = salientTokens(input);
+            const relevantHits = questionReport.hits.filter((h) => {
+              const hTokens = salientTokens(
+                `${h.title} ${h.snippet ?? ""}`,
+              );
+              let overlap = 0;
+              for (const t of qTokens) {
+                if (hTokens.has(t)) overlap += 1;
+              }
+              // COVERAGE, not mere contact: one shared word
+              // ("flux" bridging a nonsense query to solar
+              // physics) is a fuzzy engine near-match, not an
+              // answer. A hit must cover at least 40% of the
+              // question's salient tokens to count as relevant.
+              return qTokens.size > 0 && overlap / qTokens.size >= 0.4;
+            });
+            if (relevantHits.length > 0) {
               // OWNER DIRECTIVE (2026-10-21): professional
               // voice. No first-person research narration, no
               // meta commentary. Findings, sources, and an
@@ -3247,7 +3270,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
               const qLines: string[] = [
                 `${input.slice(0, 80)} (public sources):`,
               ];
-              for (const h of questionReport.hits.slice(0, 3)) {
+              for (const h of relevantHits.slice(0, 3)) {
                 qLines.push(
                   `${h.title}${h.snippet ? `: ${h.snippet.slice(0, 220)}` : ""} (${h.url})`,
                 );
