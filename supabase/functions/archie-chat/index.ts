@@ -438,7 +438,7 @@ import { serveWithCors } from "../_shared/serve.ts";
 // ONE shared ceiling, not N independent ones. Fail-open
 // honestly: a store error admits the request rather than
 // blocking every visitor on infrastructure failure.
-// Visitor policy preserved: 12 burst, refill 12/min.
+// Visitor policy preserved: 20-request burst, refill 1 per 3s.
 const chatRateLimiter = new TokenBucketRateLimiter(
   new SupabaseBucketStore(
     db as unknown as import("../_shared/archie-ai/security/rate-limiter.ts").SupabaseLikeClient,
