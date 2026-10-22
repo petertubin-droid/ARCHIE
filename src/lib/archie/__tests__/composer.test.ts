@@ -97,7 +97,10 @@ describe("engine answers through the composer (P6 integration)", () => {
     const engine = new ArchieNativeEngine({ verbosity: "concise" });
     const res = await engine.converse("how do i level a floor");
     expect(res.responseText).toMatch(/validated knowledge/i);
-    expect(res.responseText).toMatch(/confidence \d+%/);
+    // BATCH 45 (batch 32 directive): no confidence percentages
+    // narrated; provenance stays in citedFactIds and the
+    // registry, not in the spoken answer.
+    expect(res.responseText).not.toMatch(/confidence \d+%|, seed\]/);
     expect(res.citedFactIds.length).toBeGreaterThan(0);
     // concise mode: no howto footer line
     expect(res.responseText).not.toMatch(/deeper steps|step-by-step plan|take this deeper/i);

@@ -74,7 +74,9 @@ describe("cross-session memory (cx-3)", () => {
     expect(r.responseText.toLowerCase()).toContain("tuesday");
     expect(r.responseText).toContain("delivery"); // names the subject
     // provenance preserved across the session boundary
-    expect(r.responseText.toLowerCase()).toContain("owner-taught");
+    expect(r.responseText.toLowerCase()).toContain(
+      "owner-asserted, taught by you, not independently verified",
+    );
   });
 
   it("the taught fact is DURABLE (persisted once, hydrated by the new instance)", async () => {

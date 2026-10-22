@@ -12,6 +12,7 @@ import {
   assessSecurityBoundary,
   bridgeFreluxCalculation,
 } from "@studio-shared/archie-ai/semantic-engine/index.ts";
+import { detectLanguage as detectNoticeLanguage } from "@studio-shared/archie-ai/native-engine/multilingual.ts";
 
 describe("ARCHIE Semantic Understanding & Language Reasoning Engine", () => {
   // A. Contextual Meaning Resolution
@@ -252,5 +253,51 @@ describe("ARCHIE Semantic Understanding & Language Reasoning Engine", () => {
       expect(res.downstreamRecommendation.missingParameters).toContain("height");
       expect(res.missingInformation.requiredParameters).toContain("height");
     });
+  });
+});
+
+
+// BATCH 45: single distinctive-marker identification tier.
+// Live evidence 2026-10-22: "wetin be screwdriver" scored 1/3
+// density (0.33 < 0.34 threshold) and the PWA visitor got an
+// English greeting instead of the Pidgin notice.
+describe("distinctive marker tier (Nigerian languages)", () => {
+  it("one Pidgin marker identifies pcm", () => {
+    expect(detectNoticeLanguage("wetin be screwdriver")).toMatchObject({
+      language: "pcm",
+    });
+    expect(detectNoticeLanguage("haba oga calm down")).toMatchObject({
+      language: "pcm",
+    });
+  });
+
+  it("one Igbo marker identifies ig", () => {
+    expect(detectNoticeLanguage("biko help me")).toMatchObject({
+      language: "ig",
+    });
+    expect(detectNoticeLanguage("kedu ihe achisha means what")).toMatchObject({
+      language: "ig",
+    });
+  });
+
+  it("one Hausa marker identifies ha", () => {
+    expect(detectNoticeLanguage("sannu, menene wannan")).toMatchObject({
+      language: "ha",
+    });
+  });
+
+  it("one Yoruba marker identifies yo", () => {
+    expect(detectNoticeLanguage("kini oruko re")).toMatchObject({
+      language: "yo",
+    });
+  });
+
+  it("English questions stay English under the marker tier", () => {
+    expect(detectNoticeLanguage("what is a good whetstone for kitchen knives"))
+      .toMatchObject({ language: "en" });
+    expect(detectNoticeLanguage("define screwdriver")).toMatchObject({
+      language: "en",
+    });
+    expect(detectNoticeLanguage("water")).toMatchObject({ language: "en" });
   });
 });

@@ -130,6 +130,8 @@ import {
   createSupabaseStrategyStore,
   configureNativeEngineMarketLookup,
   configureNativeEngineLessonLookup,
+  getConfiguredMarketLookup,
+  lexiconLookupFor,
   type MarketPriceResult,
 } from "../_shared/archie-ai/native-engine/engine.ts";
 import {
@@ -2579,8 +2581,16 @@ async function executeChat(
       // ran inside authenticateCredential (per-credential).
       // BATCH 44: isolated non-owner session — teaching and
       // web research are owner-only; the guest gate in the
-      // engine enforces it.
-      const appRuntime = new ArchieNativeEngine({ sessionKind: "guest" });
+      // engine enforces it. BATCH 45: the VERIFIED lexicon
+      // (public shared knowledge, owner directive
+      // 2026-10-20) backs definitions here too.
+      const appRuntime = new ArchieNativeEngine({
+        sessionKind: "guest",
+        lexiconLookup: lexiconLookupFor(
+          db as unknown as import("../_shared/archie-ai/native-engine/persistence.ts").SupabaseLike,
+        ),
+        marketPriceLookup: getConfiguredMarketLookup(),
+      });
       const appRequest: ArchieInferenceRequest = {
         turns: [{ role: "owner" as const, parts: [{ text: message }] }],
         systemInstruction:
@@ -2667,9 +2677,26 @@ async function executeChat(
     // engine per request — no persistence, no access to the
     // owner's knowledge/memory, no context shared with anyone.
     // What a visitor says never enters ARCHIE's owner memory.
-    // BATCH 44: guest session — the engine's guest gate
+    // BATCH 45: guest session — the engine's guest gate
     // refuses teaching and owner research authorization.
-    const visitorRuntime = new ArchieNativeEngine({ sessionKind: "guest" });
+    // The VERIFIED lexicon is PUBLIC SHARED KNOWLEDGE (owner
+    // directive 2026-10-20, decoupled from personalization
+    // consent), so guests DO get lexicon definitions while
+    // staying isolated from owner memory. Live evidence:
+    // "momentum"/"photosynthesis" missed for visitors (seeds
+    // only, the pre-2026-10-20 isolation rule) though the
+    // verified lexicon carries them.
+    const visitorRuntime = new ArchieNativeEngine({
+      sessionKind: "guest",
+      lexiconLookup: lexiconLookupFor(
+        db as unknown as import("../_shared/archie-ai/native-engine/persistence.ts").SupabaseLike,
+      ),
+      // BATCH 45: observed material prices (approved price
+      // lists, raw market observations) are public product
+      // data — guests get real price answers, honest no-data
+      // refusals instead of "not wired in this deployment".
+      marketPriceLookup: getConfiguredMarketLookup(),
+    });
     const visitorEngine = "archie-native-isolated";
 
     const visitorRequest: ArchieInferenceRequest = {

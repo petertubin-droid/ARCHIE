@@ -52,12 +52,33 @@ function pick(key: string, seed: string, variants: string[]): string {
   return variants[stableHash(`${key}:${seed}`) % variants.length];
 }
 
+/** BATCH 45: ARCHIE's audience is West African (FRELUX is a
+ *  Nigerian platform, owner timezone Africa/Lagos), but the
+ *  edge runtime clock is UTC — "en-NG" locale formatting does
+ *  NOT shift the timezone. Live-verified 2026-10-22: a Lagos
+ *  visitor asking "what time is it" at 07:43 local was told
+ *  06:43 am. All wall-clock answers render in Africa/Lagos
+ *  time, still labeled honestly as ARCHIE's system clock
+ *  (the underlying instant is read directly, no guessing).
+ */
+export const ARCHIE_DISPLAY_TZ = "Africa/Lagos";
+
+/** Hour of day (0-23) in the display timezone. Deterministic
+ *  given the instant; Intl handles DST (Lagos has none). */
+export function displayHourOf(now: Date): number {
+  const h = new Intl.DateTimeFormat("en-NG", {
+    timeZone: ARCHIE_DISPLAY_TZ,
+    hour: "numeric",
+    hour12: false,
+  }).format(now);
+  return Number.parseInt(h, 10) % 24;
+}
+
 function partOfDay(d: Date): string {
-  const h = d.getHours();
+  const h = displayHourOf(d);
   if (h < 5) return "night";
   if (h < 12) return "morning";
   if (h < 17) return "afternoon";
-  if (h < 21) return "evening";
   return "evening";
 }
 
@@ -210,7 +231,7 @@ const AVAILABILITY_RESPONSES = [
   "Yes, I am with you. What is the task?",
 ];
 
-const TIME_LABEL = "(my system clock)";
+const TIME_LABEL = "(West Africa time, my system clock)";
 
 const CLARIFY_WITH_HISTORY = [
   "Here is my last point again: {quote} Which part should I expand?",
@@ -375,16 +396,25 @@ export function composeConversational(ctx: ConversationalContext): string {
       return pick("social", seed, SOCIAL_RESPONSES);
     }
     case "time_query": {
-      const weekday = now.toLocaleString("en-NG", { weekday: "long" });
+      // BATCH 45: explicit display timezone — see
+      // ARCHIE_DISPLAY_TZ. The clock instant is read directly
+      // (no guessing); the wall-clock rendering is West
+      // Africa time so the answer matches the user's day.
+      const weekday = now.toLocaleString("en-NG", {
+        weekday: "long",
+        timeZone: ARCHIE_DISPLAY_TZ,
+      });
       const date = now.toLocaleString("en-NG", {
         day: "numeric",
         month: "long",
         year: "numeric",
+        timeZone: ARCHIE_DISPLAY_TZ,
       });
       const time = now.toLocaleString("en-NG", {
         hour: "2-digit",
         minute: "2-digit",
         hour12: true,
+        timeZone: ARCHIE_DISPLAY_TZ,
       });
       return `Today is ${weekday}, ${date}, and the time is ${time} ${TIME_LABEL}. I read the clock directly, no guessing.`;
     }

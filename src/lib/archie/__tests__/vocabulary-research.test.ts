@@ -690,3 +690,56 @@ describe("isolated runtime definition miss (verification sweep 2026-10-21)", () 
     expect(reply).toContain("I will not invent a definition");
   });
 });
+
+
+  // BATCH 45: the VERIFIED lexicon is public shared knowledge
+  // (owner directive 2026-10-20, decoupled from
+  // personalization consent), so GUEST runtimes answer
+  // definitions from it. Live evidence: "momentum" and
+  // "photosynthesis" missed for visitors because the
+  // pre-2026-10-20 rule kept the visitor engine seeds-only.
+  it("guest sessions answer definitions from a wired lexicon lookup", async () => {
+    const engine = new ArchieNativeEngine({
+      sessionKind: "guest",
+      persistence: null,
+      lexiconLookup: async (term) =>
+        term === "momentum"
+          ? {
+              term,
+              meaning: "the quantity of motion of a moving body",
+              domain: "physics",
+              partOfSpeech: "noun",
+            }
+          : null,
+    });
+    const res = await engine.generate({
+      turns: [
+        { role: "owner", parts: [{ text: "what does momentum mean" }] },
+      ],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toContain("the quantity of motion of a moving body");
+    expect(reply).not.toMatch(/do not have "momentum"/);
+  });
+
+  it("guest sessions without a lexicon lookup keep the honest miss", async () => {
+    const engine = new ArchieNativeEngine({
+      sessionKind: "guest",
+      persistence: null,
+    });
+    const res = await engine.generate({
+      turns: [
+        { role: "owner", parts: [{ text: "what does momentum mean" }] },
+      ],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toContain('do not have "momentum" in my vocabulary yet');
+  });

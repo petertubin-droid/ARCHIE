@@ -89,10 +89,14 @@ describe("Engine inference (end-to-end)", () => {
     expect(result.engine.note).toContain("no external AI provider");
     const text = result.parts[0].text ?? "";
     expect(text).toContain("native engine online");
-    expect(text).toContain("facts");
+    // BATCH 45 / batch 32 directive: the greeting never
+    // narrates knowledge-store counts, and owner sessions
+    // keep the teach invite.
+    expect(text).not.toMatch(/facts|Knowledge store/i);
+    expect(text).toContain("teach me something new");
   });
 
-  it("answers a knowledge question from validated knowledge with provenance", async () => {
+  it("answers a knowledge question from validated knowledge, plain (batch 32/45 directive)", async () => {
     const result = await engine.generate({
       turns: turns("what is screeding"),
       tools: [],
@@ -100,7 +104,10 @@ describe("Engine inference (end-to-end)", () => {
     });
     const text = result.parts[0].text ?? "";
     expect(text).toContain("screeding");
-    expect(text).toContain("confidence");
+    // BATCH 45: no confidence percentages, no source tags
+    // narrated; epistemic markers appear only for
+    // non-validated statuses.
+    expect(text).not.toMatch(/confidence \d|%|, seed\]/);
   });
 
   it("computes math deterministically", async () => {
@@ -632,6 +639,43 @@ describe("Construction calculators (deterministic)", () => {
     expect(understand("what is 340 times 22").intent).toBe("math_question");
   });
 
+  // BATCH 45 (live-verified routing gap 2026-10-22): estimate/
+  // calculate phrasings with a material and a number fell
+  // through to howto_guidance/knowledge_query and produced a
+  // knowledge dump instead of the calculator.
+  it("routes estimate/calculate phrasings to the construction skill", () => {
+    expect(
+      understand(
+        "estimate cement for 20 square meter wall",
+        [],
+        CONSTRUCTION_NLU_HINTS,
+      ).intent,
+    ).toBe("construction_calc");
+    expect(
+      understand(
+        "calculate screeding materials for a 4 by 5 meter room",
+        [],
+        CONSTRUCTION_NLU_HINTS,
+      ).intent,
+    ).toBe("construction_calc");
+    // Instructional questions stay in the how-to lane.
+    expect(
+      understand(
+        "how do i estimate cement for a wall",
+        [],
+        CONSTRUCTION_NLU_HINTS,
+      ).intent,
+    ).toBe("howto_guidance");
+  });
+
+  it("refuses a wall AREA as a concrete VOLUME instead of computing it", () => {
+    const answer = constructionEstimate(
+      "estimate cement for 20 square meter wall",
+    );
+    expect(answer).toMatch(/not a concrete volume/i);
+    expect(answer).not.toMatch(/bags? of cement for approximately/i);
+  });
+
   it("estimates blocks for a wall with stated assumptions", () => {
     const answer = constructionEstimate(
       "how many blocks for a 6 by 3 meter wall",
@@ -899,5 +943,32 @@ describe("Owner chat turn shape (archie-core regression 2026-09-15)", () => {
     });
     const text = result.parts.map((p) => p.text ?? "").join(" ");
     expect(text).toContain("1200");
+  });
+});
+
+
+// BATCH 45: guest runtimes share the configured market price
+// lookup (observed prices are public product data). A guest
+// asking for an unobserved product gets the honest no-data
+// refusal — never the false "adapter not wired in this
+// deployment" claim (live-verified 2026-10-22: a visitor was
+// told the adapter was unwired while ETH prices worked in the
+// same session).
+describe("guest market price honesty", () => {
+  it("a wired guest runtime reports missing data honestly, not a false wiring claim", async () => {
+    const engine = new ArchieNativeEngine({
+      sessionKind: "guest",
+      marketPriceLookup: async () => null,
+    });
+    const res = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "what is the price of cement" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toMatch(/no observed price data for "cement"/);
+    expect(reply).not.toMatch(/not wired in this deployment/);
   });
 });

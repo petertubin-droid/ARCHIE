@@ -50,7 +50,7 @@ export interface LanguageDetection {
    *  language's distinctive set. */
   confidence: number;
   /** Detection method, reported for the trace. */
-  method: "script" | "wordlist" | "default-english";
+  method: "script" | "wordlist" | "marker" | "default-english";
 }
 
 // ------------------------------------------------------------
@@ -77,7 +77,18 @@ const SCRIPT_TESTS: Array<{
 
 const LATIN_SETS: Record<
   string,
-  { lang: SupportedNoticeLanguage | "en"; words: Set<string> }
+  {
+    lang: SupportedNoticeLanguage | "en";
+    words: Set<string>;
+    /** BATCH 45: single-word identification tier. These are
+     *  NOT English words — one occurrence identifies the
+     *  language outright, independent of function-word
+     *  density (live-verified 2026-10-22: "wetin be
+     *  screwdriver" scored 1/3 = 0.33 and missed the 0.34
+     *  density threshold; the visitor got an English
+     *  greeting instead of the Pidgin notice). */
+    distinctive?: Set<string>;
+  }
 > = {
   en: {
     lang: "en",
@@ -139,6 +150,11 @@ const LATIN_SETS: Record<
       "jẹ́", "nlo", "ńlọ", "wo", "gbọ", "gbọ́", "nkan", "ńkàn",
       "owo", "owó", "ṣílẹ̀", "sile", "lọ",
     ]),
+    distinctive: new Set([
+      "kini", "kíni", "bawo", "báwo", "daadaa", "dára",
+      "iyawo", "ìyàwó", "oruko", "orúkọ", "nkan", "ńkàn",
+      "gbogbo", "kilode",
+    ]),
   },
   ig: {
     lang: "ig",
@@ -151,6 +167,10 @@ const LATIN_SETS: Record<
       // that dominate everyday Igbo questions.
       "aha", "ulo", "onye", "olee", "kê", "mgbe", "ego",
     ]),
+    distinctive: new Set([
+      "kedu", "biko", "ndewo", "onye", "olee", "mmadụ", "gịnị",
+      "nkịta", "ụbọchị", "echi",
+    ]),
   },
   ha: {
     lang: "ha",
@@ -161,6 +181,10 @@ const LATIN_SETS: Record<
       "mu", "ku", "su", "yana", "tana", "sun", "na", "lokaci",
       "yau", "gobe", "inka", "kome", "haka", "kamar", "wannan",
     ]),
+    distinctive: new Set([
+      "sannu", "madalla", "lafiya", "menene", "yaya", "kuma",
+      "zuwa", "wannan", "lokaci",
+    ]),
   },
   pcm: {
     lang: "pcm",
@@ -170,6 +194,10 @@ const LATIN_SETS: Record<
       "this", "wey", "how", "far", "abeg", "na", "e", "dem", "una",
       "wuna", "pipo", "palava", "gbege", "yanga", "chop", "naija",
       "correct", "sharp", "small", "well", "well-done", "kam",
+    ]),
+    distinctive: new Set([
+      "wetin", "sabi", "oga", "abi", "shey", "abeg", "comot",
+      "pipo", "palava", "gbege", "yanga", "naija", "wuna",
     ]),
   },
 };
@@ -199,6 +227,28 @@ export function detectLanguage(message: string): LanguageDetection {
   const tokens = text.toLowerCase().match(/[a-zà-ÿ'’-]+/g) ?? [];
   if (tokens.length === 0) {
     return { language: "en", confidence: 0, method: "default-english" };
+  }
+  // BATCH 45: single distinctive marker tier. A non-English
+  // word that cannot occur in English ("wetin", "kedu",
+  // "sannu", "bawo") identifies the language outright —
+  // density scoring stays for mixed function-word sentences.
+  const markerVotes = new Map<string, number>();
+  for (const setKey of Object.keys(LATIN_SETS)) {
+    const { distinctive } = LATIN_SETS[setKey];
+    if (!distinctive) continue;
+    let votes = 0;
+    for (const t of tokens) if (distinctive.has(t)) votes++;
+    if (votes > 0) markerVotes.set(setKey, votes);
+  }
+  if (markerVotes.size > 0) {
+    const [topKey, topVotes] = [...markerVotes.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    )[0];
+    return {
+      language: LATIN_SETS[topKey].lang as SupportedNoticeLanguage,
+      confidence: Math.min(0.9, 0.5 + topVotes * 0.1),
+      method: "marker",
+    };
   }
   const scores = new Map<string, number>();
   // LENGTH-NORMALIZED (batch 43): these sets are function-word

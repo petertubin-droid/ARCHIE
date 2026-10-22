@@ -722,3 +722,28 @@ describe("no fake integrations (static integrity)", () => {
     expect(runtime).toContain("no fake integrations");
   });
 });
+
+
+// BATCH 45: access windows are WALL-CLOCK in the audience
+// timezone (Africa/Lagos). The edge runtime clock is UTC, so
+// getHours() evaluated a "09:00-17:00" window one hour off.
+describe("withinWindow timezone (West Africa time)", () => {
+  const scope = (start: string, end: string): AccessScope => ({
+    windows: [{ start, end }],
+    actions: [],
+  });
+
+  it("evaluates the window at the Lagos wall clock (UTC+1)", () => {
+    // 2026-10-22T08:30Z is 09:30 in Lagos — INSIDE 09:00-17:00.
+    const at = new Date("2026-10-22T08:30:00Z");
+    expect(withinWindow(scope("09:00", "17:00"), at)).toBe(true);
+    // The same instant under the old UTC evaluation (08:30)
+    // would have been outside — this is the regression test.
+  });
+
+  it("closes the window at the Lagos wall clock boundary", () => {
+    // 2026-10-22T16:30Z is 17:30 in Lagos — OUTSIDE 09:00-17:00.
+    const at = new Date("2026-10-22T16:30:00Z");
+    expect(withinWindow(scope("09:00", "17:00"), at)).toBe(false);
+  });
+});

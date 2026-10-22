@@ -165,7 +165,7 @@ describe("P8 derived-vs-taught separation", () => {
     // OWNER DIRECTIVE (2026-09-16): no em dashes in ARCHIE's
     // voice — the label survives, comma-joined.
     expect(res.responseText).toMatch(
-      /DERIVED, inferred by rule chain, not owner-validated/,
+      /derived by rule chain, not owner-validated/,
     );
     // the opening names derived knowledge, not "validated knowledge"
     expect(res.responseText).toMatch(/derived/i);

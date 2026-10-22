@@ -232,6 +232,15 @@ export function constructionEstimate(input: string): string {
   }
 
   if (wantsCement) {
+    // BATCH 45 (area-as-volume honesty): "estimate cement for a
+    // 20 square meter wall" parsed as volume 20 m3 — a wall
+    // AREA silently read as a concrete VOLUME, a 100x-class
+    // wrong answer. An area unit is refused explicitly; the
+    // parser's bare-meter reading of "square meters" must
+    // not become a volume.
+    if (/\b(?:square|sq\.?|m2|m²|ft2)\b/i.test(input)) {
+      return `A surface area is not a concrete volume, and I will not treat one as the other. For cement I need a concrete volume, for example "how many bags of cement for 2 cubic meters". For a wall area I can compute blocks ("how many blocks for a 6 by 3 meter wall") or paint ("how much paint for 20 square meters") instead.`;
+    }
     if (measurements.length < 1) {
       return `To estimate cement I need the concrete volume — for example "how many bags of cement for 2 cubic meters of concrete". I will not guess volumes.`;
     }
@@ -367,9 +376,19 @@ export const CONSTRUCTION_OPERATORS: Operator[] = [
 // must fall to Bayes, not be hijacked by the calc rule.
 export const CONSTRUCTION_NLU_RULES: DomainNluRule[] = [
   {
+    // BATCH 45 (live-verified routing gap 2026-10-22): "estimate
+    // cement for 20 square meter wall" and "calculate screeding
+    // materials for a 4 by 5 meter room" fell through to
+    // howto_guidance/knowledge_query and got a knowledge dump
+    // instead of the calculator. Estimation verbs
+    // (estimate/calculate/compute) plus a material plus a number
+    // route to the skill; the skill refuses or computes
+    // honestly either way. The how-to guidance negative
+    // lookahead stays — instructional questions are not
+    // calculations.
     intent: "construction_calc",
     pattern:
-      /^(?!.*\b(?:how do i|how to|steps to|walk me through|guide me through|best way to|teach me|plan|organize|schedule)\b)[\s\S]{0,120}?(?:\b(?:blocks?|bricks?)\b[^.?!]*\d|\d[^.?!]*\b(?:blocks?|bricks?)\b|\bhow (?:many|much)\b[^.?!]*\b(?:blocks?|bricks?)\b|\bpaint\b[^.?!]*\d|\d[^.?!]*\bpaint\b|\bhow much paint\b|\bcement\b[^.?!]*\b(?:cubic|volume|m3|concrete)\b|\bcement\b[^.?!]*\d[^.?!]*bags?\b|\d[^.?!]*bags?[^.?!]*\bcement\b|\bhow many (?:bags )?of? ?cement\b)/i,
+      /^(?!.*\b(?:how do i|how to|steps to|walk me through|guide me through|best way to|teach me|plan|organize|schedule|remember|remembered|teaching|learn this|note that|keep this|don't forget|do not forget|price|prices|at most|at least|no more than|no less than|less than|more than|between|budget|afford|cost of|costs|wrong|actually|correction)\b)[\s\S]{0,120}?(?:\b(?:blocks?|bricks?)\b[^.?!]*\d|\d[^.?!]*\b(?:blocks?|bricks?)\b|\bhow (?:many|much)\b[^.?!]*\b(?:blocks?|bricks?)\b|\bpaint\b[^.?!]*\d|\d[^.?!]*\bpaint\b|\bhow much paint\b|\bcement\b[^.?!]*\b(?:cubic|volume|m3|concrete)\b|\bcement\b[^.?!]*\d[^.?!]*bags?\b|\d[^.?!]*bags?[^.?!]*\bcement\b|\bhow many (?:bags )?of? ?cement\b|\b(?:estimate|calculate|compute)\b[^.?!]*\b(?:blocks?|bricks?|paint|cement|screed(?:ing)?|plaster(?:ing)?|materials?|quantities)\b[^.?!]*\d|\b(?:screed(?:ing)?|plaster(?:ing)?)\b[^.?!]*\d|\bcement\b[^.?!]*\d)/i,
     confidence: 0.9,
   },
 ];

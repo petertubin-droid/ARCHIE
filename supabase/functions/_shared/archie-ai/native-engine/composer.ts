@@ -43,11 +43,14 @@ function pick(key: string, seed: string, variants: string[]): string {
 // Frame families — each variant keeps the epistemic marker
 // ---------------------------------------------------------
 
+// BATCH 45 (plain-answers directive): openings no longer
+// promise "provenance" narration — provenance lives in the
+// registry, inspectable, not narrated per answer.
 const KNOWLEDGE_OPENINGS = [
   "From my validated knowledge:",
   "Here is what I hold as validated knowledge on that:",
-  "What my validated knowledge store says (with provenance):",
-  "Validated knowledge, with provenance:",
+  "What my validated knowledge says:",
+  "Validated knowledge:",
 ];
 
 const HOWTO_FOOTERS = [

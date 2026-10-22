@@ -55,7 +55,7 @@ import {
 // Conversational English expansion (owner directive,
 // 2026-09-11): deterministic, grounded composition for
 // social and conversational intents.
-import { composeConversational } from "./conversation.ts";
+import { composeConversational, displayHourOf } from "./conversation.ts";
 import {
   derivedOpening,
   ownerAssertedOpening,
@@ -2211,7 +2211,10 @@ export class ArchieNativeEngine implements ArchieRuntime {
       // no canned conversational script"); the state line
       // follows the actual greeting instead of replacing it.
       case "greeting": {
-        const hour = new Date().getUTCHours();
+        // BATCH 45: daypart in the DISPLAY timezone (West
+        // Africa) — getUTCHours greeted Lagos users with the
+        // wrong part of the day around the boundaries.
+        const hour = displayHourOf(new Date());
         const daypart =
           hour < 12
             ? "Good morning"
@@ -2251,8 +2254,14 @@ export class ArchieNativeEngine implements ArchieRuntime {
             Math.abs([...input].reduce((a, c) => a + c.charCodeAt(0), 0)) %
               openers.length
           ];
+        // BATCH 45: plain greeting (batch 32 directive): no
+        // diagnostics, no fact counts. GUEST sessions cannot
+        // teach (batch 44 gate) — the invite would promise a
+        // capability the session cannot honor.
         return this.compose(
-          `${opener} ARCHIE native engine online and listening. ${this.statusLine()} Ask me anything in my knowledge, or teach me something new.`,
+          this.sessionKind === "guest"
+            ? `${opener} ARCHIE native engine online and listening. Ask me a question and I will answer from shared knowledge.`
+            : `${opener} ARCHIE native engine online and listening. Ask me anything in my knowledge, or teach me something new.`,
           nlu.confidence,
           [],
         );
@@ -2494,6 +2503,20 @@ export class ArchieNativeEngine implements ArchieRuntime {
           return this.compose(
             `From the knowledge base: ${servicesKb}`,
             Math.max(nlu.confidence, 0.75),
+            [],
+          );
+        }
+        // BATCH 45: GUEST sessions get a scoped capability
+        // answer. The full manifest names internal capability
+        // ids and owner-switch state (live-verified 2026-10-22:
+        // a PWA visitor received the 50-line internal
+        // manifest including owner-only capabilities the
+        // guest gate refuses, plus "SWITCHED OFF BY OWNER"
+        // internals). Guests hear what THEIR session can do.
+        if (this.sessionKind === "guest") {
+          return this.compose(
+            "Capabilities (honest, measured): natural conversation, definitions from shared knowledge, deterministic math, live crypto market prices, and site guidance. Anything I cannot do in this session I will say so honestly. Teaching and web research are owner-session features.",
+            nlu.confidence,
             [],
           );
         }
@@ -3365,22 +3388,28 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // P8: derived facts carry an explicit epistemic label
         // — a rule-chain conclusion is never presented as
         // owner-validated knowledge.
+        // BATCH 45 (plain-answers directive, batch 32): the
+        // knowledge-query path still narrated "[confidence
+        // 95%, seed]" per fact (live-verified 2026-10-22 on a
+        // PWA visitor). The batch 32 directive stripped this
+        // narration from definition answers; it applies here
+        // too. Epistemic MARKERS stay (a rule-chain
+        // conclusion must never read as owner-validated
+        // knowledge; an unverified finding must never read as
+        // established) — but raw confidence percentages and
+        // source tags go. The registry still stores the exact
+        // numbers and provenance, inspectable, just not
+        // narrated.
         const parts = validated.map((f) => {
-          const base = `${f.subject} ${f.predicate.replace(/-/g, " ")}: ${String(f.object)} `;
+          const base = `${f.subject} ${f.predicate.replace(/-/g, " ")}: ${String(f.object)}`;
           if (f.status === "derived" || f.provenance.source === "inferred") {
-            return (
-              base +
-              `[confidence ${(f.confidence * 100).toFixed(0)}%, DERIVED — inferred by rule chain, not owner-validated]`
-            );
+            return `${base} [derived by rule chain, not owner-validated]`;
           }
           // H-1: owner-asserted facts are labeled as the
           // owner's assertion — citable, but never dressed as
           // independently-validated knowledge.
           if (f.status === "owner-asserted") {
-            return (
-              base +
-              `[confidence ${(f.confidence * 100).toFixed(0)}%, OWNER-ASSERTED (${f.provenance.source}) — taught by you, not independently verified]`
-            );
+            return `${base} [owner-asserted, taught by you, not independently verified]`;
           }
           // FIX 16 (batch 6): CANDIDATE facts (unverified web
           // findings) carry an explicit unvalidated marker —
@@ -3388,15 +3417,9 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // letting a search snippet read as established
           // knowledge.
           if (f.status === "candidate") {
-            return (
-              base +
-              `[confidence ${(f.confidence * 100).toFixed(0)}%, CANDIDATE (${f.provenance.source}) — unverified finding, not validated knowledge]`
-            );
+            return `${base} [candidate, unverified finding, not validated knowledge]`;
           }
-          return (
-            base +
-            `[confidence ${(f.confidence * 100).toFixed(0)}%, ${f.provenance.source}]`
-          );
+          return base;
         });
         // P1b: if the question is a "why did this go wrong"
         // problem with numbers that fall short of a recorded
@@ -4594,8 +4617,15 @@ export class ArchieNativeEngine implements ArchieRuntime {
   }
 
   private statusLine(): string {
+    // BATCH 45 (live-verified directive violation 2026-10-22):
+    // the owner directive (2026-09-16, batch 32) is "never
+    // mention how many facts ARCHIE knows" — yet the greeting
+    // narrated "Knowledge store: 40 facts, reasoning rules:
+    // 10" to PWA visitors. Capability status is honest
+    // measured diagnostics and stays; knowledge-store counts
+    // are narrated nowhere.
     const summary = manifestSummary(nativeEngineCapabilityManifest());
-    return `Knowledge store: ${this.facts.count()} facts, reasoning rules: ${this.reasoning.ruleCount()}, capabilities: ${summary.operational} operational / ${summary.developing} developing / ${summary.notImplemented} not implemented.`;
+    return `Capabilities: ${summary.operational} operational / ${summary.developing} developing / ${summary.notImplemented} not implemented.`;
   }
 
   private compose(
@@ -4797,6 +4827,20 @@ export function configureNativeEngineMarketLookup(
   singleton = undefined;
 }
 
+/** BATCH 45: read the configured market price lookup. Guest
+ *  runtimes (PWA visitors, API credentials) construct their
+ *  own engine and need to share the OBSERVED PRICE data —
+ *  approved price lists and raw market observations are
+ *  public product data, not owner memory (same reasoning as
+ *  the lexicon decoupling, owner directive 2026-10-20).
+ *  Live-verified 2026-10-22: a visitor asking "what is the
+ *  price of cement" was told the adapter was "not wired in
+ *  this deployment" while ETH prices worked in the same
+ *  session via the crypto skill. */
+export function getConfiguredMarketLookup(): MarketPriceLookup | undefined {
+  return configuredMarketLookup;
+}
+
 /** Wire the real system adapters (documents / images / voice
  *  bank / social / family). archie-chat does this at boot with
  *  the service client. Resets the singleton so the next
@@ -4837,7 +4881,7 @@ export function configureNativeEngineLessonLookup(lookup: LessonLookup): void {
  *  retrieval layer). No db → null → the lexicon is honestly
  *  not consulted. Lookup failures surface to the engine's
  *  try/catch and degrade to research, never to a crash. */
-function lexiconLookupFor(
+export function lexiconLookupFor(
   db: SupabaseLike | null | undefined,
 ): ((term: string) => Promise<LexiconSenseAnswer | null>) | null {
   if (!db) return null;

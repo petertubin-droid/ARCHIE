@@ -193,7 +193,9 @@ describe("memory changes reasoning (end-to-end loop)", () => {
       systemInstruction: "",
     });
     expect(asked.parts[0].text ?? "").toContain("1:4");
-    expect(asked.parts[0].text ?? "").toContain("owner-taught");
+    expect(asked.parts[0].text ?? "").toContain(
+      "owner-asserted, taught by you, not independently verified",
+    );
 
     // CORRECT: owner corrects — old knowledge is demoted, not
     // silently kept.
@@ -392,7 +394,8 @@ describe("production wiring (archie-chat source)", () => {
       source.indexOf("PUBLIC VISITOR MODE"),
       source.indexOf("// 3. Resolve the inference engine"),
     );
-    expect(visitorBlock).toContain('new ArchieNativeEngine({ sessionKind: "guest" })');
+    expect(visitorBlock).toContain("new ArchieNativeEngine({");
+    expect(visitorBlock).toContain('sessionKind: "guest"');
     expect(visitorBlock).not.toContain("resolveArchieCapabilityEngine");
     expect(visitorBlock).toContain("archie-native-isolated");
   });

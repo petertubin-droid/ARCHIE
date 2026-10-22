@@ -13,6 +13,7 @@ import {
   rankFacts,
 } from "@studio-shared/archie-ai/native-engine/memory.ts";
 import { FactStore } from "@studio-shared/archie-ai/native-engine/knowledge.ts";
+import { ArchieNativeEngine } from "@studio-shared/archie-ai/native-engine/engine.ts";
 import {
   DEFAULT_RULES,
   ReasoningEngine,
@@ -790,5 +791,40 @@ describe("Capability manifest", () => {
     expect(NATIVE_ENGINE_ID).toBe("archie-native-engine");
     const summary = manifestSummary(nativeEngineCapabilityManifest());
     expect(summary.operational).toBeGreaterThan(0);
+  });
+});
+
+
+// BATCH 45: guest sessions get a scoped capability answer —
+// never the internal manifest with owner-only capabilities
+// and owner switch state.
+describe("guest capability reply", () => {
+  it("guests receive the scoped capability answer, not the internal manifest", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "guest" });
+    const res = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "what can you do" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toMatch(/Capabilities \(honest, measured\)/);
+    expect(reply).toMatch(/owner-session features/);
+    expect(reply).not.toMatch(/Capability manifest|SWITCHED OFF BY OWNER/);
+    expect(reply).not.toMatch(/multi-domain-reasoning-loop/);
+  });
+
+  it("owners still receive the full measured manifest", async () => {
+    const engine = new ArchieNativeEngine();
+    const res = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "what can you do" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toMatch(/Capability manifest \(honest, measured\)/);
   });
 });

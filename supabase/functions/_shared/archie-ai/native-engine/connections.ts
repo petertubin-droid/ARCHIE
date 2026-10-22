@@ -371,6 +371,25 @@ function minutesOf(hhmm: string): number | null {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
+/** Minutes of day for `at` in the DISPLAY timezone (West
+ *  Africa). BATCH 45: the edge runtime's local clock is UTC,
+ *  so at.getHours() evaluated an owner's "09:00-17:00"
+ *  window one hour off (same class as the live time-query
+ *  defect 2026-10-22). Windows are WALL-CLOCK in the
+ *  audience timezone, evaluated with Intl (Lagos has no
+ *  DST, so the mapping is fixed UTC+1). Deterministic: the
+ *  caller supplies the instant, never Date.now() here. */
+function displayMinutesOf(at: Date): number {
+  const hm = new Intl.DateTimeFormat("en-NG", {
+    timeZone: "Africa/Lagos",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  }).format(at);
+  const [h, m] = hm.split(":").map((x) => Number.parseInt(x, 10));
+  return (h % 24) * 60 + m;
+}
+
 /** A time-of-day check against an access window. `at` is an
  *  ISO timestamp; windows are local "HH:MM"–"HH:MM"
  *  (wrpping over midnight when start > end). Deterministic:
@@ -378,7 +397,7 @@ function minutesOf(hhmm: string): number | null {
 export function withinWindow(scope: AccessScope, at: Date): boolean {
   const windows = scope.windows ?? [];
   if (windows.length === 0) return true; // no windows = always
-  const mins = at.getHours() * 60 + at.getMinutes();
+  const mins = displayMinutesOf(at);
   for (const w of windows) {
     const s = minutesOf(w.start);
     const e = minutesOf(w.end);

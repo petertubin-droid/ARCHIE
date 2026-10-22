@@ -411,3 +411,47 @@ describe("engine conversational behavior", () => {
     expect(ok, failures.join(" | ")).toBe(true);
   });
 });
+
+
+// BATCH 45: wall-clock answers render in West Africa time
+// (Africa/Lagos). The edge runtime clock is UTC; "en-NG"
+// locale formatting alone does NOT shift the timezone.
+// Live-verified 2026-10-22: a Lagos visitor asking the time
+// at 07:43 local was told 06:43 am.
+import {
+  ARCHIE_DISPLAY_TZ,
+  composeConversational,
+  displayHourOf,
+} from "@studio-shared/archie-ai/native-engine/conversation.ts";
+
+describe("display timezone (West Africa time)", () => {
+  it("displayHourOf converts a UTC instant to the Lagos hour", () => {
+    // 2026-10-22T18:30Z is 19:30 in Lagos (UTC+1).
+    const instant = new Date("2026-10-22T18:30:00Z");
+    expect(displayHourOf(instant)).toBe(19);
+    expect(ARCHIE_DISPLAY_TZ).toBe("Africa/Lagos");
+  });
+
+  it("time_query renders the Lagos wall clock and the honest label", () => {
+    const instant = new Date("2026-10-22T18:30:00Z");
+    const text = composeConversational({
+      input: "what time is it",
+      intent: "time_query",
+      now: instant,
+      emojiTone: {
+        emojis: [],
+        tones: [],
+        present: false,
+        standaloneIntent: null,
+      },
+      recentTurns: [],
+      factsCount: 0,
+      inferences: 0,
+      capabilitiesSummary: "",
+    });
+    expect(text).toContain("07:30");
+    expect(text).toContain("West Africa time");
+    // UTC (18:30) must NOT be presented as the time.
+    expect(text).not.toContain("06:30");
+  });
+});
