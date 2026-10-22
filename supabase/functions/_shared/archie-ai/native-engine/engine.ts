@@ -2275,8 +2275,15 @@ export class ArchieNativeEngine implements ArchieRuntime {
             input,
           )
         ) {
+          // BATCH 47 Defect 2 (professional voice, directive
+          // 2026-10-21): the template carried contractions,
+          // ALL-CAPS emphasis ("how are YOU doing?"), and
+          // internal-state narration ("every reasoning cycle
+          // green"). The reciprocity itself stays (owner
+          // directive 2026-09-14): a real state answer plus
+          // the question back.
           return this.compose(
-            `${daypart}! I'm running well, ARCHIE native engine online, every reasoning cycle green. More to the point: how are YOU doing? Tell me what's on your mind and I'll work on it with you.`,
+            `${daypart}. I am running well, with all systems operational. More to the point, how are you doing? Tell me what is on your mind and I will work on it with you.`,
             nlu.confidence,
             [],
           );
@@ -2286,10 +2293,10 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // deterministic input-seeded opener keeps it human
         // without a random source. Real engine state stays.
         const openers = [
-          `Hello to you too — good to see you.`,
-          `Hey — ${daypart.toLowerCase()} to you.`,
+          `Hello to you too, good to see you.`,
+          `Hey, ${daypart.toLowerCase()} to you.`,
           `Welcome back. Engine warm and ready.`,
-          `${daypart}! Ready when you are.`,
+          `${daypart}. Ready when you are.`,
           `Good to hear from you.`,
           `Well met. What are we working on?`,
         ];
@@ -3255,8 +3262,14 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // for a term ARCHIE cannot even tokenize into
           // meaning, and offering them would be theater.
           if (probeVocabulary(input) === 0) {
+            // BATCH 47 Defect 7: contractions removed
+            // (professional voice directive) and the teach
+            // offer is owner-only (owner directive 2026-10-21:
+            // guests cannot teach).
             return this.compose(
-              `I didn't recognize any of the words in that message, so I won't guess at a meaning. Could you rephrase it? If it is a term you want me to know, teach it to me directly and I will retain it with owner provenance.`,
+              this.sessionKind === "guest"
+                ? "I did not recognize any of the words in that message, so I will not guess at a meaning. Could you rephrase it?"
+                : "I did not recognize any of the words in that message, so I will not guess at a meaning. Could you rephrase it? If it is a term you want me to know, teach it to me directly and I will retain it with owner provenance.",
               nlu.confidence * 0.5,
               [],
             );

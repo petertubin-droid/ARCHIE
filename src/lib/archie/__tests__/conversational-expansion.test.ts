@@ -41,7 +41,7 @@ import {
   type HeldOutExample,
 } from "@studio-shared/archie-ai/native-engine/conversation-corpus.ts";
 import { extractEmojiTone } from "@studio-shared/archie-ai/native-engine/emoji.ts";
-import { conversationSelfCheck } from "@studio-shared/archie-ai/native-engine/conversation.ts";
+import { conversationSelfCheck, wallClockInDisplayTz } from "@studio-shared/archie-ai/native-engine/conversation.ts";
 import { ArchieNativeEngine } from "@studio-shared/archie-ai/native-engine/engine.ts";
 
 const CONVERSATIONAL_INTENTS: Intent[] = [
@@ -430,6 +430,18 @@ describe("display timezone (West Africa time)", () => {
     const instant = new Date("2026-10-22T18:30:00Z");
     expect(displayHourOf(instant)).toBe(19);
     expect(ARCHIE_DISPLAY_TZ).toBe("Africa/Lagos");
+  });
+
+  it("BATCH 47 Defect 4: noon and midnight render as 12:xx, never 00:xx (ICU hour12 cycle bug)", () => {
+    // Noon UTC = 13:xx Lagos; 11:00 UTC = 12:00 Lagos (noon).
+    const noonLagos = new Date("2026-10-22T11:04:00Z");
+    expect(wallClockInDisplayTz(noonLagos)).toBe("12:04 pm");
+    // Midnight Lagos = 23:00 UTC.
+    const midnightLagos = new Date("2026-10-22T23:05:00Z");
+    expect(wallClockInDisplayTz(midnightLagos)).toBe("12:05 am");
+    // Ordinary hours keep 2-digit padding and the right meridiem.
+    expect(wallClockInDisplayTz(new Date("2026-10-22T05:06:00Z"))).toBe("06:06 am");
+    expect(wallClockInDisplayTz(new Date("2026-10-22T13:07:00Z"))).toBe("02:07 pm");
   });
 
   it("time_query renders the Lagos wall clock and the honest label", () => {

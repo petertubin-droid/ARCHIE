@@ -828,3 +828,95 @@ describe("guest capability reply", () => {
     expect(reply).toMatch(/Capability manifest \(honest, measured\)/);
   });
 });
+
+
+// BATCH 47 Defects 2-3 (professional voice + identity
+// routing, live-verified 2026-10-22): "how are you" carried
+// contractions, ALL-CAPS emphasis, and internal-state
+// narration; "are you a robot" and "are you human" fell to
+// knowledge-miss despite being identity questions.
+describe("batch 47: activity reply voice and identity assertions", () => {
+  it("how are you answers professionally, no ALL-CAPS or contractions", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "owner" });
+    const r = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "how are you" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const text = (r.parts ?? []).map((p) => p.text).filter(Boolean).join("");
+    expect(text).toMatch(/how are you doing\?/);
+    expect(text).not.toMatch(/[A-Z]{2,}(?!ARCHIE)/);
+    expect(text).not.toMatch(/\bI'm\b|\bI'll\b/);
+  });
+
+  it("are you a robot answers as identity, not knowledge-miss", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "guest" });
+    const r = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "are you a robot" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const text = (r.parts ?? []).map((p) => p.text).filter(Boolean).join("");
+    expect(text).toContain("ARCHIE");
+    expect(text).not.toContain("not in my validated knowledge");
+  });
+
+  it("are you human routes to identity_query at high confidence", () => {
+    const nlu = understand("are you human", [], { rules: [] });
+    expect(nlu.intent).toBe("identity_query");
+    expect(nlu.confidence).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("capability probes are not captured by the identity rule", () => {
+    const nlu = understand("are you able to remember things", [], { rules: [] });
+    expect(nlu.intent).toBe("capability_query");
+  });
+
+  it("BATCH 47 Defect 5: tell me about yourself is an identity question", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "guest" });
+    const r = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "tell me about yourself" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const text = (r.parts ?? []).map((p) => p.text).filter(Boolean).join("");
+    expect(text).toContain("ARCHIE");
+    expect(text).not.toContain("Reflexive pronoun");
+  });
+
+  it("BATCH 47 Defect 6: site-content questions are knowledge questions, not social talk", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "owner" });
+    const r = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "whats on my site today" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const text = (r.parts ?? []).map((p) => p.text).filter(Boolean).join("");
+    expect(text).not.toContain("Good to hear how your day is going");
+  });
+
+  it("BATCH 47 Defect 7: ARCHIE-directed negative feedback gets empathy, not a gibberish rephrase", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "guest" });
+    const r = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "you are useless" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const text = (r.parts ?? []).map((p) => p.text).filter(Boolean).join("");
+    expect(text).not.toContain("did not recognize any of the words");
+    expect(text.length).toBeGreaterThan(10);
+  });
+
+  it("BATCH 47 Defect 8: the zero-words rephrase is professional and never invites a guest to teach", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "guest" });
+    const r = await engine.generate({
+      turns: [{ role: "owner", parts: [{ text: "asdfghj qwerty zxcvbnm" }] }],
+      tools: [],
+      systemInstruction: "",
+    });
+    const text = (r.parts ?? []).map((p) => p.text).filter(Boolean).join("");
+    expect(text).toContain("I did not recognize");
+    expect(text).not.toMatch(/I didn't|I won't/);
+    expect(text).not.toContain("teach it to me");
+  });
+});

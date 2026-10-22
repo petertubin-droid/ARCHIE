@@ -81,6 +81,24 @@ export function displayHourOf(now: Date): number {
   return Number.parseInt(h, 10) % 24;
 }
 
+/** BATCH 47 Defect 4 (live-verified 2026-10-22): the ICU
+ *  hour12 formatter rendered noon as "00:16 pm" (12 % 12 = 0
+ *  in the 2-digit hour12 cycle). The wall-clock string is
+ *  built manually from displayHourOf so noon is 12:xx pm
+ *  and midnight is 12:xx am, in every ICU build. */
+export function wallClockInDisplayTz(now: Date): string {
+  const h24 = displayHourOf(now);
+  const minutes = Number.parseInt(
+    new Intl.DateTimeFormat("en-NG", {
+      timeZone: ARCHIE_DISPLAY_TZ,
+      minute: "2-digit",
+    }).format(now),
+    10,
+  );
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${String(h12).padStart(2, "0")}:${String(minutes).padStart(2, "0")} ${h24 < 12 ? "am" : "pm"}`;
+}
+
 function partOfDay(d: Date): string {
   const h = displayHourOf(d);
   if (h < 5) return "night";
@@ -442,12 +460,7 @@ export function composeConversational(ctx: ConversationalContext): string {
         year: "numeric",
         timeZone: ARCHIE_DISPLAY_TZ,
       });
-      const time = now.toLocaleString("en-NG", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: ARCHIE_DISPLAY_TZ,
-      });
+      const time = wallClockInDisplayTz(now);
       return `Today is ${weekday}, ${date}, and the time is ${time} ${TIME_LABEL}. I read the clock directly, no guessing.`;
     }
     case "availability_check":

@@ -193,3 +193,43 @@ describe("correlateCryptoPerception", () => {
     expect(res.warnings.some((w) => w.includes("withdraw"))).toBe(true);
   });
 });
+
+
+// BATCH 47 Defect 1: an explicit trade-evaluation request
+// without a direction silently degraded to a price snapshot
+// (live-verified 2026-10-22 on owner AND guest sessions).
+// It must ask for the direction and the plan instead, while
+// single-marker casual phrases keep the price snapshot.
+describe("trade evaluation direction handling (batch 47)", () => {
+  it("asks for direction on an explicit eval request without one", async () => {
+    const engine = cryptoEngine();
+    const text = await ask(
+      engine,
+      "evaluate my trade eth entry 3000 stop 2800 target 3300 size 500 portfolio 25000",
+    );
+    expect(text).toContain("your direction (buy or sell)");
+    expect(text).not.toContain("ETH-USD consensus");
+  });
+
+  it("keeps the price snapshot for single-marker casual phrases", async () => {
+    const engine = cryptoEngine();
+    const text = await ask(engine, "what is my bitcoin portfolio worth");
+    expect(text).toContain("BTC-USD consensus");
+  });
+
+  it("keeps the knowledge path for stop as a plain verb", async () => {
+    const engine = cryptoEngine();
+    const text = await ask(engine, "when will bitcoin stop falling");
+    expect(text).not.toContain("your direction (buy or sell)");
+  });
+
+  it("still runs the full gate when the direction is present", async () => {
+    const engine = cryptoEngine();
+    const text = await ask(
+      engine,
+      "should i buy eth entry 3000 stop 2800 target 3300 size 500 portfolio 25000",
+    );
+    expect(text).toMatch(/checks|TRADE/);
+    expect(text).not.toContain("your direction (buy or sell)");
+  });
+});

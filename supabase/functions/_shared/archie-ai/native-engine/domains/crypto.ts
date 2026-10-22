@@ -100,6 +100,21 @@ async function handleCryptoMarketQuery(
     /\b(?:entry|enter(?:ing)?|stop|target|take[-\s]?profit|position|portfolio|evaluate)\b/i.test(
       input,
     );
+  // BATCH 47 Defect 1: an explicit trade-evaluation request
+  // WITHOUT a direction used to silently degrade to a price
+  // snapshot (live-verified 2026-10-22: "evaluate my trade
+  // eth entry 3000 stop 2800 target 3300 size 500 portfolio
+  // 25000" returned only the ETH price for BOTH owner and
+  // guest). Such a request must ask for the direction and
+  // the plan, never guess. The trigger requires an explicit
+  // evaluate-phrase OR 2+ plan markers so casual uses of
+  // single words ("when will bitcoin stop falling",
+  // "what is my bitcoin portfolio worth") keep the price
+  // snapshot path.
+  const planMarkerCount = ["entry", "stop", "target", "take[-\s]?profit", "size", "portfolio"]
+    .filter((m) => new RegExp(`\\b${m}\\b`, "i").test(input)).length;
+  const explicitEvalRequest =
+    /\bevaluate\s+(?:my\s+)?(?:trade|crypto)\b/i.test(input);
 
   if (!symbol) {
     return (
@@ -120,6 +135,13 @@ async function handleCryptoMarketQuery(
 
   const fmt = (n: number) =>
     n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+  if (!wantsTradeEval && (explicitEvalRequest || planMarkerCount >= 2)) {
+    // Direction missing on an explicit evaluation request:
+    // ask for it (plus the full plan), never downgrade to a
+    // price snapshot, never guess a direction.
+    return `To evaluate ${symbol.startsWith("E") || symbol.startsWith("A") ? "an" : "a"} ${symbol} trade honestly I need your direction (buy or sell) and the full plan: stop-loss, take-profit target, position size, and portfolio value. Example: "should i buy ${symbol.replace("-USD", "").toLowerCase()}, entry 3000, stop 2800, target 3300, size 500, portfolio 25000". I will not evaluate a trade with guessed parameters.`;
+  }
 
   if (!wantsTradeEval) {
     // PRICE SNAPSHOT — consensus across the venues that

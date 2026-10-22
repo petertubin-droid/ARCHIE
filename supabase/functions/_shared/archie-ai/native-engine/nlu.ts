@@ -1358,6 +1358,18 @@ const RULE_CASCADE: Array<{
   // stage-1 rule; the subject is extracted by the downstream
   // knowledge path exactly as for "when is the delivery".
   {
+    // BATCH 47 Defect 6: site-content questions ("whats on my
+    // site today") used to fall through Bayes to social_talk
+    // 0.53 and got a generic social reply that ignored the
+    // question (live-verified 2026-10-22). A site question is
+    // a knowledge question; the KB/site-context machinery
+    // answers it or misses honestly.
+    intent: "knowledge_query",
+    pattern:
+      /\bwhat(?:'?s|s|\s+is|\s+is\s+going\s+on|\s+is\s+happening)?\s+(?:on|at|in)\s+(?:my|the|our|this)\s+site\b/i,
+    confidence: 0.8,
+  },
+  {
     intent: "knowledge_query",
     pattern: /^(?:on\s+)?(?:what|which)\s+(?:day|date|time)\b.{0,40}\bis\b/i,
     confidence: 0.8,
@@ -1373,7 +1385,7 @@ const RULE_CASCADE: Array<{
     // know about you" are the same identity probe with
     // conversational fillers.
     pattern:
-      /^(?:who|what)(?:\s+(?:exactly|really|precisely))?\s+are\s+you\b(?!\s+(?:good|best)\s+at\b)|\bwho\s+are\s+you\b|what\s+is\s+your\s+name|(?<!how\s)are\s+you\s+(?:archie|chatgpt|gemini|claude|an?\s+ai)|introduce\s+yourself|who\s+made\s+you|^remind\s+me\s+who\s+you\s+are\b|^what\s+should\s+i\s+know\s+about\s+you\b|what\s+are\s+you\s+called\b|what\s+do\s+i\s+call\s+you\b|\bwho\s+you\s+be\b|\byou\s+are\s+archie\b|your\s+name\s+is\s+archie\b|is\s+your\s+name\s+archie\b/i,
+      /^(?:who|what)(?:\s+(?:exactly|really|precisely))?\s+are\s+you\b(?!\s+(?:good|best)\s+at\b)|\bwho\s+are\s+you\b|what\s+is\s+your\s+name|(?<!how\s)are\s+you\s+(?:archie|chatgpt|gemini|claude|an?\s+ai|a\s+robot|a\s+bot|a\s+chatbot|a\s+machine|human|real)\b|introduce\s+yourself|tell\s+me\s+about\s+yourself\b|who\s+made\s+you|^remind\s+me\s+who\s+you\s+are\b|^what\s+should\s+i\s+know\s+about\s+you\b|what\s+are\s+you\s+called\b|what\s+do\s+i\s+call\s+you\b|\bwho\s+you\s+be\b|\byou\s+are\s+archie\b|your\s+name\s+is\s+archie\b|is\s+your\s+name\s+archie\b/i,
     confidence: 0.9,
   },
   // Imperative commands (owner is issuing an instruction).
@@ -1601,6 +1613,20 @@ const RULE_CASCADE: Array<{
   // disagreement are pure SHORT forms only — longer messages
   // generalize through Bayes, which owns context.
   // -------------------------------------------------------
+  {
+    // BATCH 47 Defect 7: ARCHIE-directed negative feedback
+    // ("you are useless") used to fall through Bayes to
+    // knowledge_query and, because function words do not
+    // count as known vocabulary, hit the zero-known-words
+    // rephrase branch ("I didn't recognize any of the
+    // words") — an absurd answer to plain negative feedback
+    // (live-verified 2026-10-22). Route it to the frustrated
+    // empathy branch instead.
+    intent: "emotional_expression",
+    pattern:
+      /\byou\s+(?:are|re)\s+(?:so\s+|really\s+|completely\s+|totally\s+|being\s+)?(?:useless|worthless|hopeless|rubbish|nonsense|garbage|terrible|awful|horrible|stupid|dumb)\b|\b(?:this|that)\s+is\s+(?:useless|worthless|rubbish|nonsense|garbage|pointless|hopeless)\b/i,
+    confidence: 0.8,
+  },
   {
     // DISTRESS FIRST (owner directive 2026-09-14): emotional
     // state trumps a greeting token — "hey, I've had a rough
