@@ -335,3 +335,60 @@ export function multilingualReply(
   const name = LANGUAGE_NAMES[detection.language];
   return `${notice}\n\n(Answer follows in English, ${name} support is not built yet.)\n\n${englishAnswer}`;
 }
+
+// BATCH 46: deterministic interrogative normalization. The
+// multilingual notice tells the user the answer follows in
+// English — but the ENGINE still parsed the original text, so
+// "wetin be screwdriver" (Pidgin) hit the NLU as a GREETING
+// and the notice wrapped a greeting instead of a definition
+// (live-verified 2026-10-22). When detection already
+// identified a non-English language, the known interrogative
+// markers of THAT language are rephrased to their English
+// structure so the definition/knowledge flow can answer. No
+// invention: each rule maps one fixed marker construction to
+// its exact English equivalent; anything else passes through
+// untouched (the honest unknown line answers it).
+const INTERROGATIVE_NORMALIZERS: Record<
+  string,
+  Array<[RegExp, string]>
+> = {
+  pcm: [
+    // Only the definition constructions ("wetin be X",
+    // "wetin X mean") are normalized. "wetin dey happen" (a
+    // greeting, live-verified) must not be mangled into
+    // "what is dey happen".
+    [/^wetin\s+be\s+(.+)$/i, "what is $1"],
+    [/^wetin\s+(.+)\s+mean\b/i, "what does $1 mean"],
+    [/^define\s+(.+)$/i, "define $1"],
+  ],
+  ig: [
+    [/^kedu\s+ihe\s+(.+)$/i, "what is $1"],
+    [/^olee\s+(.+)$/i, "what is $1"],
+  ],
+  yo: [
+    [/^kini\s+(.+)$/i, "what is $1"],
+    [/^kíni\s+(.+)$/i, "what is $1"],
+  ],
+  ha: [
+    [/^menene\s+(.+)$/i, "what is $1"],
+  ],
+};
+
+/** Normalize a detected non-English question to its English
+ *  interrogative structure for engine NLU. English text and
+ *  unmatched text pass through unchanged. */
+export function normalizeForEngine(
+  detection: LanguageDetection,
+  message: string,
+): string {
+  if (detection.language === "en") return message;
+  const rules = INTERROGATIVE_NORMALIZERS[detection.language];
+  if (!rules) return message;
+  const trimmed = message.trim();
+  for (const [re, replacement] of rules) {
+    if (re.test(trimmed)) {
+      return trimmed.replace(re, replacement);
+    }
+  }
+  return message;
+}

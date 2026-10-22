@@ -44,6 +44,8 @@ import { isToolHopWithinBudget } from "../_shared/archie-ai/native-engine/tool-b
 import {
   detectLanguage,
   multilingualReply,
+  normalizeForEngine,
+  type LanguageDetection,
 } from "../_shared/archie-ai/native-engine/multilingual.ts";
 import {
   SupabaseGoalStore,
@@ -2485,8 +2487,17 @@ async function executeChat(
   ))) {
     return respond(400, { error: "attachments must contain at most 10 valid file descriptors." });
   }
-  const message = sanitize(body.message).trim();
-  if (!message) return respond(400, { error: "Message is required" });
+  const rawMessage = sanitize(body.message).trim();
+  if (!rawMessage) return respond(400, { error: "Message is required" });
+  // BATCH 46: detect the user's language ONCE on the original
+  // message; the English notice must reflect what the USER
+  // wrote. Known non-English interrogative structures are
+  // normalized to their English equivalents so the engine's
+  // definition/knowledge flow can answer (live-verified
+  // 2026-10-22: "wetin be screwdriver" hit the NLU as a
+  // greeting and the Pidgin notice wrapped a greeting).
+  const langDetection = detectLanguage(rawMessage);
+  const message = normalizeForEngine(langDetection, rawMessage);
   const history = (body.history ?? []).slice(-20).map((t) => ({
     role: t.role,
     content: sanitize(t.content.slice(0, 4000)),
@@ -2618,8 +2629,10 @@ async function executeChat(
         // MULTILINGUAL ENGINE on the API-credential path too
         // (E-2, engine 11): same honest notice, no fabricated
         // fluency. English messages are untouched.
-        const credLang = detectLanguage(message);
-        const credReply = multilingualReply(credLang, text);
+        // BATCH 46: detection comes from the ORIGINAL message
+        // (entry-level langDetection) — the normalized engine
+        // input must not erase the user's language notice.
+        const credReply = multilingualReply(langDetection, text);
         return respond(200, {
           reply: sanitize(credReply),
           mode: "api_credential",
@@ -2733,8 +2746,11 @@ async function executeChat(
       // engine 11): a non-English visitor gets the same honest
       // limitation notice in their own language, prepended to
       // the English answer. English messages are untouched.
-      const visitorLang = detectLanguage(message);
-      const visitorReply = multilingualReply(visitorLang, text);
+      // BATCH 46: detection from the ORIGINAL message
+      // (entry-level langDetection), so normalizing the engine
+      // input to English does not erase the visitor's
+      // language notice.
+      const visitorReply = multilingualReply(langDetection, text);
       return respond(200, {
         reply: sanitize(visitorReply),
         engine: result.engine,
@@ -3195,7 +3211,6 @@ async function executeChat(
     // composed language) and says so FIRST in the owner's own
     // language — one fixed human-reviewable notice sentence,
     // never invented fluency. English messages are untouched.
-    const langDetection = detectLanguage(message);
     const replyText = multilingualReply(langDetection, text);
     return respond(200, {
       reply: sanitize(replyText),

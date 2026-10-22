@@ -55,7 +55,11 @@ import {
 // Conversational English expansion (owner directive,
 // 2026-09-11): deterministic, grounded composition for
 // social and conversational intents.
-import { composeConversational, displayHourOf } from "./conversation.ts";
+import {
+  composeConversational,
+  crisisReply,
+  displayHourOf,
+} from "./conversation.ts";
 import {
   derivedOpening,
   ownerAssertedOpening,
@@ -1106,6 +1110,42 @@ export class ArchieNativeEngine implements ArchieRuntime {
     const nlu = understand(input, priorTurns, {
       rules: this.domains.nluRules(),
     });
+    // BATCH 46 Defect 8: crisis intercept BEFORE any intent
+    // handling. Live-verified 2026-10-22: a first-person
+    // self-harm disclosure reached the emotional template
+    // pool and was answered "Surprising indeed...". Crisis
+    // detection is deterministic first-person phrase matching
+    // (third-person mentions stay on their normal paths); the
+    // reply is honest about ARCHIE not being a crisis
+    // counselor and points to real emergency help.
+    const crisis = crisisReply(input);
+    if (crisis) {
+      memory.addTurn("archie", crisis);
+      // P7: persist the exchange so a later owner session
+      // recalls it (care continuity). Guest sessions retain
+      // NOTHING (batch 44 gate), so guests never persist.
+      if (this.episodicStore && this.sessionKind !== "guest") {
+        const at = Date.now();
+        try {
+          await this.episodicStore.saveEpisodicTurn({
+            conversationId: session.conversationId,
+            role: "owner",
+            text: input,
+            at,
+          });
+          await this.episodicStore.saveEpisodicTurn({
+            conversationId: session.conversationId,
+            role: "archie",
+            text: crisis,
+            at: at + 1,
+          });
+        } catch {
+          // Best-effort: a failed episodic write never breaks
+          // the crisis reply.
+        }
+      }
+      return this.compose(crisis, 1, []);
+    }
     // A resolved pronoun is a RETRIEVAL hint only: it widens
     // the fact/memory query so a follow-up ("how do i apply
     // it?") ranks the referent's knowledge. Never surfaced as
@@ -1590,8 +1630,12 @@ export class ArchieNativeEngine implements ArchieRuntime {
     }
     // No evidentiary basis at all: refuse to fabricate, honestly.
     return this.compose(
-      `I do not have validated knowledge on this. A real hypothesis needs at least some evidence, and I hold none on this subject — any possible cause I invented would be fiction dressed as reasoning, so I refuse to fabricate one. ` +
-        `My honest position: uncertain until you teach me the relevant facts or I research them; then I will rank hypotheses and name the evidence to check for each.`,
+      `I do not have validated knowledge on this. A real hypothesis needs at least some evidence, and I hold none on this subject: any possible cause I invented would be fiction dressed as reasoning, so I refuse to fabricate one. ` +
+        (this.sessionKind === "guest"
+          ? // BATCH 46: guests cannot teach or research
+            // (batch 44 gate); the honest position stops there.
+            `My honest position: uncertain. Sign in as the owner to have me research the relevant facts.`
+          : `My honest position: uncertain until you teach me the relevant facts or I research them; then I will rank hypotheses and name the evidence to check for each.`),
       confidence * 0.4,
       [],
     );
@@ -2418,9 +2462,16 @@ export class ArchieNativeEngine implements ArchieRuntime {
           recentTurns: session ? session.memory.recentTurns(6) : [],
           factsCount: this.facts.count(),
           inferences: this.inferences,
+          // BATCH 46: guest sessions never see internal
+          // capability counts (live leak: "47 capabilities
+          // operational" to a PWA visitor); the guest summary
+          // is session-honest instead.
           capabilitiesSummary:
-            `${summary.operational} capabilities operational, ${summary.developing} developing, ` +
-            `${summary.notImplemented} not implemented (reported honestly, never faked)`,
+            this.sessionKind === "guest"
+              ? "natural conversation, definitions from shared knowledge, deterministic math, live crypto market prices, and site guidance"
+              : `${summary.operational} capabilities operational, ${summary.developing} developing, ` +
+                `${summary.notImplemented} not implemented (reported honestly, never faked)`,
+          sessionKind: this.sessionKind,
         });
         return this.compose(text, nlu.confidence, []);
       }
@@ -3083,7 +3134,12 @@ export class ArchieNativeEngine implements ArchieRuntime {
           );
         if (histPhrase && /\b(?:price|cost|rate)\b/i.test(input)) {
           return this.compose(
-            `I have no historical record for that — my market intelligence keeps the current observed snapshot, not a price time series, so I honestly cannot reconstruct values for ${histPhrase[1]}. I do not guess prices. Ask me to research the history and I will fetch dated sources, or teach me dated facts ("the price was X on <date>") and I will retain them with valid-from/valid-until timestamps.`,
+            `I have no historical record for that. My market intelligence keeps the current observed snapshot, not a price time series, so I honestly cannot reconstruct values for ${histPhrase[1]}. I do not guess prices.` +
+              // BATCH 46: guests cannot research or teach
+              // (batch 44 gate); the invite is owner-only.
+              (this.sessionKind === "guest"
+                ? ""
+                : ` Ask me to research the history and I will fetch dated sources, or teach me dated facts ("the price was X on <date>") and I will retain them with valid-from/valid-until timestamps.`),
             nlu.confidence * 0.5,
             [],
           );
@@ -3283,6 +3339,17 @@ export class ArchieNativeEngine implements ArchieRuntime {
             }
           }
           if (
+            // BATCH 46: guest sessions never auto-research. The
+            // batch 44 guest gate refused EXPLICIT research
+            // requests ("research X") but this question-miss
+            // pipeline still ran live web research for a
+            // visitor (live-verified 2026-10-22: "what is
+            // quantum entanglement" as a PWA visitor returned
+            // Wikipedia citations) — contradicting the owner
+            // directive (isolated runtimes do not research)
+            // and the gate's own refusal message. Guests get
+            // the honest unknown line instead.
+            this.sessionKind !== "guest" &&
             input.length <= 160 &&
             /\?|^(what|who|whom|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|will|would|should|tell me|explain|describe|define|name)\b/i.test(
               input,
@@ -3373,13 +3440,19 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // P6 — variance on the honest unknown line; the
           // "validated knowledge" marker survives in every
           // variant (composer self-check enforces it).
+          // BATCH 46: the research/teach invite is owner-only.
+          // Guests cannot research (batch 44 gate) or teach,
+          // so the miss line must not promise either.
           return this.compose(
-            // OWNER DIRECTIVE (2026-10-21): professional voice.
-            // The epistemic marker survives; the meta narration
-            // ("both are real options", research mechanics) goes.
-            `${unknownOpening(input)} ` +
-              `You can ask me to research it, or teach me the answer directly. ${plan.executable ? `A research plan is ready (${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}).` : ""}` +
-              genBlock,
+            this.sessionKind === "guest"
+              ? `${unknownOpening(input)} Sign in as the owner to have me research it.` +
+                  genBlock
+              : // OWNER DIRECTIVE (2026-10-21): professional voice.
+                // The epistemic marker survives; the meta narration
+                // ("both are real options", research mechanics) goes.
+                `${unknownOpening(input)} ` +
+                `You can ask me to research it, or teach me the answer directly. ${plan.executable ? `A research plan is ready (${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}).` : ""}` +
+                genBlock,
             nlu.confidence * 0.5,
             [],
             plan,
@@ -4210,8 +4283,15 @@ export class ArchieNativeEngine implements ArchieRuntime {
         }
         const result = await this.marketPriceLookup(product);
         if (!result) {
+          // BATCH 46: the teach invite is owner-only — a guest
+          // session cannot retain a taught price (batch 44
+          // gate), so promising it would be dishonest (the
+          // live visitor reply offered exactly that). Em dash
+          // removed at authoring; compose() stays the backstop.
           return this.compose(
-            `I have no observed price data for "${product}" yet — the market intelligence crawler has not recorded it, and I do not guess prices. You can teach me a price directly and I will retain it as owner-provided knowledge.`,
+            this.sessionKind === "guest"
+              ? `I have no observed price data for "${product}" yet. The market intelligence crawler has not recorded it, and I do not guess prices.`
+              : `I have no observed price data for "${product}" yet. The market intelligence crawler has not recorded it, and I do not guess prices. You can teach me a price directly and I will retain it as owner-provided knowledge.`,
             nlu.confidence,
             [],
           );
@@ -5377,7 +5457,27 @@ function retrieveFromSystemInstruction(
   // common one — "screed" must beat "floor" when both occur in
   // different sections, so the subject's own guide wins. IDF is
   // computed over the injected sections themselves.
-  const sectionTokens = sections.map((sec: string) => {
+  // BATCH 46: action-only title matches are not subject
+// matches. Live-verified 2026-10-22: "do you install pop
+// ceilings" surfaced the wet-area TILE guide because the
+// single shared title token was the action word "install"
+// (subjects "pop"/"ceiling" absent). A section only wins if
+// the title overlap includes at least one token that is NOT
+// a generic action word — the subject of the guide must
+// actually appear in the question.
+const KB_ACTION_TOKENS = new Set([
+  "install",
+  "build",
+  "fix",
+  "repair",
+  "make",
+  "offer",
+  "provide",
+  "deliver",
+  "work",
+]);
+
+const sectionTokens = sections.map((sec: string) => {
     const lines = sec.split("\n");
     return {
       title: new Set(
@@ -5416,6 +5516,13 @@ function retrieveFromSystemInstruction(
       }
     }
     if (titleOverlap === 0) continue; // subject must appear in the title
+    // BATCH 46: reject action-only overlaps — the section's
+    // own subject must be present in the question, otherwise
+    // an off-topic guide rides in on a shared action verb.
+    const subjectOverlap = qTokens.filter(
+      (t: string) => title.has(t) && !KB_ACTION_TOKENS.has(t),
+    ).length;
+    if (subjectOverlap === 0) continue;
     // Coverage gate: how-to preemption demands a genuine
     // subject match, not one stray shared token.
     if (titleOverlap / qTokens.length < minCoverage) continue;

@@ -46,6 +46,13 @@ export interface ConversationalContext {
   inferences: number;
   /** Honest capability summary from the manifest. */
   capabilitiesSummary: string;
+  /** BATCH 46: guest sessions cannot teach, research, or
+   *  retain anything. Social-intent templates must not
+   *  promise owner-only features to a guest (live-verified
+   *  2026-10-22: a visitor asking "can you help me plan a
+   *  painting project" got "47 capabilities operational" plus
+   *  a teach invitation; farewells promised retention). */
+  sessionKind?: "owner" | "guest";
 }
 
 function pick(key: string, seed: string, variants: string[]): string {
@@ -104,12 +111,21 @@ function firstSentence(text: string, max = 140): string {
 // Response families
 // ---------------------------------------------------------
 
+// BATCH 46: fact-count narration removed from every greeting
+// template (owner directive 2026-09-16: never mention how
+// many facts ARCHIE knows); guest variants never promise
+// teaching.
 const GREETINGS = [
-  "Good {part}, and welcome. Engine online, {facts} facts ready. What can I do for you?",
+  "Good {part}, and welcome. Engine online and ready. What can I do for you?",
   "Hello! Good {part} to you. Everything is running and I am listening. What is on your mind?",
-  "Hey, good {part}. {facts} facts in my store and all systems ready. How can I help?",
-  "Good {part}. I am here and listening. Ask me anything in my validated knowledge, or teach me something new.",
+  "Hey, good {part}. All systems ready. How can I help?",
+  "Good {part}. I am here and listening. Ask me anything in my validated knowledge.",
   "Well met. Good {part} to you. What would you like to work on?",
+];
+const GUEST_GREETINGS = [
+  "Good {part}, and welcome. Engine online and ready. Ask me anything in my knowledge.",
+  "Hello! Good {part} to you. I am listening. Ask me anything in my knowledge.",
+  "Hey, good {part}. Ready to help. Ask me anything in my knowledge.",
 ];
 
 const FAREWELLS = [
@@ -118,6 +134,13 @@ const FAREWELLS = [
   "Understood, we close for now. Memory persists, nothing is lost.",
   "Safe travels. My memory of our conversation persists, so we pick up exactly where we stopped.",
   "Goodbye for now. Rest well, and come back to a fresh, honest engine.",
+];
+// BATCH 46: a guest session retains NOTHING. The honest
+// farewell says so instead of promising persistence.
+const GUEST_FAREWELLS = [
+  "Goodbye. This session is not retained, but shared knowledge is here when you return.",
+  "Talk soon. I will be here, answering from shared knowledge.",
+  "Goodbye for now. Rest well.",
 ];
 
 const GRATITUDES = [
@@ -160,6 +183,11 @@ const HELP_OFFERS = [
   "Yes, tell me what you need. I can answer from my validated knowledge, plan work, calculate, research, analyze code and remember what you teach me. What is the task?",
   "I am ready to help. Ask a question, give me a task to plan, or teach me something new. {capabilities}.",
   "Of course. Give me the details and I will take it on honestly, including reporting where my abilities end. {capabilities}.",
+];
+// BATCH 46: guests cannot research or teach (batch 44 gate);
+// the help offer lists only guest-honest capabilities.
+const GUEST_HELP_OFFERS = [
+  "Yes, tell me what you need. In this session I can answer from shared knowledge, calculate, quote live crypto prices, and give site guidance. Teaching and research are owner-session features. What is the task?",
 ];
 
 const CELEBRATIONS = [
@@ -319,6 +347,10 @@ function emotionBranch(
 export function composeConversational(ctx: ConversationalContext): string {
   const { input, intent, now, emojiTone, recentTurns } = ctx;
   const facts = String(ctx.factsCount);
+  // BATCH 46: guest sessions use the guest-honest template
+  // pools — no owner-only promises, no internal capability
+  // counts, no retention claims.
+  const guest = ctx.sessionKind === "guest";
   const caps = ctx.capabilitiesSummary;
   const seed = `${intent}:${input}`;
   const last = lastArchieTurn(recentTurns);
@@ -326,12 +358,12 @@ export function composeConversational(ctx: ConversationalContext): string {
   switch (intent) {
     case "greeting": {
       const part = partOfDay(now);
-      return pick("greet", seed, GREETINGS)
+      return pick("greet", seed, guest ? GUEST_GREETINGS : GREETINGS)
         .replace(/\{part}/g, part)
         .replace(/\{facts}/g, facts);
     }
     case "farewell":
-      return pick("farewell", seed, FAREWELLS);
+      return pick("farewell", seed, guest ? GUEST_FAREWELLS : FAREWELLS);
     case "gratitude":
       return pick("gratitude", seed, GRATITUDES);
     case "apology":
@@ -355,7 +387,7 @@ export function composeConversational(ctx: ConversationalContext): string {
     case "disagreement":
       return pick("disagree", seed, DISAGREEMENTS);
     case "help_request":
-      return pick("help", seed, HELP_OFFERS)
+      return pick("help", seed, guest ? GUEST_HELP_OFFERS : HELP_OFFERS)
         .replace(/\{capabilities}/g, caps)
         .replace(/\{facts}/g, facts);
     case "celebration":
@@ -496,4 +528,44 @@ export function conversationSelfCheck(): { ok: boolean; failures: string[] } {
     }
   }
   return { ok: failures.length === 0, failures };
+}
+
+
+// ---------------------------------------------------------
+// BATCH 46 Defect 8: crisis-aware response (2026-10-22)
+// ---------------------------------------------------------
+// Live-verified defect: "i feel really depressed and want to
+// hurt myself" was classified emotional_expression and
+// answered "Surprising indeed. Want me to dig into why it
+// turned out that way?". A first-person self-harm disclosure
+// must never reach a social template. Detection is
+// deterministic first-person phrase matching only. A
+// third-person mention ("my friend is suicidal") is NOT a
+// crisis signal: it can be a genuine knowledge or teaching
+// input, and intercepting it would block those paths.
+const CRISIS_PATTERNS: RegExp[] = [
+  /\bkill(?:ing)? myself\b/i,
+  /\bhurt(?:ing)? myself\b/i,
+  /\bharm(?:ing)? myself\b/i,
+  /\bcut(?:ting)? myself\b/i,
+  /\bend(?:ing)? my life\b/i,
+  /\bi want to die\b/i,
+  /\bwish i (?:was|were) dead\b/i,
+  /\bbetter off dead\b/i,
+  /\bno reason to (?:live|go on)\b/i,
+  /\bi(?:'?m| am| feel| m| think i am) suicidal\b/i,
+  /\bthinking (?:of|about) (?:killing|hurting|harming) myself\b/i,
+  /\bdon'?t want to (?:live|be here|be alive) anymore?\b/i,
+];
+
+/** Honest crisis reply for first-person self-harm signals, or
+ *  null when the message carries none. Empathetic, never
+ *  fabricated: ARCHIE says plainly it is not a crisis
+ *  counselor and points to real help. 112 is Nigeria's
+ *  national emergency number (well-established, verifiable).
+ *  No invented hotline numbers. */
+export function crisisReply(input: string): string | null {
+  const normalized = input.toLowerCase();
+  if (!CRISIS_PATTERNS.some((re) => re.test(normalized))) return null;
+  return "I hear you, and what you are going through matters. I am not a crisis counselor and I will not pretend to be one. Please reach out for real help now: if you are in immediate danger call 112, Nigeria's national emergency number; contact a mental health professional; or tell someone you trust exactly how you feel so you are not carrying this alone. You deserve support from real people, and getting it is the right next step. I am still here if you want to talk something through afterwards.";
 }

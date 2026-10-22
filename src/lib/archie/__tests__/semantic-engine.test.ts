@@ -12,7 +12,10 @@ import {
   assessSecurityBoundary,
   bridgeFreluxCalculation,
 } from "@studio-shared/archie-ai/semantic-engine/index.ts";
-import { detectLanguage as detectNoticeLanguage } from "@studio-shared/archie-ai/native-engine/multilingual.ts";
+import {
+  detectLanguage as detectNoticeLanguage,
+  normalizeForEngine,
+} from "@studio-shared/archie-ai/native-engine/multilingual.ts";
 
 describe("ARCHIE Semantic Understanding & Language Reasoning Engine", () => {
   // A. Contextual Meaning Resolution
@@ -299,5 +302,39 @@ describe("distinctive marker tier (Nigerian languages)", () => {
       language: "en",
     });
     expect(detectNoticeLanguage("water")).toMatchObject({ language: "en" });
+  });
+});
+
+
+// BATCH 46: the multilingual notice promises an English
+// answer, but the engine parsed the ORIGINAL text — "wetin be
+// screwdriver" hit the NLU as a greeting and the Pidgin notice
+// wrapped a greeting (live-verified 2026-10-22). Detected
+// non-English interrogatives are normalized to their English
+// structure; anything unmatched passes through unchanged.
+describe("interrogative normalization for engine NLU", () => {
+  it("normalizes Pidgin/Igbo/Yoruba/Hausa interrogatives", () => {
+    const cases: Array<[string, string]> = [
+      ["wetin be screwdriver", "what is screwdriver"],
+      ["kedu ihe screwdriver", "what is screwdriver"],
+      ["kini oruko re", "what is oruko re"],
+      ["menene haka", "what is haka"],
+    ];
+    for (const [q, expected] of cases) {
+      expect(
+        normalizeForEngine(detectNoticeLanguage(q), q),
+      ).toBe(expected);
+    }
+  });
+
+  it("passes English and unmatched text through unchanged", () => {
+    expect(
+      normalizeForEngine(detectNoticeLanguage("what is a screwdriver"),
+        "what is a screwdriver"),
+    ).toBe("what is a screwdriver");
+    expect(
+      normalizeForEngine(detectNoticeLanguage("biko help me"),
+        "biko help me"),
+    ).toBe("biko help me");
   });
 });

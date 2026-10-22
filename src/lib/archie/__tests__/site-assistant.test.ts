@@ -90,3 +90,44 @@ describe("FRELUX site assistant", () => {
     expect(result.responseText).toContain("1:4");
   });
 });
+
+
+// BATCH 46: action-only title matches are not subject matches
+// (live defect 2026-10-22: "do you install pop ceilings"
+// surfaced the wet-area TILE guide — the only shared title
+// token was the action word "install"). The section's own
+// subject must appear in the question.
+const ACTION_OVERLAP_PROMPT = `You are ARCHIE, the AI assistant on the FRELUX website (frelux.tools) — a Nigerian building, painting and finishing platform.
+
+## Role
+Help site visitors with practical guidance on painting, POP ceilings, screeding, tiling, paint colours and surface preparation.
+
+## Installing tile in wet areas
+Learn hub guide — read it in full at frelux.tools/learn/us-wet-area-tile-installation (surface-preparation).
+A sequenced US field guide to wet-area tile: substrate and flatness, membrane envelopes and flood tests, layout, setting, grouting, and the movement joints.`;
+
+describe("KB retrieval subject-overlap gate", () => {
+  it("an action-only title overlap does not surface an off-topic guide", async () => {
+    const engine = new ArchieNativeEngine();
+    await engine.boot();
+    const result = await engine.converse(
+      "do you install pop ceilings",
+      undefined,
+      ACTION_OVERLAP_PROMPT,
+    );
+    expect(result.responseText).not.toContain("From the knowledge base");
+    expect(result.responseText.toLowerCase()).not.toContain("wet-area");
+  });
+
+  it("a genuine subject match still surfaces the guide", async () => {
+    const engine = new ArchieNativeEngine();
+    await engine.boot();
+    const result = await engine.converse(
+      "do you install tile in wet areas",
+      undefined,
+      ACTION_OVERLAP_PROMPT,
+    );
+    expect(result.responseText).toContain("From the knowledge base");
+    expect(result.responseText).toContain("flood tests");
+  });
+});
