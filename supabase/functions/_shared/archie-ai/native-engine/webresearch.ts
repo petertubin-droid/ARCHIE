@@ -48,6 +48,12 @@ export interface ResearchHit {
    *  when the source page was actually fetched, robots-
    *  checked and content-extracted. Absent = snippet only. */
   content?: string;
+  /** BATCH 44: false for non-page knowledge results (an AI
+   *  model answer is not a readable web document). The
+   *  deepening pass must not spend budget fetching these;
+   *  live-verified: the pipeline requested the Gemini API
+   *  endpoint itself and reported a 403 "could not read". */
+  fetchable?: boolean;
 }
 
 export interface ResearchReport {
@@ -115,6 +121,14 @@ export function isSearchFailureNote(note: string): boolean {
     // fake zero-hit search.
     note.startsWith("gemini api unavailable") ||
     note.startsWith("site-scoped search not supported") ||
+    // BATCH 44: the DDG circuit breaker's instant decline is
+    // a refusal class, never a genuine zero — without this
+    // the pipeline credited a circuit-blocked site as
+    // "searched successfully" with zero hits (live-verified:
+    // britannica.com listed under Sources searched though no
+    // adapter executed), and MultiSearchAdapter could adopt
+    // the circuit note as its "genuine zero" verdict.
+    note.startsWith("search declined") ||
     // Audit fix H-4 (2026-09-11): a restricted source is never
     // searched — it must be reported as a failure, never
     // claimed in sourcesSearched ("searched N sources").
@@ -835,6 +849,11 @@ export class ResearchPipeline {
       const deepenTargets: typeof hits = [];
       const seenDomains = new Set<string>();
       for (const h of hits) {
+        // BATCH 44: non-page knowledge hits (AI model
+        // answers) are never fetch targets — attempting to
+        // read the model API as a document wastes budget and
+        // manufactures a bogus "page could not be read" line.
+        if (h.fetchable === false) continue;
         const d = h.domain ?? "";
         if (seenDomains.has(d)) continue;
         seenDomains.add(d);

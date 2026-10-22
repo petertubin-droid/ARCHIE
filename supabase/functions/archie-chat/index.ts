@@ -2577,7 +2577,10 @@ async function executeChat(
       // Isolated application session: fresh engine, no tools,
       // no persistence, no owner memory. Rate limiting already
       // ran inside authenticateCredential (per-credential).
-      const appRuntime = new ArchieNativeEngine();
+      // BATCH 44: isolated non-owner session — teaching and
+      // web research are owner-only; the guest gate in the
+      // engine enforces it.
+      const appRuntime = new ArchieNativeEngine({ sessionKind: "guest" });
       const appRequest: ArchieInferenceRequest = {
         turns: [{ role: "owner" as const, parts: [{ text: message }] }],
         systemInstruction:
@@ -2664,7 +2667,9 @@ async function executeChat(
     // engine per request — no persistence, no access to the
     // owner's knowledge/memory, no context shared with anyone.
     // What a visitor says never enters ARCHIE's owner memory.
-    const visitorRuntime = new ArchieNativeEngine();
+    // BATCH 44: guest session — the engine's guest gate
+    // refuses teaching and owner research authorization.
+    const visitorRuntime = new ArchieNativeEngine({ sessionKind: "guest" });
     const visitorEngine = "archie-native-isolated";
 
     const visitorRequest: ArchieInferenceRequest = {

@@ -392,7 +392,7 @@ describe("production wiring (archie-chat source)", () => {
       source.indexOf("PUBLIC VISITOR MODE"),
       source.indexOf("// 3. Resolve the inference engine"),
     );
-    expect(visitorBlock).toContain("new ArchieNativeEngine()");
+    expect(visitorBlock).toContain('new ArchieNativeEngine({ sessionKind: "guest" })');
     expect(visitorBlock).not.toContain("resolveArchieCapabilityEngine");
     expect(visitorBlock).toContain("archie-native-isolated");
   });

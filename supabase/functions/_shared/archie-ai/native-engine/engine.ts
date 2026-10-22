@@ -117,6 +117,7 @@ import {
   MultiSearchAdapter,
   salientTokens,
 } from "./webresearch.ts";
+import { isTimeSensitiveQuery } from "./query-terms.ts";
 import { getWebSourceRegistry } from "./web-sources.ts";
 import { analyzeSource, generateUnitTestScaffold } from "./coding.ts";
 import {
@@ -523,11 +524,25 @@ export class ArchieNativeEngine implements ArchieRuntime {
   private inferences = 0;
   private confidenceSum = 0;
   private booted = false;
+  /** BATCH 44: "guest" = isolated non-owner runtime (see
+   *  constructor docs). */
+  private readonly sessionKind: "owner" | "guest" = "owner";
 
   constructor(options?: {
     /** null/undefined = run in-memory only (the REAL
      *  personalization privacy control). */
     persistence?: SupabaseLike | null;
+    /** BATCH 44: session kind. "guest" marks isolated non-
+     * owner runtimes (PWA visitor sessions, scoped API-
+     * credential sessions). In-memory engines without a
+     * persistence adapter are NOT automatically guests — a
+     * bare engine is the owner-without-DB shape used across
+     * the test suites. Guests never teach, never mint
+     * owner-asserted facts and never authorize web research
+     * (live-verified defect 2026-10-21: a visitor sentence
+     * produced "Retained as your assertion (owner-
+     * asserted...)"). */
+    sessionKind?: "owner" | "guest";
     /** STRATEGY LEARNING (gap C-4): durable store for real
      *  owner-verdict outcomes per "<intent>:<strategy>" key.
      *  null/undefined = in-memory mode: the honest cue system
@@ -590,6 +605,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
     this.verbosity = options?.verbosity ?? "detailed";
     this.marketPriceLookup = options?.marketPriceLookup ?? null;
     this.worldTimeline = options?.worldTimeline ?? null;
+    this.sessionKind = options?.sessionKind ?? "owner";
     this.meaningResearch = options?.meaningResearch ?? null;
     this.lexiconLookup = options?.lexiconLookup ?? null;
     this.lessonLookup = options?.lessonLookup ?? null;
@@ -3444,6 +3460,22 @@ export class ArchieNativeEngine implements ArchieRuntime {
             [],
           );
         }
+        // BATCH 44: guest sessions must never mint
+        // owner-asserted facts. Live-verified 2026-10-21: a
+        // visitor message ("kedu ihe achisha means what")
+        // routed to teaching and replied "Retained as your
+        // assertion (owner-asserted...)... it earns validated
+        // status" — a false authority claim AND a lifecycle
+        // promise the guest session cannot honor (owner
+        // directive 2026-10-21, same honesty standard as the
+        // definition-miss path).
+        if (this.sessionKind === "guest") {
+          return this.compose(
+            "This is a guest session. I cannot retain teachings here; nothing taught in this session is kept. Sign in as the owner to teach me facts.",
+            nlu.confidence * 0.8,
+            [],
+          );
+        }
         // SELF-EVOLVING VOCABULARY (owner directive,
         // 2026-09-13): a meaning-teach statement ("kwisatz
         // means sacred weed") writes the LIVING REGISTRY,
@@ -3735,6 +3767,20 @@ export class ArchieNativeEngine implements ArchieRuntime {
             [],
           );
         }
+        // BATCH 44: guest sessions never run research and
+        // never mint "owner requested research" authorization.
+        // Live-verified 2026-10-21: a visitor message
+        // ("research current palm oil price in Nigeria")
+        // executed the full web pipeline and asserted an
+        // owner-authorized provenance fact from a guest
+        // session (owner directive 2026-10-21).
+        if (this.sessionKind === "guest") {
+          return this.compose(
+            "This is a guest session. Research is owner-only; I do not search the web from a guest session. Sign in as the owner to have me research it.",
+            nlu.confidence * 0.8,
+            [],
+          );
+        }
         // SELF-EVOLVING VOCABULARY (owner directive,
         // 2026-09-13): a MEANING-research request ("research
         // what kwisatz means", "research it" after a
@@ -3879,6 +3925,18 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // searched are named; failures, disagreements and
         // discovered sources are reported, never smoothed over.
         if (report.reusedCache) {
+          // BATCH 44: "still current" is only honest for
+          // stable knowledge. A time-sensitive value (price,
+          // forecast, live figure) does not stay current just
+          // because the cache is warm; say what actually
+          // happened and re-warn.
+          if (isTimeSensitiveQuery(query)) {
+            return this.compose(
+              `Reusing ${report.hits.length} cached finding(s) for "${query}" instead of searching again. This asks for a current value; cached findings cannot confirm it. Verify against a live source before relying on any figure. Ask me to validate them if you want them promoted to knowledge.`,
+              nlu.confidence,
+              [],
+            );
+          }
           return this.compose(
             `Recent findings for "${query}" are still current — reusing ${report.hits.length} cached finding(s) instead of searching again. Ask me to validate them if you want them promoted to knowledge.`,
             nlu.confidence,
@@ -3893,6 +3951,15 @@ export class ArchieNativeEngine implements ArchieRuntime {
           lines.push(
             `Sources searched (priority first): ${report.sourcesSearched.join(", ") || "none"}.`,
           );
+          // BATCH 44: a time-sensitive question answered from
+          // reference archives is a stale answer by
+          // construction — say so instead of presenting
+          // history pages as the current figure.
+          if (isTimeSensitiveQuery(query)) {
+            lines.push(
+              "Caution: this asks for a current value. The sources searched are reference archives, not live feeds; any figure found may be outdated. Verify against a live source before relying on it.",
+            );
+          }
           if (report.sourceFailures.length > 0) {
             lines.push(
               `Failed/declined: ${summarizeSourceFailures(report.sourceFailures)}.`,

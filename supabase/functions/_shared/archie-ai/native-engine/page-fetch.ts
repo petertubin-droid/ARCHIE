@@ -246,8 +246,8 @@ export class PageFetcher {
     try {
       const res = await this.fetchPublicUrl(`${origin}/robots.txt`);
       if (res.ok) {
-        const robotsText = await this.readBoundedBody(res, 256_000);
-        const parsed = parseRobots(robotsText);
+        const robotsBounded = await this.readBoundedBody(res, 256_000);
+        const parsed = parseRobots(robotsBounded.text);
         rules.disallow = parsed.disallow;
         rules.allow = parsed.allow;
         rules.note = "robots.txt consulted";
@@ -322,18 +322,31 @@ export class PageFetcher {
     throw new Error("too many redirects — page not fetched");
   }
 
+  /**
+   * BATCH 44: bounded read now CLAMPS at the limit instead of
+   * refusing. Live-verified 2026-10-21: every substantive
+   * Wikipedia article exceeded the 1MB cap and the deepening
+   * pass lost ALL page content ("body read refused: body
+   * exceeded 1000000 byte limit"), killing content cross-
+   * checks on exactly the pages worth reading. The first
+   * byteLimit bytes of an HTML document contain the lead
+   * section — sufficient for salient-token agreement. The
+   * stream is cancelled at the limit so nothing oversized is
+   * buffered; `truncated` lets the caller report honestly.
+   */
   private async readBoundedBody(
     response: Response,
     byteLimit = this.maxBytes,
-  ): Promise<string> {
+  ): Promise<{ text: string; truncated: boolean }> {
     if (!Number.isSafeInteger(byteLimit) || byteLimit < 1) {
       throw new RangeError("byte limit must be a positive safe integer");
     }
     const reader = response.body?.getReader();
-    if (!reader) return "";
+    if (!reader) return { text: "", truncated: false };
     const decoder = new TextDecoder();
     let bytes = 0;
     let text = "";
+    let truncated = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     const deadline = new Promise<never>((_, reject) => {
@@ -348,12 +361,23 @@ export class PageFetcher {
         if (done) break;
         bytes += value.byteLength;
         if (bytes > byteLimit) {
-          void reader.cancel("response size limit exceeded").catch(() => {});
-          throw new Error(`body exceeded ${byteLimit} byte limit`);
+          // BATCH 44: decode the PREFIX that fits the cap —
+          // a single large first chunk must still yield its
+          // in-budget bytes, not an empty string.
+          const fit = byteLimit - (bytes - value.byteLength);
+          if (fit > 0) {
+            text += decoder.decode(value.slice(0, fit), { stream: true });
+          }
+          void reader.cancel("response size limit reached").catch(() => {});
+          truncated = true;
+          break;
         }
         text += decoder.decode(value, { stream: true });
       }
-      return text + decoder.decode();
+      return {
+        text: text + decoder.decode(),
+        truncated,
+      };
     } catch (error) {
       void reader.cancel(timedOut ? "response body read timed out" : "response body read failed").catch(() => {});
       throw error;
@@ -465,20 +489,18 @@ export class PageFetcher {
         note: `content-type "${contentType.split(";")[0]}" is not readable text — not extracted`,
       };
     }
-    // ── size guard — never buffer an oversized body.
-    const lenHeader = Number(res.headers?.get?.("content-length") ?? 0);
-    if (lenHeader && lenHeader > this.maxBytes) {
-      return {
-        url,
-        ok: false,
-        content: "",
-        title: "",
-        note: `response is ${lenHeader} bytes (over the ${this.maxBytes} cap) — declined`,
-      };
-    }
+    // BATCH 44: the size guard no longer declines oversized
+    // responses — it CLAMPS (see readBoundedBody). A content-
+    // length header above the cap is now served truncated:
+    // the lead bytes answer the deepening need, the stream is
+    // cancelled at the cap, and the note reports truncation
+    // honestly instead of discarding the whole page.
     let html: string;
+    let truncated = false;
     try {
-      html = await this.readBoundedBody(res);
+      const bounded = await this.readBoundedBody(res);
+      html = bounded.text;
+      truncated = bounded.truncated;
     } catch (err) {
       return {
         url,
@@ -503,7 +525,9 @@ export class PageFetcher {
       ok: true,
       content,
       title: extractTitle(html),
-      note: `fetched ${html.length} bytes, extracted ${content.length} chars (${robots.note})`,
+      note: truncated
+        ? `fetched first ${html.length} bytes (body larger — truncated), extracted ${content.length} chars (${robots.note})`
+        : `fetched ${html.length} bytes, extracted ${content.length} chars (${robots.note})`,
     };
   }
 }

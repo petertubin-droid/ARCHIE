@@ -25,7 +25,7 @@ function visitorBlock(): string {
 describe("archie-chat visitor isolation", () => {
   it("visitor branch runs on a fresh isolated engine with no tools", () => {
     const block = visitorBlock();
-    expect(block).toContain("new ArchieNativeEngine()");
+    expect(block).toContain('new ArchieNativeEngine({ sessionKind: "guest" })');
     expect(block).toContain("tools: []");
   });
 

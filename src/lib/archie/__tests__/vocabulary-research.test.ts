@@ -528,6 +528,45 @@ describe("meaning research across multiple sites", () => {
     });
   });
 
+  // BATCH 44: a guest session must never mint owner-asserted
+  // facts or owner research authorization. Live-verified
+  // 2026-10-21: a visitor teaching sentence produced
+  // "Retained as your assertion (owner-asserted ...)" and a
+  // visitor research request ran the full pipeline.
+  it("guest sessions refuse a teaching sentence honestly", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "guest" });
+    const res = await engine.generate({
+      turns: [
+        { role: "owner", parts: [{ text: "kwisatz means sacred weed" }] },
+      ],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toMatch(/guest session/i);
+    expect(reply).not.toMatch(/owner-asserted/);
+    expect(reply).not.toMatch(/validated status/);
+  });
+
+  it("guest sessions refuse a research request honestly", async () => {
+    const engine = new ArchieNativeEngine({ sessionKind: "guest" });
+    const res = await engine.generate({
+      turns: [
+        { role: "owner", parts: [{ text: "research palm oil prices" }] },
+      ],
+      tools: [],
+      systemInstruction: "",
+    });
+    const reply =
+      ((res as { parts?: Array<{ text?: string }> }).parts ?? [{}])[0].text ??
+      "";
+    expect(reply).toMatch(/guest session/i);
+    expect(reply).not.toMatch(/Research completed|Sources searched/);
+  });
+
+
   it("bare 'research it' resolves the term from the previous definition question end-to-end", async () => {
     // live UX: "what does blorptastic mean" -> honest miss ->
     // "research it" must research BLORPTASTIC, not the word

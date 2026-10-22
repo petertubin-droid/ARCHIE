@@ -16,11 +16,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   DuckDuckGoLiteAdapter,
+  MultiSearchAdapter,
   ResearchPipeline,
+  isSearchFailureNote,
   resetDdgCircuitForTests,
   type ResearchAdapter,
 } from "@studio-shared/archie-ai/native-engine/webresearch.ts";
 import { FactStore } from "@studio-shared/archie-ai/native-engine/knowledge.ts";
+import type { PageFetcher } from "@studio-shared/archie-ai/native-engine/page-fetch.ts";
 import {
   WebSourceRegistry,
   getWebSourceRegistry,
@@ -398,5 +401,137 @@ describe("DDG-lite anomaly circuit breaker", () => {
     const refused = await adapter.search("d");
     expect(refused.note).toContain("anomaly protection");
     expect(refused.note).not.toContain("circuit open");
+  });
+});
+
+
+// BATCH 44: the circuit-breaker decline is a FAILURE note.
+// Without the fix a circuit-blocked site was credited in
+// "sources searched" despite zero adapters executing, and
+// MultiSearchAdapter adopted the circuit note as a genuine
+// zero verdict.
+describe("circuit-breaker note classification", () => {
+  it("the circuit-open decline is a search failure", () => {
+    const note =
+      "search declined: anomaly-protection circuit open (3 consecutive refusals) — this client class is blocked by the endpoint";
+    expect(isSearchFailureNote(note)).toBe(true);
+  });
+
+  it("MultiSearchAdapter never adopts the circuit note as a genuine zero", async () => {
+    resetDdgCircuitForTests();
+    const circuit = {
+      id: "circuit",
+      search: () =>
+        Promise.resolve({
+          hits: [],
+          note:
+            "search declined: anomaly-protection circuit open (3 consecutive refusals) — this client class is blocked by the endpoint",
+        }),
+    };
+    const realZero = {
+      id: "real",
+      search: () =>
+        Promise.resolve({ hits: [], note: "no results found for the query" }),
+    };
+    const multi = new MultiSearchAdapter([circuit, realZero]);
+    const res = await multi.search("concrete curing time");
+    expect(res.note).toContain("no results found for the query");
+  });
+
+  it("a genuine wikipedia zero still reads as a genuine zero", () => {
+    expect(isSearchFailureNote("no results found for the query")).toBe(false);
+    expect(
+      isSearchFailureNote("no topically matching results found for the query"),
+    ).toBe(false);
+  });
+});
+
+
+// BATCH 44: an AI-model knowledge hit is not a readable web
+// page. Live evidence: the deepening pass fetched the Gemini
+// API endpoint itself, wasted budget on a guaranteed 403 and
+// printed "Pages I could not read: generativelanguage...". A
+// fetchable:false hit must be skipped as a fetch target and
+// never appear in pageFetches.
+describe("deepening skips non-page knowledge hits", () => {
+  it("never fetches a fetchable:false hit", async () => {
+    const fetchedUrls: string[] = [];
+    const fetcher = {
+      fetch: (url: string) => {
+        fetchedUrls.push(url);
+        return Promise.resolve({
+          url,
+          ok: true,
+          content: "page content with the answer",
+          note: "read",
+        });
+      },
+    } as unknown as PageFetcher;
+    const model = {
+      id: "model",
+      search: () =>
+        Promise.resolve({
+          hits: [
+            {
+              title: "Gemini knowledge: define momentum",
+              url: "https://generativelanguage.googleapis.com/v1beta/models/x",
+              snippet: "momentum is the quantity of motion of a body",
+              domain: "generativelanguage.googleapis.com",
+              fetchable: false,
+            },
+          ],
+          note: "answered by Gemini (AI model knowledge — candidate, not validated)",
+        }),
+    };
+    const pipeline = new ResearchPipeline(
+      new FactStore(),
+      model as ResearchAdapter,
+      getWebSourceRegistry(),
+      fetcher,
+    );
+    const report = await pipeline.research("define momentum");
+    expect(fetchedUrls).toEqual([]);
+    expect(report.pageFetches).toEqual([]);
+    expect(report.hits[0].fetchable).toBe(false);
+  });
+
+  it("still fetches ordinary fetchable hits", async () => {
+    const fetchedUrls: string[] = [];
+    const fetcher = {
+      fetch: (url: string) => {
+        fetchedUrls.push(url);
+        return Promise.resolve({
+          url,
+          ok: true,
+          content: "page content",
+          note: "read",
+        });
+      },
+    } as unknown as PageFetcher;
+    const web = {
+      id: "web",
+      search: () =>
+        Promise.resolve({
+          hits: [
+            {
+              title: "Momentum",
+              url: "https://en.wikipedia.org/wiki/Momentum",
+              snippet: "momentum is the quantity of motion",
+              domain: "wikipedia.org",
+            },
+          ],
+          note: "search completed",
+        }),
+    };
+    const pipeline = new ResearchPipeline(
+      new FactStore(),
+      web as ResearchAdapter,
+      getWebSourceRegistry(),
+      fetcher,
+    );
+    const report = await pipeline.research("momentum");
+    expect(fetchedUrls).toContain("https://en.wikipedia.org/wiki/Momentum");
+    expect(report.pageFetches.length).toBe(1);
+    expect(report.pageFetches[0].ok).toBe(true);
   });
 });

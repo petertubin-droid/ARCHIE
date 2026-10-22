@@ -121,6 +121,20 @@ export class GeminiResearchAdapter implements ResearchAdapter {
   async search(
     query: string,
   ): Promise<{ hits: ResearchHit[]; note: string }> {
+    // BATCH 44: site-scoped queries come from the priority
+    // wave (${query} site:${domain}); the Gemini knowledge
+    // prompt is not a web index and cannot honor a domain
+    // filter. A hit produced here would be attributed to the
+    // site's domain by crossCheckDomains — manufacturing
+    // "independent-source" agreement from one source and
+    // burning quota on a query the model cannot answer
+    // honestly. Decline like the other non-index adapters.
+    if (/\bsite:\S+/i.test(query)) {
+      return {
+        hits: [],
+        note: "site-scoped search not supported by this adapter — declined",
+      };
+    }
     if (!geminiResearchEnabled) {
       // Guard engaged: no key resolution, no network, no
       // quota — an honest zero with the reason stated.
@@ -196,6 +210,7 @@ export class GeminiResearchAdapter implements ResearchAdapter {
           url: `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}`,
           snippet: answer.slice(0, SNIPPET_MAX),
           domain: "generativelanguage.googleapis.com",
+          fetchable: false,
         },
       ],
       note: "answered by Gemini (AI model knowledge — candidate, not validated)",

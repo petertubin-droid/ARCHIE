@@ -13,6 +13,7 @@
 // =========================================================
 
 import type { ResearchAdapter, ResearchHit } from "./webresearch.ts";
+import { contentWordsOf, topicallyMatches } from "./query-terms.ts";
 
 const WIKI_ENDPOINT = "https://en.wikipedia.org/w/api.php";
 
@@ -48,9 +49,15 @@ export class WikipediaSearchAdapter implements ResearchAdapter {
     if (trimmed.length === 0) {
       return { hits: [], note: "no results found for the query" };
     }
+    // BATCH 44 (live-verified 2026-10-21): CirrusSearch
+    // ranks keyword queries, not questions — the raw
+    // question returned "Straight razor" for a whetstone
+    // query. Search on the content words instead.
+    const words = contentWordsOf(trimmed);
+    const searchQuery = words.length > 0 ? words.join(" ") : trimmed;
     const url =
       `${WIKI_ENDPOINT}?action=query&list=search&format=json&origin=*` +
-      `&srlimit=8&srsearch=${encodeURIComponent(trimmed)}`;
+      `&srlimit=8&srsearch=${encodeURIComponent(searchQuery)}`;
     let res: Response;
     try {
       res = await this.fetchFn(url, {
@@ -106,6 +113,20 @@ export class WikipediaSearchAdapter implements ResearchAdapter {
     if (hits.length === 0) {
       return { hits: [], note: "no results found for the query" };
     }
-    return { hits, note: "search completed" };
+    // BATCH 44: a search hit sharing zero content words with
+    // the question is a ranking artifact, not an answer —
+    // it must not enter candidate knowledge. This is an
+    // honest filter (genuine zero when everything drifts),
+    // never a fabricated hit.
+    const onTopic = words.length > 0
+      ? hits.filter((h) => topicallyMatches(`${h.title} ${h.snippet}`, words))
+      : hits;
+    if (onTopic.length === 0) {
+      return {
+        hits: [],
+        note: "no topically matching results found for the query",
+      };
+    }
+    return { hits: onTopic, note: "search completed" };
   }
 }

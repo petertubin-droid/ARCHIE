@@ -173,33 +173,49 @@ describe("PageFetcher", () => {
     expect(cancelled).toBe(true);
   });
 
-  it("declines an oversized response before reading it", async () => {
-    const fetcher = new PageFetcher({
-      maxBytes: 1000,
-      fetchFn: stubFetch({}, () => {
-        throw new Error(
-          "must not be reached — robots allow-all, then size guard",
-        );
-      }),
-    });
-    // robots fetch is stubbed; the page handler must serve the
-    // oversized header — override after robots: use a raw fn.
+  // BATCH 44: oversized bodies are CLAMPED at the cap, not
+  // refused. Live evidence: every substantive Wikipedia
+  // article tripped the 1MB refusal and the deepening pass
+  // lost all page content. The clamp keeps the lead section
+  // (enough for salient-token agreement), cancels the stream
+  // at the cap and reports truncation honestly.
+  it("clamps an oversized response at the byte cap and reports truncation", async () => {
     const fn = (async (input: unknown) => {
       const url = String(input);
       if (url.endsWith("/robots.txt")) {
         return new Response("User-agent: *\nDisallow:\n", { status: 200 });
       }
-      return new Response("", {
-        status: 200,
-        headers: { "content-length": "999999", "content-type": "text/html" },
-      });
+      return new Response(
+        "<html><body><p>" + "lead paragraph text ".repeat(2000) +
+          "</p></body></html>",
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
     }) as unknown as typeof fetch;
-    const result = await new PageFetcher({ maxBytes: 1000, fetchFn: fn }).fetch(
+    const result = await new PageFetcher({ maxBytes: 5000, fetchFn: fn }).fetch(
       "https://big.example.com/page",
     );
-    expect(result.ok).toBe(false);
-    expect(result.note).toMatch(/over the 1000 cap/);
-    expect(fetcher).toBeTruthy();
+    expect(result.ok).toBe(true);
+    expect(result.note).toMatch(/truncated/);
+    expect(result.content.length).toBeGreaterThan(80);
+  });
+
+  it("reports no truncation for small bodies", async () => {
+    const fn = (async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/robots.txt")) {
+        return new Response("User-agent: *\nDisallow:\n", { status: 200 });
+      }
+      return new Response(
+        "<html><body><p>" + "small page lead text ".repeat(20) +
+          "</p></body></html>",
+        { status: 200, headers: { "content-type": "text/html" } },
+      );
+    }) as unknown as typeof fetch;
+    const result = await new PageFetcher({ maxBytes: 100000, fetchFn: fn }).fetch(
+      "https://small.example.com/page",
+    );
+    expect(result.ok).toBe(true);
+    expect(result.note).not.toMatch(/truncated/);
   });
 
   it("checks each redirect destination before fetching it", async () => {
@@ -233,7 +249,9 @@ describe("PageFetcher", () => {
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         reads += 1;
-        controller.enqueue(new Uint8Array(60));
+        controller.enqueue(
+          new TextEncoder().encode("readable lead paragraph text 0123 "),
+        );
         if (reads > 10) controller.close();
       },
       cancel() {
@@ -252,8 +270,8 @@ describe("PageFetcher", () => {
     const result = await new PageFetcher({ maxBytes: 100, fetchFn: fn }).fetch(
       "https://large.example/page",
     );
-    expect(result.ok).toBe(false);
-    expect(result.note).toMatch(/100 byte limit/);
+    expect(result.ok).toBe(true);
+    expect(result.note).toMatch(/truncated/);
     expect(cancelled).toBe(true);
     expect(reads).toBeLessThan(11);
   });

@@ -64,6 +64,27 @@ describe("Gemini learning source (owner directive 2026-10-18)", () => {
     expect(out.note).toContain("candidate, not validated");
   });
 
+  // BATCH 44: the priority wave sends site-scoped queries;
+  // the knowledge adapter must decline them before any key
+  // resolution or network call (same guard as the other
+  // non-index adapters).
+  it("declines site-scoped queries without touching the network", async () => {
+    let calls = 0;
+    const a = mk({
+      apiKey: "test-key",
+      fetchFn: (() => {
+        calls += 1;
+        return Promise.resolve(res(geminiBody("x")));
+      }) as unknown as typeof fetch,
+    });
+    const out = await a.search("whetstone site:wikipedia.org");
+    expect(calls).toBe(0);
+    expect(out.hits).toEqual([]);
+    expect(out.note).toBe(
+      "site-scoped search not supported by this adapter — declined",
+    );
+  });
+
   // BATCH 43: 2.5-flash thinking blows the 4s edge budget; the
   // research lookup must disable thinking explicitly.
   it("disables thinking for the latency-critical research lookup", async () => {
