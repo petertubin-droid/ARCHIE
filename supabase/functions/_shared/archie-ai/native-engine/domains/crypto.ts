@@ -295,8 +295,14 @@ export function createCryptoSkill(
         // evaluations. MUST precede the materials price rule.
         intent: "crypto_market_query",
         pattern:
-          /\b(?:bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp|dogecoin|doge|binance\s+coin|bnb|cardano|ada|chainlink|link|litecoin|ltc|crypto(?:coin|currency)?)\b[^.?!]*\b(?:price|worth|trading\s+at|selling\s+for|quoting)\b|\b(?:price|worth)\s+of\s+(?:bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp|dogecoin|doge|bnb|ada|link|ltc|crypto)|\b(?:should\s+i|is\s+it\s+safe\s+to|can\s+i|would\s+you)\s+(?:buy|sell|long|short)\b[^.?!]*\b(?:bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp|dogecoin|doge|bnb|ada|link|ltc)\b|\bevaluate\s+(?:my\s+)?(?:trade|crypto)\b/i,
+          /\b(?:bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp|dogecoin|doge|binance\s+coin|bnb|cardano|ada|chainlink|link|litecoin|ltc|crypto(?:coin|currency)?)\b[^.?!]*\b(?:price|worth|trading\s+at|selling\s+for|quoting)\b|\b(?:price|worth)\s+of\s+(?:bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp|dogecoin|doge|bnb|ada|link|ltc|crypto)|\b(?:should\s+i|is\s+it\s+safe\s+to|can\s+i|would\s+you)\s+(?:buy|sell|long|short)\b[^.?!]*\b(?:bitcoin|btc|ethereum|eth|solana|sol|ripple|xrp|dogecoin|doge|bnb|ada|link|ltc)\b|\bevaluate\s+(?:my\s+)?(?:trade|crypto)\b|\bhow\s+is\s+(?:the\s+)?(?:crypto|coin)\s+market\b[^.?!]*\b(?:doing|going|today)\b|\bhow\s+is\s+the\s+market\s+(?:doing|going)\b|\b(?:crypto|coin)\s+market\s+(?:status|update|overview|today)\b/i,
         confidence: 0.9,
+        // BATCH 48 Defect 4 (live-verified 2026-10-22): "how is
+        // the market doing today" answered with a GREETING
+        // ("Well met. What are we working on?") because no
+        // rule claimed market-status phrasing without an
+        // explicit coin symbol. The skill's no-symbol path
+        // answers honestly with usage guidance instead.
       },
     ],
     handler: async (_intent: string, input: string): Promise<string> => {

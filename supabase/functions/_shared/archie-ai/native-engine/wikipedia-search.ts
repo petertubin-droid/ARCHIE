@@ -14,6 +14,7 @@
 
 import type { ResearchAdapter, ResearchHit } from "./webresearch.ts";
 import { contentWordsOf, topicallyMatches } from "./query-terms.ts";
+import { decodeHtmlEntities } from "./html-text.ts";
 
 const WIKI_ENDPOINT = "https://en.wikipedia.org/w/api.php";
 
@@ -99,10 +100,10 @@ export class WikipediaSearchAdapter implements ResearchAdapter {
     }
     const hits: ResearchHit[] = [];
     for (const r of results) {
-      const title = (r.title ?? "").trim();
+      const title = decodeHtmlEntities((r.title ?? "").trim());
       if (!title) continue;
       const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`;
-      const snippet = (r.snippet ?? "")
+      const snippet = decodeHtmlEntities(r.snippet ?? "")
         .replace(/<[^>]+>/g, "")
         .replace(/\s+/g, " ")
         .trim()

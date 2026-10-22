@@ -1293,6 +1293,20 @@ const RULE_CASCADE: Array<{
       /^(?:please\s+)?(?:do\s+not|don'?t|never)\s+(?!remember\b|forget\b)[a-z]/i,
     confidence: 0.7,
   },
+  {
+    // BATCH 48 Defect 7 (live-verified 2026-10-22): bare
+    // "forget" directives ("forget that", "forget it",
+    // "forget the price") fell to weak Bayes routes and came
+    // back as the zero-words rephrase. A positive bare
+    // "forget X" is a memory exclusion exactly like
+    // "do not remember X". Note: "do not forget X" is the
+    // OPPOSITE (a keep/teach directive) and is owned by the
+    // teaching rule above; this rule only matches the
+    // positive bare verb.
+    intent: "memory_exclusion",
+    pattern: /^(?:please\s+)?forget\b/i,
+    confidence: 0.8,
+  },
   // -------------------------------------------------------
   // Conversational English expansion (owner directive,
   // 2026-09-11) — TOP of the cascade. These must precede the
@@ -1565,15 +1579,26 @@ const RULE_CASCADE: Array<{
     // negative feedback — "you missed it", "thats off
     // point" (Nigerian English for missing the point).
     pattern:
-      /^(?:no[,.!?]?\s+(?:that|this|the)\b|(?:that|this)\s+is\s+(?:wrong|incorrect|not\s+accurate|not\s+right)|you\s+are\s+(?:wrong|mistaken)|actually,?\s+it\s+is\s+(?:not|different)|correct\s+that)\b|^you\s+missed\b|\boff\s+point\b|that\s+is\s+not\s+what\s+i\s+(?:asked|wanted|said)\b|\bnot\s+what\s+i\s+asked\b/i,
+      /^(?:no[,.!?]?\s+(?:that|this|the)\b|(?:that|this)\s+is\s+(?:wrong|incorrect|not\s+accurate|not\s+right)|you\s+are\s+(?:wrong|mistaken)|\byou'?re?\s+(?:wrong|mistaken)\b|\byou\s+(?:made|make)\s+(?:a\s+)?(?:mistake|error)\b|actually,?\s+it\s+is\s+(?:not|different)|correct\s+that)\b|^you\s+missed\b|\boff\s+point\b|that\s+is\s+not\s+what\s+i\s+(?:asked|wanted|said)\b|\bnot\s+what\s+i\s+asked\b/i,
     confidence: 0.85,
   },
   // Unit conversion ("convert 5 meters to centimeters") —
   // deterministic conversion beats generic question frames.
+  // BATCH 48 Defect 6 (live-verified 2026-10-22): the rule
+  // demanded the literal verb "convert", so natural phrasings
+  // ("what is 20 celsius in fahrenheit", "5 miles to km",
+  // "how many km in 5 miles") never reached the deterministic
+  // converter and came back as web research hits. The unit
+  // vocabulary below mirrors the converter's registry
+  // (tools.ts); unknown tokens still fail honestly.
   {
     intent: "math_question",
-    pattern:
-      /\bconvert\s+-?\d+(?:\.\d+)?\s*[a-z°]+\s+(?:to|into|in)\s+[a-z°]+/i,
+    pattern: new RegExp(
+      "\\bconvert\\s+-?\\d+(?:\\.\\d+)?\\s*[a-z°]+\\s+(?:to|into|in)\\s+[a-z°]+" +
+        "|\\b-?\\d+(?:\\.\\d+)?\\s*(?:celsius|fahrenheit|kelvin|centigrade|millimet(?:er|re)s?|centimet(?:er|re)s?|kilomet(?:er|re)s?|met(?:er|re)s?|feet|foot|inch(?:es)?|yards?|miles?|grams?|grammes?|kilograms?|pounds?|ounces?|ton(?:ne)?s?|millilit(?:er|re)s?|centilit(?:er|re)s?|decilit(?:er|re)s?|lit(?:er|re)s?|cubic[-\\s]?meters?|km|cm|mm|mg|kg|g|l|m|t|m3|ft|yd|in|oz|lb|ml|cl|dl|°?[cfk])\\s+(?:to|into|in)\\s+(?:an?\\s+|the\\s+)?(?:celsius|fahrenheit|kelvin|centigrade|millimet(?:er|re)s?|centimet(?:er|re)s?|kilomet(?:er|re)s?|met(?:er|re)s?|feet|foot|inch(?:es)?|yards?|miles?|grams?|grammes?|kilograms?|pounds?|ounces?|ton(?:ne)?s?|millilit(?:er|re)s?|centilit(?:er|re)s?|decilit(?:er|re)s?|lit(?:er|re)s?|cubic[-\\s]?meters?|km|cm|mm|mg|kg|g|l|m|t|m3|ft|yd|in|oz|lb|ml|cl|dl|°?[cfk])\\b" +
+        "|\\bhow\\s+many\\s+(?:celsius|fahrenheit|kelvin|centigrade|millimet(?:er|re)s?|centimet(?:er|re)s?|kilomet(?:er|re)s?|met(?:er|re)s?|feet|foot|inch(?:es)?|yards?|miles?|grams?|grammes?|kilograms?|pounds?|ounces?|ton(?:ne)?s?|millilit(?:er|re)s?|centilit(?:er|re)s?|decilit(?:er|re)s?|lit(?:er|re)s?|cubic[-\\s]?meters?|km|cm|mm|mg|kg|g|l|m|t|m3|ft|yd|in|oz|lb|ml|cl|dl|°?[cfk])\\s+(?:are\\s+|is\\s+)?(?:in|is|per)\\s+-?\\d+(?:\\.\\d+)?\\s+(?:celsius|fahrenheit|kelvin|centigrade|millimet(?:er|re)s?|centimet(?:er|re)s?|kilomet(?:er|re)s?|met(?:er|re)s?|feet|foot|inch(?:es)?|yards?|miles?|grams?|grammes?|kilograms?|pounds?|ounces?|ton(?:ne)?s?|millilit(?:er|re)s?|centilit(?:er|re)s?|decilit(?:er|re)s?|lit(?:er|re)s?|cubic[-\\s]?meters?|km|cm|mm|mg|kg|g|l|m|t|m3|ft|yd|in|oz|lb|ml|cl|dl|°?[cfk])\\b",
+      "i",
+    ),
     confidence: 0.95,
   },
   // Arithmetic signal — deterministic math beats generic question frames.

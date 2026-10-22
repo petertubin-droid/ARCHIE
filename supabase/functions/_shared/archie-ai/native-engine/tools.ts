@@ -330,6 +330,13 @@ const LENGTH_UNITS: Record<string, number> = {
   yd: 0.9144,
   yard: 0.9144,
   yards: 0.9144,
+  // BATCH 48 Defect 2 (live-verified 2026-10-22): "convert 5
+  // miles to km" was rejected as an unknown unit — the
+  // registry had foot/inch/yard/pound but no mile. Exact
+  // international-mile factor (1609.344 m); the existing
+  // plural fallback covers "miles".
+  mi: 1609.344,
+  mile: 1609.344,
 };
 const MASS_UNITS: Record<string, number> = {
   mg: 1e-6,
@@ -347,6 +354,9 @@ const MASS_UNITS: Record<string, number> = {
   lb: 0.453592,
   pound: 0.453592,
   pounds: 0.453592,
+  // BATCH 48 Defect 2: common household mass unit.
+  oz: 0.028349523125,
+  ounce: 0.028349523125,
 };
 const VOLUME_UNITS: Record<string, number> = {
   ml: 0.001,

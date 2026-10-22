@@ -11,6 +11,7 @@
 // =========================================================
 
 import type { ResearchAdapter, ResearchHit } from "./webresearch.ts";
+import { decodeHtmlEntities } from "./html-text.ts";
 
 const SE_ENDPOINT = "https://api.stackexchange.com/2.3/search/advanced";
 
@@ -100,7 +101,7 @@ export class StackExchangeAdapter implements ResearchAdapter {
     }
     const hits: ResearchHit[] = [];
     for (const item of items) {
-      const title = (item?.title ?? "").trim();
+      const title = decodeHtmlEntities((item?.title ?? "").trim());
       const url = (item?.link ?? "").trim();
       if (!title || !url) continue;
       // The advanced-search default filter includes excerpt;
@@ -113,7 +114,7 @@ export class StackExchangeAdapter implements ResearchAdapter {
               ? `, ${item.answer_count} answer(s)`
               : "")
           : "";
-      const excerpt = (item.excerpt ?? "")
+      const excerpt = decodeHtmlEntities(item.excerpt ?? "")
         .replace(/<[^>]+>/g, "")
         .replace(/\s+/g, " ")
         .trim()

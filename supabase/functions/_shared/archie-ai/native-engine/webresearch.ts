@@ -31,6 +31,7 @@
 // =========================================================
 
 import { FactStore } from "./knowledge.ts";
+import { decodeHtmlEntities } from "./html-text.ts";
 import {
   WebSourceRegistry,
   classifyQueryDomain,
@@ -403,13 +404,13 @@ export class DuckDuckGoLiteAdapter implements ResearchAdapter {
       const isDdgRedirect = url.includes("duckduckgo.com/l/");
       if (isDdgRedirect) continue; // skip wrapped redirects, keep direct results
       const snippet = snippets[i]
-        ? snippets[i][2]
+        ? decodeHtmlEntities(snippets[i][2])
             .replace(/<[^>]+>/g, "")
             .replace(/\s+/g, " ")
             .trim()
         : "";
       hits.push({
-        title: links[i].title
+        title: decodeHtmlEntities(links[i].title)
           .replace(/<[^>]+>/g, "")
           .trim()
           .slice(0, 140),

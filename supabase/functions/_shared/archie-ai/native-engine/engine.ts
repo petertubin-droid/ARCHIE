@@ -2709,21 +2709,59 @@ export class ArchieNativeEngine implements ArchieRuntime {
         }
         // Unit conversion ("convert 5 meters to centimeters") —
         // deterministic factors, same dimension only (P2 ma-3).
-        const conv = input.match(
-          /convert\s+(-?\d+(?:\.\d+)?)\s*([a-z°]+)\s+(?:to|into|in)\s+([a-z°]+)/i,
+        // BATCH 48 Defect 6 (live-verified 2026-10-22): the
+        // matcher required the literal verb "convert", so the
+        // natural phrasings users actually type — "what is 20
+        // celsius in fahrenheit", "5 miles to km", "how many
+        // km in 5 miles" — fell through to knowledge/research
+        // and came back with a Stack Overflow hit instead of
+        // the deterministic converter. The extended patterns
+        // attempt the conversion; on an unknown-unit failure
+        // in a NON-explicit convert request the query falls
+        // through to arithmetic/knowledge instead of being
+        // stolen with a unit-error reply.
+        const convDirect = input.match(
+          /(?:convert\s+|what\s+is\s+|whats\s+)?(-?\d+(?:\.\d+)?)\s*([a-z°]+)\s+(?:to|into|in)\s+(?:a\s+|an\s+|the\s+)?([a-z°]+)\b/i,
         );
-        if (conv) {
+        // "how many km in 5 miles" — target unit first.
+        const convHowMany = input.match(
+          /how\s+many\s+([a-z°]+)\s+(?:are\s+|is\s+)?(?:in|is|per)\s+(-?\d+(?:\.\d+)?)\s+([a-z°]+)\b/i,
+        );
+        if (convDirect) {
           const invocation = await this.invokeCalculation("convert_units", {
-            value: Number(conv[1]),
-            from: conv[2],
-            to: conv[3],
+            value: Number(convDirect[1]),
+            from: convDirect[2],
+            to: convDirect[3],
           });
-          const text = invocation.ok
-            ? `${conv[1]} ${conv[2]} = ${String(invocation.output)} ${conv[3]} (converted deterministically in-engine)`
-            : `I could not convert that: ${invocation.error}. My unit conversion is honest — it reports errors rather than guessing.`;
-          return this.compose(text, nlu.confidence, [], undefined, [
-            invocation,
-          ]);
+          if (
+            invocation.ok ||
+            /\bconvert\b/i.test(input)
+          ) {
+            const text = invocation.ok
+              ? `${convDirect[1]} ${convDirect[2]} = ${String(invocation.output)} ${convDirect[3]} (converted deterministically in-engine)`
+              : `I could not convert that: ${invocation.error}. My unit conversion is honest — it reports errors rather than guessing.`;
+            return this.compose(text, nlu.confidence, [], undefined, [
+              invocation,
+            ]);
+          }
+        }
+        if (convHowMany) {
+          const invocation = await this.invokeCalculation("convert_units", {
+            value: Number(convHowMany[2]),
+            from: convHowMany[3],
+            to: convHowMany[1],
+          });
+          if (
+            invocation.ok ||
+            /\bconvert\b/i.test(input)
+          ) {
+            const text = invocation.ok
+              ? `${convHowMany[2]} ${convHowMany[3]} = ${String(invocation.output)} ${convHowMany[1]} (converted deterministically in-engine)`
+              : `I could not convert that: ${invocation.error}. My unit conversion is honest — it reports errors rather than guessing.`;
+            return this.compose(text, nlu.confidence, [], undefined, [
+              invocation,
+            ]);
+          }
         }
         const expression = extractExpression(input);
         if (!expression) {
@@ -2736,8 +2774,29 @@ export class ArchieNativeEngine implements ArchieRuntime {
         const invocation = await this.invokeCalculation("arithmetic", {
           expression,
         });
+        // BATCH 48 Defect 3 (live-verified 2026-10-22):
+        // "how much is 15% of 2400" answered with the internal
+        // reduction "((15/100)*2400) = 360" — synthetic
+        // pipeline syntax, not a professional answer. When
+        // the extracted expression is exactly the percent-of
+        // reduction of the user's own words, answer in those
+        // words instead ("15% of 2400 = 360").
+        let shownExpr = expression;
+        const pctOf = input.match(
+          /(\d+(?:\.\d+)?)\s*%\s*of\s*(-?[\d.,]+)/i,
+        );
+        if (pctOf) {
+          const pctNum = pctOf[1];
+          const baseNum = pctOf[2].replace(/,/g, "");
+          const esc = (v: string) => v.replace(/\./g, "\\.");
+          const synthetic = new RegExp(
+            `^\\(\\((${esc(pctNum)})/100\\)\\*\\(?(${esc(baseNum)})\\)?\\)$`,
+          );
+          if (synthetic.test(expression))
+            shownExpr = `${pctNum}% of ${pctOf[2]}`;
+        }
         let text = invocation.ok
-          ? `${expression} = ${String(invocation.output)} (computed deterministically in-engine)`
+          ? `${shownExpr} = ${String(invocation.output)} (computed deterministically in-engine)`
           : `I could not compute that: ${invocation.error}. My arithmetic is honest — it reports errors rather than guessing.`;
         // P2/ts-3 — cross-tool verification: when the owner
         // asks to verify, re-derive the result by an INVERSE
@@ -2765,6 +2824,27 @@ export class ArchieNativeEngine implements ArchieRuntime {
 
       case "knowledge_query":
       case "howto_guidance": {
+        // BATCH 48 Defect 5 (live-verified 2026-10-22):
+        // "whats my treasury status" fell to the generic
+        // knowledge-miss, whose research/teach offer is
+        // absurd for live account data. Treasury operations
+        // (balances, deposits, withdrawals, swaps) are served
+        // by the trading suite's treasury surface on the
+        // FRELUX trading tab, which calls the trading edge
+        // function directly. Chat cannot read them, and the
+        // honest answer is a suite pointer, never a fabricated
+        // balance and never a research/teach invite.
+        if (
+          /\btreasury\b[^.?!]*\b(?:status|balance|deposit|withdraw|swap|ledger|holding|position)\b|\b(?:deposit|withdraw|swap)\b[^.?!]*\btreasury\b/i.test(
+            input,
+          )
+        ) {
+          return this.compose(
+            "Treasury operations are handled by the FRELUX trading suite, not by chat. Open the trading tab to see treasury balances, deposits, withdrawals and swaps. I cannot read or move treasury funds from here, and I will not guess at a balance.",
+            0.9,
+            [],
+          );
+        }
         // CONTRADICTION SURFACING (benchmark cd-2, owner
         // directive 2026-09-16): a contrastive assertion
         // ("actually the cement price is 9200 naira") that
