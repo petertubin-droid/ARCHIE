@@ -73,7 +73,7 @@ import {
 import { generatedLabel, ownerLocalGenerate } from "./generative.ts";
 import { ContextMemory } from "./memory.ts";
 import { redactSecrets } from "../cognitive/security-integrity.ts";
-import { FACT_RELEVANCE_FLOOR, FactStore } from "./knowledge.ts";
+import { FACT_RELEVANCE_FLOOR, FactStore, renderFactObject } from "./knowledge.ts";
 import { FULL_SEED_CORPUS, SEED_CORPUS_VERSION } from "./seed-corpus.ts";
 import { PageFetcher } from "./page-fetch.ts";
 import { matchCodeRequest } from "./sandbox.ts";
@@ -1672,13 +1672,13 @@ export class ArchieNativeEngine implements ArchieRuntime {
     const qNums = this.quantitiesIn(input);
     if (qNums.length === 0) return null;
     for (const f of validated) {
-      const fNums = this.quantitiesIn(String(f.object));
+      const fNums = this.quantitiesIn(renderFactObject(f.object));
       for (const q of qNums) {
         for (const fn of fNums) {
           if (q.unit === fn.unit && q.value < fn.value) {
             return (
               `Working hypothesis (possible cause — NOT established as fact): the situation mentions ${q.value} ${q.unit}, ` +
-              `while my knowledge records “${f.subject} ${f.predicate.replace(/-/g, " ")}: ${String(f.object)}”. ` +
+              `while my knowledge records “${f.subject} ${f.predicate.replace(/-/g, " ")}: ${renderFactObject(f.object)}”. ` +
               `The gap between ${q.value} and ${fn.value} ${fn.unit} may be the cause. ` +
               `To verify: check what was actually done on site against the recorded requirement — confirm before acting on this.`
             );
@@ -2535,7 +2535,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
         ) {
           const siteParts = siteFacts.map(
             (f) =>
-              `${f.subject} ${f.predicate.replace(/-/g, " ")} ${String(f.object)}`,
+              `${f.subject} ${f.predicate.replace(/-/g, " ")} ${renderFactObject(f.object)}`,
           );
           return this.compose(
             `${knowledgeOpening(input)}\n${siteParts.join("\n")}`,
@@ -2824,6 +2824,28 @@ export class ArchieNativeEngine implements ArchieRuntime {
 
       case "knowledge_query":
       case "howto_guidance": {
+        // BATCH 49 Defect 6 (live-verified 2026-10-22): the
+        // compound "open the gate and tell me the price of
+        // cement" routed its first clause to a knowledge
+        // MISS with a research/teach invite — an offer to
+        // "research" opening a gate. A device-control
+        // imperative is a physical action request; the
+        // honest answer is that chat has no device controls,
+        // never a knowledge lookup or research invitation.
+        const deviceImperative =
+          /^(?:please\s+)?(open|close|shut|lock|unlock|turn\s+(?:on|off)|switch\s+(?:on|off)|start|stop|activate|deactivate)\s+(?:the|my|your)?\s*(gate|door|light|lights|pump|generator|machine|car|engine|fence|alarm|ac|air\s+conditioner|fridge|freezer|fan|tv|heater|boiler|valve|tap|irrigation|borehole)\b/i.exec(
+            input,
+          );
+        if (deviceImperative) {
+          const verb = deviceImperative[1]
+            .replace(/\s+/g, " ")
+            .toLowerCase();
+          return this.compose(
+            `I have no device controls in this deployment — the ${deviceImperative[2]} is a physical system I cannot reach from chat, and I will not pretend to ${verb} it. That action stays with you.`,
+            0.9,
+            [],
+          );
+        }
         // BATCH 48 Defect 5 (live-verified 2026-10-22):
         // "whats my treasury status" fell to the generic
         // knowledge-miss, whose research/teach offer is
@@ -2869,7 +2891,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
               const listing = stored
                 .map(
                   (f) =>
-                    `${f.subject} ${f.predicate.replace(/-/g, " ")} → ${String(f.object)} [${f.status}]`,
+                    `${f.subject} ${f.predicate.replace(/-/g, " ")} → ${renderFactObject(f.object)} [${f.status}]`,
                 )
                 .join("; ");
               return this.compose(
@@ -2928,7 +2950,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
                 // OWNER DIRECTIVE (2026-09-16): a definition
                 // answer is just the meaning — no confidence,
                 // no provenance, no footnotes.
-                `${prefix} ${String(f.object)}`,
+                `${prefix} ${renderFactObject(f.object)}`,
                 0.9,
                 [f.id],
               );
@@ -3255,7 +3277,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
               const top = personFacts.slice(0, 3);
               const parts = top.map(
                 (f) =>
-                  `${f.subject} ${f.predicate.replace(/-/g, " ")}: ${String(f.object)} [confidence ${(f.confidence * 100) | 0}%, ${f.provenance.source}]`,
+                  `${f.subject} ${f.predicate.replace(/-/g, " ")}: ${renderFactObject(f.object)} [confidence ${(f.confidence * 100) | 0}%, ${f.provenance.source}]`,
               );
               const pronoun = /\bhis\b/i.test(input)
                 ? "his"
@@ -3275,6 +3297,50 @@ export class ArchieNativeEngine implements ArchieRuntime {
         let validated = answerable
           .filter((f) => f.status !== "uncertain")
           .slice(0, 3);
+        // BATCH 49 Defect 5 (live-verified 2026-10-22):
+        // "does cement get cheaper in the rainy season"
+        // answered with cement bag mass, mortar and
+        // portland-cement definitions — topic-WORD overlap
+        // ("cement") let definition facts pose as answers to
+        // a seasonal-price reasoning question. Same coverage
+        // standard as the batch 42 research gate: a cited
+        // fact must cover at least 40% of the question's
+        // salient tokens, or it is a near-match, not an
+        // answer. Derived (SPO-computed) facts are exempt —
+        // they are computed FOR this question.
+        const Q_AUX_TOKENS = new Set([
+          "what", "whats", "who", "whom", "when", "where", "why", "how",
+          "which", "does", "do", "did", "is", "are", "was", "were", "am",
+          "can", "could", "will", "would", "should", "tell", "show",
+          "give", "me", "the", "a", "an", "of", "in", "on", "at", "to",
+          "my", "your", "it", "its", "that", "this", "for", "about",
+        ]);
+        const qSalientAll = salientTokens(input);
+        const qSalient = new Set(
+          [...qSalientAll].filter((t) => !Q_AUX_TOKENS.has(t)),
+        );
+        if (qSalient.size > 0) {
+          validated = validated.filter((f) => {
+            const fTokens = salientTokens(
+              `${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")} ${renderFactObject(f.object)}`,
+            );
+            let covered = 0;
+            for (const tok of qSalient) {
+              // Light suffix tolerance ("use" matches "uses")
+              // — full stemming is overkill for a coverage
+              // gate.
+              if (
+                fTokens.has(tok) ||
+                fTokens.has(`${tok}s`) ||
+                fTokens.has(`${tok}es`) ||
+                (tok.endsWith("s") && fTokens.has(tok.slice(0, -1)))
+              ) {
+                covered += 1;
+              }
+            }
+            return covered / qSalient.size >= 0.4;
+          });
+        }
         // Phase 2.4 SPO probe: a question naming a specific
         // attribute ("what is the screed volume?") is only
         // ANSWERED by a fact with that exact subject+predicate
@@ -3295,6 +3361,95 @@ export class ArchieNativeEngine implements ArchieRuntime {
           }
         }
         if (validated.length === 0 || !genuineSubject) {
+          // BATCH 49 Defect 7 (live-verified 2026-10-22):
+          // "what did i tell you about the site" got the
+          // generic knowledge-miss with a research/teach
+          // invite and an auto-research plan — absurd for a
+          // RECALL question (the subject is what the OWNER
+          // said, not public information), and the public-web
+          // candidates it stored polluted the store with
+          // generic disambiguation hits. A recall question is
+          // answered from retained owner knowledge and
+          // episodic statements only, never from research.
+          const recallTopic =
+            /\bwhat\s+(?:did|have|do)\s+i\s+(?:tell|say|teach|mention)(?:\s+(?:you|u))?\s*(?:about|on|regarding)\s+(.+)$/i.exec(
+              input,
+            ) ??
+            /\bremind\s+me\s+(?:of\s+)?what\s+i\s+(?:told|said|taught)(?:\s+you)?\s*(?:about|on|regarding)\s+(.+)$/i.exec(
+              input,
+            );
+          if (recallTopic) {
+            const topic = recallTopic[1].trim().replace(/[?.!]+$/, "");
+            const topicTokens = salientTokens(topic);
+            // Retained owner-origin knowledge on the topic.
+            const taught = this.facts
+              .list()
+              .filter(
+                (f) =>
+                  f.status !== "uncertain" &&
+                  (f.status === "owner-asserted" ||
+                    (f.provenance?.source ?? "").startsWith("owner")),
+              )
+              .filter((f) => {
+                const fTokens = salientTokens(
+                  `${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")} ${renderFactObject(f.object)}`,
+                );
+                for (const tok of topicTokens) {
+                  if (fTokens.has(tok)) return true;
+                }
+                return false;
+              });
+            if (taught.length > 0) {
+              const lines = taught
+                .slice(0, 4)
+                .map(
+                  (f) =>
+                    `${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")}: ${renderFactObject(f.object)}`,
+                );
+              return this.compose(
+                `From what you have told me (owner-asserted, on your authority):\n${lines.join("\n")}`,
+                0.8,
+                taught.slice(0, 4).map((f) => f.id),
+              );
+            }
+            // Episodic STATEMENTS (not questions) about the topic.
+            const stmts = context.salientTurns.filter((t) => {
+              if (t.role !== "owner") return false;
+              const text = t.text.trim();
+              if (text === input.trim()) return false;
+              // Questions are not statements the owner
+              // "told" ARCHIE — quoting a question back as
+              // recall is dishonest (BATCH 49 Defect 3).
+              if (/\?$/.test(text)) return false;
+              if (
+                /^(?:what|who|when|where|why|how|which|is|are|do|does|did|can|could|will|would|tell|show|give|whats)\b/i.test(
+                  text,
+                )
+              )
+                return false;
+              if (text.length <= 12) return false;
+              const tTokens = salientTokens(text);
+              for (const tok of topicTokens) {
+                if (tTokens.has(tok)) return true;
+              }
+              return false;
+            });
+            if (stmts.length > 0) {
+              const lines = stmts
+                .slice(0, 2)
+                .map((t) => `“${t.text.slice(0, 160)}”`);
+              return this.compose(
+                `Here is what you told me about that in this conversation:\n${lines.join("\n")}\nThat is episodic context from our chat, not retained knowledge. Teach it explicitly ("remember that ...") if it should be permanent.`,
+                0.7,
+                [],
+              );
+            }
+            return this.compose(
+              `You have not told me anything about ${topic || "that"} — nothing in this conversation, and nothing retained. I will not research it either: the question is about what YOU said, not public information. Teach me ("remember that ...") and I will retain it with provenance.`,
+              0.7,
+              [],
+            );
+          }
           // P7 — a knowledge question with zero matched
           // facts (or only TF-IDF noise below the relevance
           // floor — same thing) is a countable unknown-topic
@@ -3305,14 +3460,31 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // turns actually change the answer instead of a bare
           // "I do not know". The current input is excluded so
           // ARCHIE never "recalls" the question itself.
-          const recalled = context.salientTurns.filter(
-            (t) =>
-              t.role === "owner" &&
-              t.text.trim() !== input.trim() &&
-              t.text.length > 12 &&
-              // Relevance floor: recency alone is not recall.
-              (t.relevance ?? 0) >= 0.3,
-          );
+          // BATCH 49 Defect 3 (live-verified 2026-10-22): the
+          // compound clause "tell me the price of cement"
+          // quoted the FULL compound message back twice — the
+          // same utterance sat in BOTH the live buffer and
+          // the seeded/episodic set, and the exact-match filter
+          // never excluded it because the clause is a
+          // substring of the full text. Two guards: a turn
+          // that CONTAINS the current input is the question
+          // itself (never quote a question back as recall),
+          // and identical turns are deduped so one utterance
+          // is never quoted twice.
+          const seenRecallKeys = new Set<string>();
+          const inputTrim = input.trim();
+          const recalled = context.salientTurns.filter((t) => {
+            if (t.role !== "owner") return false;
+            const text = t.text.trim();
+            if (text.length <= 12) return false;
+            if (text === inputTrim || text.includes(inputTrim)) return false;
+            // Relevance floor: recency alone is not recall.
+            if ((t.relevance ?? 0) < 0.3) return false;
+            const key = text.slice(0, 160).toLowerCase();
+            if (seenRecallKeys.has(key)) return false;
+            seenRecallKeys.add(key);
+            return true;
+          });
           if (recalled.length > 0) {
             const recent = recalled
               .slice(0, 2)
@@ -3567,7 +3739,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // numbers and provenance, inspectable, just not
         // narrated.
         const parts = validated.map((f) => {
-          const base = `${f.subject} ${f.predicate.replace(/-/g, " ")}: ${String(f.object)}`;
+          const base = `${f.subject} ${f.predicate.replace(/-/g, " ")}: ${renderFactObject(f.object)}`;
           if (f.status === "derived" || f.provenance.source === "inferred") {
             return `${base} [derived by rule chain, not owner-validated]`;
           }
@@ -3724,7 +3896,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
         });
         const text = conflict
           ? `Updated — this replaces ${conflict.conflictingFactIds.length} older record(s) on the same point (the older version is kept marked uncertain for history). Your latest teaching stands; no approval step needed.`
-          : `Retained as your assertion (owner-asserted — held on your authority, not independently verified): ${fact.subject} ${fact.predicate.replace(/-/g, " ")} → ${String(fact.object)}. When I use it and you confirm I was right, it earns validated status.`;
+          : `Retained as your assertion (owner-asserted — held on your authority, not independently verified): ${fact.subject} ${fact.predicate.replace(/-/g, " ")} → ${renderFactObject(fact.object)}. When I use it and you confirm I was right, it earns validated status.`;
         return this.compose(text, nlu.confidence, [fact.id]);
       }
 
@@ -3820,7 +3992,7 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // ("market sand") — normalize every component.
           const factTokens = (f: Fact) =>
             salientTokens(
-              `${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")} ${String(f.object).replace(/-/g, " ")}`,
+              `${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")} ${renderFactObject(f.object).replace(/-/g, " ")}`,
             );
           const confirmed = this.facts.rank(input, 3).filter((f) => {
             const ft = factTokens(f);
@@ -3882,15 +4054,33 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // itself must never survive on a ranking technicality.
         const targeted = new Map<string, Fact>();
         if (triple) {
+          // BATCH 49 Defect 8 (live-verified 2026-10-22):
+          // "actually the price is 5500" in a FRESH session
+          // reported "1 related fact(s) moved to uncertain" —
+          // the loose TF-IDF neighbor (the price-policy fact,
+          // matched only by the word "price") was demoted as
+          // collateral damage and the count fabricated
+          // bookkeeping. A correction only demotes facts that
+          // GENUINELY contradict it: exact subject+predicate
+          // matches and conflict-detected facts. With nothing
+          // related, the reply says so honestly.
           for (const f of this.facts.query({
             subject: triple.subject,
             predicate: triple.predicate,
           })) {
             targeted.set(f.id, f);
           }
-        }
-        for (const f of this.facts.rank(input, 3)) {
-          targeted.set(f.id, f);
+          const conflict = this.facts.detectConflict(triple);
+          if (conflict) {
+            for (const id of conflict.conflictingFactIds) {
+              const f = this.facts.get(id);
+              if (f) targeted.set(f.id, f);
+            }
+          }
+        } else {
+          for (const f of this.facts.rank(input, 3)) {
+            targeted.set(f.id, f);
+          }
         }
         for (const fact of targeted.values()) {
           fact.status = "uncertain";
@@ -3932,16 +4122,33 @@ export class ArchieNativeEngine implements ArchieRuntime {
           if (fact.status === "uncertain" || fact.status === "validated") {
             fact.status = "owner-asserted";
           }
+          if (targeted.size > 0) {
+            return this.compose(
+              `Correction processed. ${targeted.size} related fact(s) moved to uncertain, and the corrected knowledge is retained as the owner-corrected assertion (owner-asserted — you resolved the contradiction, and the correction is stamped as a verification event). I do not silently keep wrong facts.`,
+              nlu.confidence,
+              [fact.id],
+            );
+          }
+          // Nothing contradicted the correction: retained,
+          // and the reply says exactly that — no fabricated
+          // demotion counts (BATCH 49 Defect 8).
           return this.compose(
-            `Correction processed. ${targeted.size} related fact(s) moved to uncertain, and the corrected knowledge is retained as the owner-corrected assertion (owner-asserted — you resolved the contradiction, and the correction is stamped as a verification event). I do not silently keep wrong facts.`,
+            `Retained as your owner-corrected assertion (owner-asserted, it earns validated status when confirmed in use). Nothing in my knowledge contradicted it, so no existing fact was demoted.`,
             nlu.confidence,
             [fact.id],
           );
         }
+        if (targeted.size > 0) {
+          return this.compose(
+            `Correction processed. ${targeted.size} related fact(s) moved to uncertain pending re-teaching. Tell me the correct fact and I will retain it.`,
+            nlu.confidence,
+            [...targeted.keys()].slice(0, 3),
+          );
+        }
         return this.compose(
-          `Correction processed. ${targeted.size} related fact(s) moved to uncertain pending re-teaching. Tell me the correct fact and I will retain it.`,
+          `I could not extract a complete fact from that correction, and nothing related is stored. Tell me the correct fact plainly (for example "the cement price is 9200 naira") and I will retain it with provenance.`,
           nlu.confidence,
-          [...targeted.keys()].slice(0, 3),
+          [],
         );
       }
 
@@ -5210,7 +5417,27 @@ function extractPriceProduct(input: string): string | null {
       " ",
     )
     .replace(/what(?:'s|\u2019s| is)?/g, " ")
-    .replace(/how much (?:is|does|are)/g, " ")
+    .replace(/how much (?:is|does|are|for)?\b/g, " ")
+    .replace(/\b(?:tell|show|give|send)\s+me\b/g, " ")
+    // BATCH 49 Defect 4 (live-verified 2026-10-22): "is 2500
+    // naira a fair price for a bag of cement today" extracted
+    // the product as "is 2500 naira fair bag" — the question
+    // verb, the money amount and the evaluation word all
+    // survived, and the real product ("bag of cement") fell
+    // past the 5-word cut. Fairness/evaluation questions and
+    // stated amounts are stripped so the PRODUCT is what
+    // remains; attached product numbers ("16mm iron") keep
+    // their digits (no space boundary).
+    .replace(/^\s*(?:is|are|was|were|am|do|does|did|can|will|would|should|i)\b/, " ")
+    .replace(
+      /\b(?:fair|good|great|bad|expensive|cheap|reasonable|worth|deal|bargain|pay|paying|buy|buying|get|getting|quote|quoted)\b/g,
+      " ",
+    )
+    .replace(
+      /\b\d+(?:\.\d+)?\s*(?:naira|kobo|n?dollars?|usd|gbp|euros?|pounds?|ngn)\b/g,
+      " ",
+    )
+    .replace(/\b\d+(?:\.\d+)?\b/g, " ")
     .replace(
       /\b(current|market|latest|price|prices|cost|today|now|this|week|month|please|the|a|an|per|there|for)\b/g,
       " ",

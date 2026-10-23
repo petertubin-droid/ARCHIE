@@ -1498,7 +1498,7 @@ const RULE_CASCADE: Array<{
     // explicit price/cost/unit-sale phrase.
     intent: "price_query",
     pattern:
-      /^(?:what(?:'s|\u2019s| is)?\s+(?:the\s+)?(?:current\s+|market\s+|latest\s+)*price\s+of|price\s+of|(?:current|market|latest)\s+price\s+of|how\s+much\s+(?:is|does|are)\s+(?:a\s+|an\s+|the\s+)?(?:bag|trip|tonne|ton|carton|block|drum|pound)s?\s+of|how\s+much\s+(?:is|does|are)\b.+\b(?:cost|price)\b|how\s+much\s+is\b.+\bper\s+(?:bag|tonne|ton|unit|kg|square\s+meter)|\b(?:cement|granite|sand|sharp\s+sand|laterite|blocks?|iron\s+rods?|reinforcement|paint|tiles?)\b[^.?!]*\bprice\b)\b|^check\s+what\b[^.?!]*\bcosts?\b|\bcheck\s+(?:the\s+)?prices?\b|\bwhats\s+the\s+damage\b/i,
+      /^(?:what(?:'s|\u2019s| is)?\s+(?:the\s+)?(?:current\s+|market\s+|latest\s+)*price\s+of|price\s+of|(?:current|market|latest)\s+price\s+of|how\s+much\s+(?:is|does|are)\s+(?:a\s+|an\s+|the\s+)?(?:bag|trip|tonne|ton|carton|block|drum|pound)s?\s+of|how\s+much\s+(?:is|does|are)\b.+\b(?:cost|price)\b|how\s+much\s+is\b.+\bper\s+(?:bag|tonne|ton|unit|kg|square\s+meter)|\b(?:cement|granite|sand|sharp\s+sand|laterite|blocks?|iron\s+rods?|reinforcement|paint|tiles?)\b[^.?!]*\bprice\b)\b|^check\s+what\b[^.?!]*\bcosts?\b|\bcheck\s+(?:the\s+)?prices?\b|\bwhats\s+the\s+damage\b|how\s+much\s+for\b|\b[\d.,]+\s*(?:naira|kobo|n?dollars?|usd|ngn|\u20a6)\b[^.?!]*\b(?:fair|good|bad|expensive|cheap|reasonable|too\s+much|too\s+high)\b|\b(?:fair|good|bad|expensive|cheap|reasonable|too\s+much|too\s+high)\b[^.?!]*\b[\d.,]+\s*(?:naira|kobo|n?dollars?|usd|ngn|\u20a6)\b|\b(?:tell|show|give)\s+me\s+(?:the\s+)?(?:current\s+|market\s+|latest\s+)?prices?\s+of\b/i,
     confidence: 0.9,
   },
   {

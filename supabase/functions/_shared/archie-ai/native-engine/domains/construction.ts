@@ -220,6 +220,18 @@ export function constructionEstimate(input: string): string {
     if (measurements.length < 1) {
       return `To estimate paint I need the surface area — for example "how much paint for a 4 by 5 meter wall". I will not guess dimensions.`;
     }
+    // BATCH 49 Defect 1b: a lone number with NO unit and no
+    // area words ("how much paint for a 3 bedroom flat") is a
+    // count, not an area — refused instead of computed as m2.
+    if (
+      measurements.length === 1 &&
+      !measurements[0].explicit &&
+      !/\b(?:square|sq\.?|m2|m²|ft2|area|surface|wall|walls|room|ceiling)\b/i.test(
+        input,
+      )
+    ) {
+      return `A single number with no unit is not a surface area I can trust. For example "how much paint for 20 square meters" or "how much paint for a 4 by 5 meter wall". I will not guess dimensions.`;
+    }
     if (measurements.length > 2) {
       return `I see ${measurements.length} numbers but a surface needs at most two dimensions (width and height). I will not pick two and ignore the rest.`;
     }
@@ -237,12 +249,45 @@ export function constructionEstimate(input: string): string {
     // AREA silently read as a concrete VOLUME, a 100x-class
     // wrong answer. An area unit is refused explicitly; the
     // parser's bare-meter reading of "square meters" must
-    // not become a volume.
+    // not become a volume. Checked FIRST so its specific
+    // message is not shadowed (BATCH 49).
     if (/\b(?:square|sq\.?|m2|m²|ft2)\b/i.test(input)) {
       return `A surface area is not a concrete volume, and I will not treat one as the other. For cement I need a concrete volume, for example "how many bags of cement for 2 cubic meters". For a wall area I can compute blocks ("how many blocks for a 6 by 3 meter wall") or paint ("how much paint for 20 square meters") instead.`;
     }
+    // BATCH 49 Defect 1a: LITRES are a real volume unit the
+    // generic parser cannot express (it only knows meters and
+    // feet), so they are converted explicitly: 1000 litres
+    // = 1 cubic meter. Handled before the volume-unit gate
+    // so the litres number never inherits "meters".
+    const litreM =
+      /(\d+(?:\.\d+)?)\s*(?:litres?|liters?)\b/i.exec(input);
+    if (litreM) {
+      const litres = Number(litreM[1]);
+      if (litres > 0 && Number.isFinite(litres)) {
+        const volFromLitres = litres / 1000;
+        const bags = Math.ceil(
+          ((volFromLitres * C.dryVolumeFactor) / C.mixSum) *
+            (C.cementKgPerM3 / C.cementBagKg) *
+            C.cementWaste,
+        );
+        return (
+          `For ${litres} litre(s) of concrete (${volFromLitres} m3): approximately ${bags} x ${C.cementBagKg}kg bags of cement. ` +
+          `Assumptions: 1:2:4 mix (dry volume factor ${C.dryVolumeFactor}, cement at ${C.cementKgPerM3} kg/m3), plus ${Math.round((C.cementWaste - 1) * 100)}% waste. This is a deterministic estimate — verify with your engineer for structural work.`
+        );
+      }
+    }
+    // BATCH 49 Defect 1 (live-verified 2026-10-22): "how many
+    // bags of cement for a 3 bedroom bungalow" answered "for 3
+    // cubic meters" — the bedroom COUNT was parsed as a bare
+    // number, inherited meters, and became the concrete
+    // VOLUME. A number is only a volume when a volume unit is
+    // stated; anything else (room counts, prices, dates) is
+    // refused rather than silently reinterpreted.
     if (measurements.length < 1) {
       return `To estimate cement I need the concrete volume — for example "how many bags of cement for 2 cubic meters of concrete". I will not guess volumes.`;
+    }
+    if (!/\b(?:cubic|cbm|cum|m3|m³)\b/i.test(input)) {
+      return `A concrete volume needs a volume unit — for example "how many bags of cement for 2 cubic meters" or "for 1500 litres of concrete". A bare number here (a room count, a price, a date) is not a volume, and I will not treat it as one.`;
     }
     if (measurements.length > 1) {
       return `I see ${measurements.length} numbers but a concrete volume needs exactly one. I will not use the first and ignore the rest — give one volume, e.g. "2 cubic meters".`;

@@ -800,6 +800,32 @@ export class FactStore {
 
 /** Persistence adapter — implemented by the Supabase-backed
  *  adapter (edge/app) or an in-memory double in tests. */
+
+/** BATCH 49 Defect 2 (live-verified 2026-10-22): candidate web
+ *  findings carry a STRUCTURED object value ({title, snippet,
+ *  url}); rendering them with String() printed "[object
+ *  Object]" into owner-facing summaries. Known structures are
+ *  rendered honestly; any other non-string falls back to
+ *  JSON (structured and inspectable, never opaque). */
+export function renderFactObject(object: unknown): string {
+  if (typeof object === "string") return object;
+  if (object !== null && typeof object === "object") {
+    const o = object as Record<string, unknown>;
+    if (typeof o.title === "string" && typeof o.url === "string") {
+      const snippet = typeof o.snippet === "string" ? o.snippet.trim() : "";
+      return snippet
+        ? `${o.title}: ${snippet} (source: ${o.url})`
+        : `${o.title} (source: ${o.url})`;
+    }
+    try {
+      return JSON.stringify(object) ?? String(object);
+    } catch {
+      return String(object);
+    }
+  }
+  return String(object);
+}
+
 export interface PersistedFactRow {
   id: string;
   subject: string;
