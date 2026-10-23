@@ -4248,6 +4248,117 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // this handler NEVER writes to the fact store, and
         // no conversation memory is retained from it. Honest
         // acknowledgment only.
+        // BATCH 52 Defect 6 (live-verified 2026-10-23): bare
+        // POSITIVE forget ("forget that", "forget the cement
+        // price") claimed "nothing from it has been kept"
+        // while the taught fact SURVIVED — a false statement
+        // about memory. Negated directives keep the no-store
+        // ack; positive forget actually DELETES: bare "forget
+        // that/it/this" removes the most recent owner-asserted
+        // fact; "forget <subject>" removes the owner-origin
+        // facts matching the subject. Nothing is claimed
+        // removed that was not.
+        if (!/\b(?:do\s+not|don'?t|never)\b/i.test(input)) {
+          const bare = /^forget\s+(?:that|it|this)?\s*[.!]?$/i.test(
+            input.trim(),
+          );
+          if (bare) {
+            const ownerFacts = this.facts
+              .list()
+              .filter(
+                (f) =>
+                  f.status === "owner-asserted" &&
+                  (f.provenance?.source ?? "") === "owner-taught",
+              )
+              .sort(
+                (a, b) =>
+                  Date.parse(b.createdAt ?? "") -
+                  Date.parse(a.createdAt ?? ""),
+              );
+            if (ownerFacts.length === 0) {
+              return this.compose(
+                "There is nothing to forget: no owner-taught fact is on record from you.",
+                nlu.confidence,
+                [],
+              );
+            }
+            const target = ownerFacts[0];
+            const removed = this.facts.removeById(target.id);
+            if (!removed) {
+              return this.compose(
+                "I could not remove that fact — the store refused the delete, and I will not claim otherwise.",
+                nlu.confidence,
+                [],
+              );
+            }
+            try {
+              if (this.persistence?.deleteFact) {
+                await this.persistence.deleteFact(removed);
+              }
+            } catch (persistErr) {
+              return this.compose(
+                `Forgotten in this session: ${removed.subject.replace(/-/g, " ")} ${removed.predicate.replace(/-/g, " ")} has been removed. The persistent copy could not be deleted (${String(persistErr)}), so tell me again after refresh if it resurfaces.`,
+                nlu.confidence,
+                [],
+              );
+            }
+            return this.compose(
+              `Forgotten: ${removed.subject.replace(/-/g, " ")} ${removed.predicate.replace(/-/g, " ")} has been removed — this session and the persistent store. Nothing else was touched.`,
+              nlu.confidence,
+              [],
+            );
+          }
+          // Subject-scoped forget: "forget the cement price".
+          const subjectM = /^forget\s+(?:that\s+|the\s+|my\s+)?(.+?)\s*[.!]?$/i.exec(
+            input.trim(),
+          );
+          if (subjectM) {
+            const subjectWords = subjectM[1]
+              .trim()
+              .toLowerCase()
+              .replace(/\s+/g, "-");
+            const tokens = new Set(
+              subjectWords.split("-").filter((w) => w.length > 2),
+            );
+            const matches = this.facts
+              .list()
+              .filter(
+                (f) =>
+                  (f.provenance?.source ?? "") === "owner-taught" &&
+                  f.status !== "uncertain" &&
+                  (f.subject === subjectWords ||
+                    f.subject.split("-").some((w) => tokens.has(w))),
+              );
+            if (matches.length === 0) {
+              return this.compose(
+                `Nothing you taught me matches "${subjectM[1].trim()}" — no owner-taught fact removed.`,
+                nlu.confidence,
+                [],
+              );
+            }
+            const removedLines: string[] = [];
+            for (const f of matches) {
+              const removed = this.facts.removeById(f.id);
+              if (removed) {
+                removedLines.push(
+                  `${removed.subject.replace(/-/g, " ")} ${removed.predicate.replace(/-/g, " ")}`,
+                );
+                try {
+                  if (this.persistence?.deleteFact) {
+                    await this.persistence.deleteFact(removed);
+                  }
+                } catch {
+                  removedLines[removedLines.length - 1] += " (persistent delete failed; may resurface)";
+                }
+              }
+            }
+            return this.compose(
+              `Forgotten — ${removedLines.length} owner-taught fact(s) removed:\n- ${removedLines.join("\n- ")}\nSeed and validated knowledge was not touched.`,
+              nlu.confidence,
+              [],
+            );
+          }
+        }
         return this.compose(
           "Understood — I will not store that, and nothing from it has been kept.",
           nlu.confidence,
@@ -4952,6 +5063,21 @@ export class ArchieNativeEngine implements ArchieRuntime {
             (stale
               ? ` This price is ${result.freshness} — treat it as indicative only.`
               : ""),
+          nlu.confidence,
+          [],
+        );
+      }
+
+      case "translation_request": {
+        // BATCH 52 Defect 7 (live-verified 2026-10-23):
+        // "translate hello to french" fell to weak Bayes and
+        // came back as a GREETING. Translation is not a
+        // capability ARCHIE has: no translation model, no
+        // translation adapter. The honest answer says exactly
+        // that — it never guesses a translation, and public
+        // web research is not a translation tool.
+        return this.compose(
+          "I do not translate languages — I have no translation capability in this deployment, and I will not guess at a translation. I converse in English and normalize Nigerian Pidgin phrasings. A dictionary or a human translator serves you better for real translation work.",
           nlu.confidence,
           [],
         );
@@ -5833,19 +5959,76 @@ function extractExpression(input: string): string | null {
     .replace(/multiplied by|times/g, "*")
     .replace(/plus/g, "+")
     .replace(/minus/g, "-");
-  const percent = normalized.match(
-    /(\d+(?:\.\d+)?)\s*(?:percent|%)\s*of\s*(\d+(?:\.\d+)?)/,
+  // BATCH 52 Defect 1 (live-verified 2026-10-23): roots and
+  // powers were not computable — "what is the square root of
+  // 144" went to public-web research and returned an article
+  // about square numbers. Roots, squares and cubes are
+  // deterministic arithmetic; they normalize to ^-forms.
+  const rooted = normalized
+    .replace(
+      /\b(?:square\s+root|sqrt)\s+of\s+(\d+(?:\.\d+)?)/g,
+      "($1^0.5)",
+    )
+    .replace(
+      /\bcube\s+root|cbrt\s+of\s+(\d+(?:\.\d+)?)/g,
+      "($1^(1/3))",
+    )
+    .replace(/\bsquare\s+(\d+(?:\.\d+)?)\b/g, "($1^2)")
+    .replace(/\bcube\s+(\d+(?:\.\d+)?)\b/g, "($1^3)")
+    .replace(
+      /(\d+(?:\.\d+)?)\s*squared\b/g,
+      (_mm, n) => `(${n}^2)`,
+    )
+    .replace(/(\d+(?:\.\d+)?)\s*cubed\b/g, (_mm, n) => `(${n}^3)`);
+  // BATCH 52 Defect 3 (live-verified 2026-10-23): "10 percent
+  // of 500 plus 20" returned 50 and silently DROPPED the
+  // trailing "+20". The percent-of reduction is composed
+  // INLINE so trailing arithmetic joins the expression
+  // instead of being discarded; the bare reduction remains
+  // the fallback when nothing follows. BATCH 52 Defect 4:
+  // word operators add/subtract/multiply compose explicit
+  // expressions.
+  const wordOps = rooted
+    .replace(
+      /\b(?:add|sum)\s+(-?\d+(?:\.\d+)?)\s+(?:and|to|plus)\s+(-?\d+(?:\.\d+)?)\b/g,
+      "($1+$2)",
+    )
+    .replace(
+      /\bsubtract\s+(-?\d+(?:\.\d+)?)\s+from\s+(-?\d+(?:\.\d+)?)\b/g,
+      "($2-$1)",
+    )
+    .replace(
+      /\bmultiply\s+(-?\d+(?:\.\d+)?)\s+by\s+(-?\d+(?:\.\d+)?)\b/g,
+      "($1*$2)",
+    )
+    .replace(
+      /\b(?:divide|split)\s+(-?\d+(?:\.\d+)?)\s+(?:by|into)\s+(-?\d+(?:\.\d+)?)\b/g,
+      "($1/$2)",
+    );
+  const percent = wordOps.match(
+    /(\d+(?:\.\d+)?)\s*(?:percent|%)\s*(?:\w+\s+){0,2}(?:of|on)\s*(-?\d+(?:\.\d+)?)/,
   );
-  if (percent) {
-    return `((${percent[1]}/100)*${percent[2]})`;
-  }
+  const withPercent =
+    percent !== null
+      ? wordOps.replace(
+          /(\d+(?:\.\d+)?)\s*(?:percent|%)\s*(?:\w+\s+){0,2}(?:of|on)\s*(-?\d+(?:\.\d+)?)/,
+          `((${percent[1]}/100)*${percent[2]})`,
+        )
+      : wordOps;
   // Longest balanced arithmetic run — supports parenthesized
-  // expressions like "(25 * 48) + 12" (P2 ma-1).
-  const m = normalized.match(/[\d(][-+*/%^().\d\s]*[\d)]/);
-  if (!m) return null;
+  // expressions like "(25 * 48) + 12" (P2 ma-1). BATCH 52
+  // Defect 2: a LEADING MINUS is part of the number ("what is
+  // -5 plus 3" is -2, not 8 — the old pattern started at the
+  // digit and silently dropped the sign).
+  const m = withPercent.match(/-?[\d(][-+*/%^().\d\s]*[\d)]/);
+  if (!m) {
+    return percent !== null ? `((${percent[1]}/100)*${percent[2]})` : null;
+  }
   const expr = m[0].replace(/\s+/g, "");
   // Must contain a real operator, not just a bare number.
-  if (!/[-+*/%^]/.test(expr)) return null;
+  if (!/[-+*/%^]/.test(expr)) {
+    return percent !== null ? `((${percent[1]}/100)*${percent[2]})` : null;
+  }
   // Balanced-parenthesis sanity (honest refusal on garbage).
   let bal = 0;
   for (const c of expr) {
@@ -5897,6 +6080,13 @@ function extractTriple(
   const cleaned = input
     .replace(
       /^(please\s+)?(learn|remember|note|know)[a-z]*\s*(that|this|:)?\s*/i,
+      "",
+    )
+    // BATCH 52 Defect 5: hedge prefixes ("i think the price
+    // is X") teach the ASSERTION inside the hedge; the hedge
+    // itself never becomes part of the subject.
+    .replace(
+      /^i\s+(?:think|believe|guess|reckon)\s+(?:that\s+)?/i,
       "",
     )
     // A correction often leads with a negation clause

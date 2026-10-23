@@ -65,6 +65,12 @@ export interface SupabaseLike {
       eq(column: string, value: unknown): PromiseLike<{ error: unknown }>;
     };
     upsert(rows: unknown): PromiseLike<{ error: unknown }>;
+    // BATCH 52 Defect 6: forget directives delete persisted
+    // fact rows. Optional so in-memory test doubles compile
+    // unchanged; deleteFact guards and degrades honestly.
+    delete?(): {
+      eq(column: string, value: unknown): PromiseLike<{ error: unknown }>;
+    };
   };
 }
 
@@ -366,6 +372,27 @@ export class SupabasePersistence
           verified_by: fact.verifiedBy ?? [],
         })
         .eq("id", fact.id);
+    }
+  }
+
+  // BATCH 52 Defect 6: forget directives remove the row so
+  // the delete survives rehydration on the next request.
+  async deleteFact(fact: Fact): Promise<void> {
+    const builder = this.db.from(FACTS_TABLE) as {
+      delete?: () => {
+        eq(column: string, value: unknown): PromiseLike<{
+          error: unknown;
+        }>;
+      };
+    };
+    if (!builder.delete) {
+      throw new Error(
+        "deleteFact unsupported: this client exposes no delete builder",
+      );
+    }
+    const { error } = await builder.delete().eq("id", fact.id);
+    if (error) {
+      throw new Error(`deleteFact failed: ${String(error)}`);
     }
   }
 

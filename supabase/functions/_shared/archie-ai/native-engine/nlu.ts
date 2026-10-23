@@ -432,6 +432,7 @@ export const INTENTS = [
   "documents_query",
   "images_query",
   "voice_query",
+  "translation_request",
   "social_query",
   "family_query",
   "construction_calc",
@@ -1412,7 +1413,7 @@ const RULE_CASCADE: Array<{
     // Conversational extension (2026-09-11): colloquial
     // capability probes, same intent the rule already owns.
     pattern:
-      /^(?:what|which)\s+can\s+you\s+(?:do|offer|handle|manage|plan)\b|^what\s+(?:are|were)\s+your\s+(?:abilities|skills|capabilities)\b|^(?:list|show)\s+your\s+(?:abilities|skills|capabilities)\b|^what\s+do\s+you\s+know\s+(?:how\s+to\s+)?do\b|^is\s+there\s+(?:something|anything)\s+you\s+can\s+do\b|^are\s+you\s+able\s+to\s+remember\b|^tell\s+me\s+about\s+your\s+(?:powers|abilities|skills|capabilities)\b|^what\s+are\s+you\s+(?:good|best)\s+at\b|\blist\s+what\s+you\s+can\s+do\b|\bwetin\s+you\s+(?:sabi|fit)\s+do\b|what\s+(?:services|works)\s+can\s+you\s+(?:render|handle)\b/i,
+      /^(?:what|which)\s+can\s+you\s+(?:do|offer|handle|manage|plan)\b|^what\s+(?:are|were)\s+your\s+(?:abilities|skills|capabilities)\b|^(?:list|show)\s+your\s+(?:abilities|skills|capabilities)\b|^what\s+do\s+you\s+know\s+(?:how\s+to\s+)?do\b|^is\s+there\s+(?:something|anything)\s+you\s+can\s+do\b|^are\s+you\s+able\s+to\s+remember\b|^tell\s+me\s+about\s+your\s+(?:powers|abilities|skills|capabilities)\b|^what\s+are\s+you\s+(?:good|best)\s+at\b|\blist\s+what\s+you\s+can\s+do\b|\bwetin\s+you\s+(?:sabi|fit)\s+do\b|what\s+(?:services|works)\s+can\s+you\s+(?:render|handle)\b|\bwhat\s+languages?\s+do\s+you\s+speak\b|\bwhat\s+languages?\s+(?:can\s+you\s+speak|do\s+you\s+know)\b|\bwhich\s+languages?\s+do\s+you\s+(?:speak|know)\b/i,
     confidence: 0.85,
   },
   {
@@ -1468,13 +1469,33 @@ const RULE_CASCADE: Array<{
     confidence: 0.85,
   },
   {
+    // BATCH 52 Defect 5 (live-verified 2026-10-23): "i think
+    // the cement price is 9200 naira" routed to price_query
+    // with the garbled product "think cement is" — a hedged
+    // ASSERTION is a teaching, not a market lookup. The hedge
+    // prefix is stripped by the triple extractor; the fact
+    // is retained owner-asserted like any teaching.
+    intent: "teaching",
+    pattern:
+      /^i\s+(?:think|believe|guess|reckon)\s+(?:that\s+)?[a-z][\w' -]{0,60}?\s+(?:is|are|has|costs|weighs|uses|means)\s+\S.{0,200}$/i,
+    confidence: 0.8,
+  },
+  {
     // "TEACH ME how to X" / "teach me Y" — the USER asks to
     // LEARN a procedure, so it is howto_guidance, never
     // ARCHIE-teaching (phase 3 de-bias fix: this phrasing was
     // over-captured by the teaching rule above).
     intent: "howto_guidance",
     pattern:
-      /^(?:please\s+)?teach\s+me\b|^how\s+(?:do|can|could)\s+(?:i|you|we)\s+(?!do\b|mean\b)[a-z]|^how\s+to\s+(?!you\b)[a-z]/i,
+      // BATCH 52 Defect 9 (live-verified 2026-10-23): "how do
+      // i convert 5 miles to km" was captured here as generic
+      // how-to and answered with public-web research (a
+      // Tesla Roadster article) instead of the deterministic
+      // converter. Conversion phrasings fall through to the
+      // unit-conversion/math rules below. Translation-verb
+      // exclusions (BATCH 52 Defect 7) keep "how do i say X
+      // in Yoruba" on the honest no-translation reply.
+      /^(?:please\s+)?teach\s+me\b|^how\s+(?:do|can|could)\s+(?:i|you|we)\s+(?!do\b|mean\b|say\b|translate\b|pronounce\b|spell\b|convert\b|calculate\b|compute\b)[a-z]|^how\s+to\s+(?!you\b)[a-z]/i,
     confidence: 0.8,
   },
   {
@@ -1529,6 +1550,18 @@ const RULE_CASCADE: Array<{
     // system / status phrasings.
     pattern:
       /\bvoice bank\b|\bvoice samples?\b|\bmy voice recordings?\b|\bvoice recordings? status\b|\b(?:your|the) voice (?:system|status|subsystem|capability)\b|\bvoice (?:system|subsystem) status\b|\bstatus of (?:your|the) voice\b/i,
+    confidence: 0.85,
+  },
+  {
+    // BATCH 52 Defect 7 (live-verified 2026-10-23):
+    // "translate hello to french" fell to weak Bayes and
+    // came back as a GREETING ("Well met. What are we
+    // working on?"). Translation is not a capability
+    // ARCHIE has; the engine answers honestly instead of
+    // greeting nonsense.
+    intent: "translation_request",
+    pattern:
+      /\btranslate\b|\bhow do (?:i|you) say\b|\bwhat is "[^"]+" in [a-z]+\b|\bin\s+(?:french|spanish|igbo|yoruba|hausa|pidgin)\b[^.?!]*\btranslate/i,
     confidence: 0.85,
   },
   {
@@ -1609,9 +1642,18 @@ const RULE_CASCADE: Array<{
   },
   // Arithmetic signal — deterministic math beats generic question frames.
   {
+    // BATCH 52 Defects 1/4 (live-verified 2026-10-23): roots,
+    // powers, squares, word operators and percent-on all
+    // compute deterministically in-engine, but the rule never
+    // routed them — "what is the square root of 144" went to
+    // public-web research, "multiply 4 by 5" to the
+    // zero-words rephrase, "15% commission on 85000" to a
+    // knowledge miss. Word problems ("if i have X... how many
+    // Y") route here too: the honest arithmetic miss beats a
+    // greeting.
     intent: "math_question",
     pattern:
-      /\d+\s*(?:times|plus|minus|divided\s+by|multiplied\s+by|over|[-+*/^])\s*\d+|\d+(?:\.\d+)?\s*(?:percent|%)\s*of\s*\d+/i,
+      /\d+\s*(?:times|plus|minus|divided\s+by|multiplied\s+by|over|[-+*/^])\s*-?\d+|\d+(?:\.\d+)?\s*(?:percent|%)\s*(?:\w+\s+){0,2}(?:of|on)\s*-?\d+|\b(?:square|cube)\s+root\s+of\s+\d+|\bsqrt\b|\b(?:square|cube)\s+\d+\b|\d+(?:\.\d+)?\s*(?:squared|cubed)\b|\b(?:to\s+the\s+)?power\s+of\s+\d+|\b(?:add|sum)\s+-?\d+(?:\.\d+)?\s+(?:and|to|plus)\s+-?\d+|\bsubtract\s+-?\d+\s+from\s+-?\d+|\bmultiply\s+-?\d+\s+by\s+-?\d+|\b(?:divide|split)\s+-?\d+\s+(?:by|into)\s+-?\d+|\bif\s+i\b[^.?!]*\d[^.?!]*\bhow\s+(?:many|much|long)\b/i,
     confidence: 0.9,
   },
   {

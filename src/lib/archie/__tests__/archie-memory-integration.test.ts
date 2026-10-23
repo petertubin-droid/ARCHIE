@@ -86,6 +86,16 @@ class MockDb implements SupabaseLike {
         else list.push(r);
         return { error: null };
       },
+      delete: () => ({
+        eq: async (column: string, value: unknown) => {
+          const list = rows();
+          const idx = list.findIndex(
+            (r) => r[column] === value || r.id === value,
+          );
+          if (idx >= 0) list.splice(idx, 1);
+          return { error: null };
+        },
+      }),
     };
   }
 }

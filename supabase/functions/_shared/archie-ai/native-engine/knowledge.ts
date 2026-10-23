@@ -413,6 +413,22 @@ export class FactStore {
     return this.facts.length;
   }
 
+  /** BATCH 52 Defect 6 (live-verified 2026-10-23): "forget
+   *  that" claimed "nothing from it has been kept" while the
+   *  taught fact SURVIVED — a false statement about memory.
+   *  Owner forget directives must actually remove the fact
+   *  (in-memory; the caller's persistence delete follows the
+   *  store removal). Returns the removed fact, or null when
+   *  the id is unknown. */
+  removeById(factId: string): Fact | null {
+    const idx = this.facts.findIndex((f) => f.id === factId);
+    if (idx === -1) return null;
+    const [removed] = this.facts.splice(idx, 1);
+    this.rankIndex.remove(factId);
+    this.reindex();
+    return removed;
+  }
+
   /** Honest hydration account — the engine surfaces this in
    *  diagnostics; a truncated hydration is never silent. */
   hydrationAccount(): HydrationStats | null {
@@ -857,6 +873,9 @@ export interface PersistenceLike {
   lastHydrationStats?: HydrationStats | null;
   saveFact(fact: Fact): Promise<void>;
   saveFacts(facts: Fact[]): Promise<void>;
+  /** BATCH 52 Defect 6: owner forget directives delete the
+   *  persisted row too; in-memory fakes omit it. */
+  deleteFact?(fact: Fact): Promise<void>;
   /** REMEDIATION batch 4 (2026-09-13): optional single-writer
    *  claim around consolidation. Implementations backed by a
    *  shared store should provide both; in-memory ones skip. */
