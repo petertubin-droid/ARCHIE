@@ -1291,8 +1291,34 @@ const RULE_CASCADE: Array<{
     // keeps this rule off the exclusion routes that own
     // those verbs (site-assistant regression, 2026-09-16).
     pattern:
-      /^(?:please\s+)?(?:do\s+not|don'?t|never)\s+(?!remember\b|forget\b)[a-z]/i,
+      // BATCH 53 Defect 8: "never mind"/"no wait" are
+      // RETRACTIONS, not corrections — excluded here so the
+      // retraction rule below owns them.
+      /^(?:please\s+)?(?:do\s+not|don'?t|never)\s+(?!remember\b|forget\b|mind\b|wait\b)[a-z]/i,
     confidence: 0.7,
+  },
+  {
+    // BATCH 53 Defect 7 (live-verified 2026-10-23): "i do not
+    // want to research it" fell to weak Bayes and came back
+    // as a knowledge miss quoting episodic noise. A negated
+    // research directive is an instruction to acknowledge,
+    // never a knowledge question.
+    intent: "memory_exclusion",
+    pattern:
+      /^(?:i\s+)?(?:do\s+not|don'?t|never)\s+(?:want\s+to\s+|need\s+to\s+|have\s+to\s+)?(?:research|search|google|look\s+up|study)\b/i,
+    confidence: 0.85,
+  },
+  {
+    // BATCH 53 Defect 8: standalone retractions ("never
+    // mind", "scratch that", "no wait") are acknowledgments
+    // of the previous exchange — routed for the honest
+    // "dropped" ack, never parsed as a negated clause. STRICTLY
+    // standalone: "never mind, whats 2+2" keeps a positive
+    // request and must reach the clause splitter.
+    intent: "memory_exclusion",
+    pattern:
+      /^(?:never\s+mind|nevermind|nvm|scratch\s+that|no\s+wait)\s*[.!]*\s*$/i,
+    confidence: 0.85,
   },
   {
     // BATCH 48 Defect 7 (live-verified 2026-10-22): bare
@@ -2309,6 +2335,25 @@ export function decomposeClauses(rawInput: string): DecomposedClause[] {
 
   const clauses: DecomposedClause[] = [];
   for (const part of head.split(markers)) {
+    // BATCH 53 Defect 8 (live-verified 2026-10-23): a leading
+    // RETRACTION ("never mind, whats 2+2") was read as a
+    // negation of everything after it — the math question
+    // died inside the exclusion. A retraction phrase acks the
+    // previous exchange; whatever follows it is a fresh
+    // POSITIVE request.
+    const retractionM =
+      /^\s*(?:never\s+mind|nevermind|nvm|scratch\s+that|no\s+wait)\b[,.]?\s*(.*)$/i.exec(
+        part,
+      );
+    if (retractionM) {
+      const remainder = unmask(retractionM[1] ?? "")
+        .trim()
+        .replace(/^[,;\s]+|[,;\s]+$/g, "");
+      if (remainder.length > 0) {
+        clauses.push({ text: remainder, negated: false });
+      }
+      continue;
+    }
     const negated = leadingNegation.test(part);
     const text = unmask(part)
       .trim()
@@ -2373,18 +2418,42 @@ export function decomposeClauses(rawInput: string): DecomposedClause[] {
  *  internal compound path and the reasoning loop so the two
  *  can never drift apart. */
 export function composeCompound(parts: string[], excluded: string[]): string {
-  let text: string;
+  // BATCH 53 Defect 8 (live-verified 2026-10-23): a standalone
+  // retraction ("never mind") came back as "You also asked me
+  // NOT to: 'mind'" — the clause splitter read "never" as a
+  // negation of the word "mind". Retraction phrases are
+  // acknowledgments, not exclusions: alone they get a simple
+  // "dropped" ack; with real clauses they are dropped silently.
+  const RETRACTION_RE =
+    /^(?:never\s*mind|nevermind|nvm|scratch\s+that|forget\s+i\s+said\s+that|no\s+wait|nothing)\b/i;
+  const realExcluded = excluded.filter(
+    (t) => !RETRACTION_RE.test(t.trim()),
+  );
+  const hasRetraction =
+    excluded.length !== realExcluded.length ||
+    RETRACTION_RE.test(parts.join(" ").trim());
   if (parts.length === 0) {
-    text =
+    if (hasRetraction && realExcluded.length === 0) {
+      return "Understood — dropped. Tell me the next thing and I am on it.";
+    }
+    const text =
       'Every part of that request was an exclusion (a "don\'t") — there was nothing left to answer. Tell me what you DO want and I will do it fully.';
-  } else {
-    text =
-      parts.length === 1
-        ? parts[0]
-        : parts.map((t, i) => `${i + 1}. ${t}`).join("\n");
+    if (realExcluded.length > 0) {
+      return (
+        text +
+        `\nYou also asked me NOT to: ${realExcluded
+          .map((t) => `"${t}"`)
+          .join("; ")}. Respected — that part is excluded from this answer.`
+      );
+    }
+    return text;
   }
-  if (excluded.length > 0) {
-    text += `\nYou also asked me NOT to: ${excluded
+  let text =
+    parts.length === 1
+      ? parts[0]
+      : parts.map((t, i) => `${i + 1}. ${t}`).join("\n");
+  if (realExcluded.length > 0) {
+    text += `\nYou also asked me NOT to: ${realExcluded
       .map((t) => `"${t}"`)
       .join("; ")}. Respected — that part is excluded from this answer.`;
   }

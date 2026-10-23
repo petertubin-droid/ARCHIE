@@ -1181,13 +1181,18 @@ export class ArchieNativeEngine implements ArchieRuntime {
         ? [{ text: input, negated: false }]
         : decomposeClauses(input);
     let outcome: ConverseResult;
-    if (clauses.length > MAX_COMPOUND_CLAUSES) {
+    // BATCH 53 Defect 8: a pure retraction message ("never
+    // mind") decomposes to ZERO clauses (the retraction adds
+    // no clause of its own). The NLU rule routes it to the
+    // memory_exclusion ack on the main path below; the clause
+    // router must not assume a clause exists.
+    if (clauses.length > 0 && clauses.length > MAX_COMPOUND_CLAUSES) {
       outcome = this.compose(
         `That is ${clauses.length} requests in one message — more than I can hold honestly in one pass. Send them one or two at a time and I will answer each fully.`,
         nlu.confidence * 0.5,
         [],
       );
-    } else if (clauses.length > 1 || clauses[0].negated) {
+    } else if (clauses.length > 1 || (clauses[0]?.negated ?? false)) {
       // A single clause that is itself an exclusion routes
       // through the same honest exclusion path.
       outcome = await this.routeClauses(
@@ -1778,6 +1783,22 @@ export class ArchieNativeEngine implements ArchieRuntime {
     const clauseHistory = (session ?? this.sessionFor()).memory.recentTurns(6);
     for (const clause of clauses) {
       if (clause.negated) {
+        // BATCH 53 Defect 7: a negated RESEARCH clause inside
+        // a compound ("do not research that") gets the honest
+        // acknowledgment instead of an exclusion footer that
+        // reads as an unanswered request.
+        if (
+          /^(?:want\s+to\s+|need\s+to\s+)?(?:research|search|google|look\s+up|study)\b/i.test(
+            clause.text.trim(),
+          )
+        ) {
+          parts.push(
+            "Understood — I will not research that. Nothing will be searched or stored.",
+          );
+          positive += 1;
+          confSum += 0.85;
+          continue;
+        }
         excluded.push(clause.text);
         continue;
       }
@@ -2946,6 +2967,24 @@ export class ArchieNativeEngine implements ArchieRuntime {
             .toLowerCase();
           return this.compose(
             `I have no device controls in this deployment — the ${deviceImperative[2]} is a physical system I cannot reach from chat, and I will not pretend to ${verb} it. That action stays with you.`,
+            0.9,
+            [],
+          );
+        }
+        // BATCH 53 Defect 5 (live-verified 2026-10-23): the
+        // QUESTION form ("is the gate open") fell to public
+        // web research and returned "Open the Dream Gate
+        // Championship" (a wrestling title). A device-state
+        // question is about the owner's physical property;
+        // the honest answer says chat cannot observe it,
+        // never a research dump.
+        const deviceStateQ =
+          /\b(?:is|are|whats|what\s+is|has)\s+(?:the\s+|my\s+|your\s+)?(?:gate|front\s+door|back\s+door|door|light|lights|pump|generator|machine|car|engine|fence|alarm|ac|air\s+conditioner|fridge|freezer|fan|tv|heater|boiler|valve|tap|irrigation|borehole)\s+(?:open|closed|on|off|locked|unlocked|running|still\s+\w+)\b/i.test(
+            input,
+          );
+        if (deviceStateQ) {
+          return this.compose(
+            "I have no device sensors in this deployment — I cannot observe whether that is open, closed, on or off, and I will not guess at your property's physical state. Check it yourself, or wire a device adapter if you want live status here.",
             0.9,
             [],
           );
@@ -4241,6 +4280,20 @@ export class ArchieNativeEngine implements ArchieRuntime {
       }
 
       case "memory_exclusion": {
+        // BATCH 53 Defect 8: standalone retractions ("never
+        // mind") are simple acknowledgments of the previous
+        // exchange — dropped, with an invitation to continue.
+        if (
+          /^(?:never\s+mind|nevermind|nvm|scratch\s+that|no\s+wait)\s*[.!]*\s*$/i.test(
+            input,
+          )
+        ) {
+          return this.compose(
+            "Understood — dropped. Tell me the next thing and I am on it.",
+            nlu.confidence,
+            [],
+          );
+        }
         // Defense in depth for negated memory directives
         // ("do not remember the gate code"). The NLU rule
         // routes these here deterministically; even if a
@@ -4258,6 +4311,21 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // fact; "forget <subject>" removes the owner-origin
         // facts matching the subject. Nothing is claimed
         // removed that was not.
+        // BATCH 53 Defect 7: negated research directives
+        // ("i do not want to research it") route here; the
+        // honest answer acknowledges the instruction instead
+        // of a knowledge lookup quoting episodic noise.
+        if (
+          /\b(?:do\s+not|don'?t|never)\b[^.?!]*\b(?:research|search|google|look\s+up|study)\b/i.test(
+            input,
+          )
+        ) {
+          return this.compose(
+            "Understood — I will not research it. Nothing will be searched, and nothing from that instruction is stored. Tell me what you DO want.",
+            nlu.confidence,
+            [],
+          );
+        }
         if (!/\b(?:do\s+not|don'?t|never)\b/i.test(input)) {
           const bare = /^forget\s+(?:that|it|this)?\s*[.!]?$/i.test(
             input.trim(),
@@ -4747,13 +4815,45 @@ export class ArchieNativeEngine implements ArchieRuntime {
           );
           return this.compose(noLines.join("\n"), nlu.confidence, []);
         }
-        const query = extractResearchQuery(input);
+        let query = extractResearchQuery(input);
         if (!query) {
           return this.compose(
             "Ready to research — give me the topic or question and I will search, cross-check and store findings as candidate knowledge.",
             nlu.confidence,
             [],
           );
+        }
+        // BATCH 53 Defect 6 (live-verified 2026-10-23): "can
+        // you research it for me" researched the literal "it
+        // for me". A pronoun-only subject resolves to the
+        // owner's previous turn when one exists; with no
+        // antecedent the honest answer asks back instead of
+        // researching filler words.
+        const pronounOnly =
+          /^(?:it|that|this|them|those|these)\b/i.test(query) &&
+          query
+            .replace(
+              /\b(?:it|that|this|them|those|these|for|me|please|now|today|ok|okay|thanks)\b/gi,
+              "",
+            )
+            .replace(/[\s.,!?]+/g, "")
+            .length === 0;
+        if (pronounOnly) {
+          const memTurns = session?.memory.recentTurns(8) ?? [];
+          const prevOwner =
+            memTurns
+              .filter((t) => t.role === "owner" && t.text !== input)
+              .slice(-1)[0]?.text ?? "";
+          const antecedent = prevOwner.replace(/[?.!]+$/, "").trim();
+          if (antecedent.length > 2) {
+            query = antecedent;
+          } else {
+            return this.compose(
+              "Research what, exactly? \"It\" points at nothing I can name from this conversation, and I will not search the web for a pronoun. Name the topic and I will research it properly.",
+              nlu.confidence,
+              [],
+            );
+          }
         }
         // Explicit owner research request = network authorization for this query.
         await this.facts.assert({
@@ -5885,6 +5985,13 @@ function extractPriceProduct(input: string): string | null {
     .replace(/what(?:'s|\u2019s| is)?/g, " ")
     .replace(/how much (?:is|does|are|for)?\b/g, " ")
     .replace(/\b(?:tell|show|give|send)\s+me\b/g, " ")
+    // BATCH 53 Defect 3 (live-verified 2026-10-23): common
+    // TYPO variants of the question words survived and
+    // polluted the product — "waht is the price of cement"
+    // became "waht is of cement". Typo variants are stripped
+    // like their correctly-spelled forms.
+    .replace(/\b(?:waht|wahts|whta|whtas|whcih|hwat)\b/g, " ")
+    .replace(/\bhwat\s+is\b|\bwaht\s+(?:is|be)\b|\bteh\b|\bhte\b/g, " ")
     // BATCH 49 Defect 4 (live-verified 2026-10-22): "is 2500
     // naira a fair price for a bag of cement today" extracted
     // the product as "is 2500 naira fair bag" — the question
@@ -5939,7 +6046,17 @@ function extractExpression(input: string): string | null {
   // 375000. Million/thousand/billion (and their short forms
   // k/m/bn) multiply the number they follow BEFORE the
   // arithmetic runs; anything unparseable stays untouched.
-  const withScales = input
+  // BATCH 53 Defect 1 (live-verified 2026-10-23):
+  // comma-grouped numbers never parsed — "250,000 times 2"
+  // found no expression and "15% of 250,000" computed 37.5
+  // from the pre-comma fragment. Comma grouping is stripped
+  // from whole numbers BEFORE any pattern runs (digit-groups
+  // only; decimal commas are not used in this domain).
+  const withCommasStripped = input.replace(
+    /(\d),(\d{3})(?=(\D|$))/g,
+    "$1$2",
+  );
+  const withScales = withCommasStripped
     .toLowerCase()
     .replace(
       /(\d+(?:\.\d+)?)\s*(?:billion|bn)\b/g,
@@ -6005,16 +6122,24 @@ function extractExpression(input: string): string | null {
       /\b(?:divide|split)\s+(-?\d+(?:\.\d+)?)\s+(?:by|into)\s+(-?\d+(?:\.\d+)?)\b/g,
       "($1/$2)",
     );
-  const percent = wordOps.match(
+  // BATCH 53 Defect 2 (live-verified 2026-10-23): "what is
+  // 3/4 of 120" computed only the fraction (0.75) and
+  // silently DROPPED the "of 120". A fraction-of-amount is
+  // a multiplication: (3/4)*120 = 90.
+  const withFractions = wordOps.replace(
+    /\b(-?\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s+of\s+(-?\d+(?:\.\d+)?)\b/g,
+    "($1/$2)*$3",
+  );
+  const percent = withFractions.match(
     /(\d+(?:\.\d+)?)\s*(?:percent|%)\s*(?:\w+\s+){0,2}(?:of|on)\s*(-?\d+(?:\.\d+)?)/,
   );
   const withPercent =
     percent !== null
-      ? wordOps.replace(
+      ? withFractions.replace(
           /(\d+(?:\.\d+)?)\s*(?:percent|%)\s*(?:\w+\s+){0,2}(?:of|on)\s*(-?\d+(?:\.\d+)?)/,
           `((${percent[1]}/100)*${percent[2]})`,
         )
-      : wordOps;
+      : withFractions;
   // Longest balanced arithmetic run — supports parenthesized
   // expressions like "(25 * 48) + 12" (P2 ma-1). BATCH 52
   // Defect 2: a LEADING MINUS is part of the number ("what is
