@@ -1521,8 +1521,14 @@ const RULE_CASCADE: Array<{
     // understanding speech; this rule only routes bank-status
     // questions to the real voice-sample adapter.
     intent: "voice_query",
+    // BATCH 51 Defect 4 (live-verified 2026-10-23):
+    // "status of your voice system" missed the voice rule
+    // (voice bank / samples / recordings only) and fell to a
+    // knowledge miss with a research invite — absurd for
+    // ARCHIE's own subsystem status. Extended to cover voice
+    // system / status phrasings.
     pattern:
-      /\bvoice bank\b|\bvoice samples?\b|\bmy voice recordings?\b|\bvoice recordings? status\b/i,
+      /\bvoice bank\b|\bvoice samples?\b|\bmy voice recordings?\b|\bvoice recordings? status\b|\b(?:your|the) voice (?:system|status|subsystem|capability)\b|\bvoice (?:system|subsystem) status\b|\bstatus of (?:your|the) voice\b/i,
     confidence: 0.85,
   },
   {
@@ -1639,8 +1645,22 @@ const RULE_CASCADE: Array<{
     // Bayes identity route + self-anchor guard can decide.
     intent: "knowledge_query",
     pattern:
-      /^(?:what|who)\s+(?:is|are|was|were)\s+(?!archie\b|your\b|this\b|that\b|the\b|behind\b)[a-z]|^(?:hi|hello|hey)[,.]?\s+(?:whats|what\s+is)\s+(?:a|an|the)\s+(?!time\b|price\b|weather\b|damage\b|plan\b)[a-z]/i,
+      /^(?:what|who)\s+(?:is|are|was|were)\s+(?!archie\b|your\b|this\b|that\b|the\b|behind\b|today\b|todays\b|today's\b)[a-z]|^(?:hi|hello|hey)[,.]?\s+(?:whats|what\s+is)\s+(?:a|an|the)\s+(?!time\b|price\b|weather\b|damage\b|plan\b)[a-z]/i,
     confidence: 0.7,
+  },
+  {
+    // BATCH 51 Defect 3 (live-verified 2026-10-23): "when is
+    // my birthday" fell to weak Bayes and came back as a
+    // CELEBRATION ("That is worth celebrating.
+    // Congratulations! 🎉") — a non-answer with an emoji.
+    // When-questions about the owner's personal dates are
+    // knowledge questions; the engine answers honestly that
+    // the date is not on record (never researched, never
+    // celebrated blindly).
+    intent: "knowledge_query",
+    pattern:
+      /\bwhen\s+is\s+(?:my|our)\s+(?:birthday|wedding|anniversary|name.day|graduation|interview|appointment|flight|court\s+date)\b|\bwhen\s+(?:is|was)\s+i\s+born\b/i,
+    confidence: 0.85,
   },
 
   // -------------------------------------------------------

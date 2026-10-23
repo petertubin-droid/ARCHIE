@@ -1494,7 +1494,30 @@ export class ArchieNativeEngine implements ArchieRuntime {
         .replace(/^(?:the|my)\s+/i, "")
         .replace(/\s+(?:prices?|costs?|cost|history|timeline|records?)$/i, "")
         .trim();
-      const subject = extracted.length > 0 ? extracted : ranked[0]?.subject;
+      // BATCH 51 Defect 8 (live-verified 2026-10-23): the
+      // ranked[0] fallback once grabbed an unrelated
+      // top-ranked fact ("network") as the timeline subject
+      // when the input named no subject — refusing with
+      // "the timeline of network" for a research request.
+      // The fallback is only taken when the top fact shares
+      // a salient token with the question; otherwise subject
+      // is null and the temporal branch steps aside.
+      let subject: string | undefined =
+        extracted.length > 0 ? extracted : undefined;
+      if (!subject && ranked.length > 0) {
+        const qTokens = salientTokens(input);
+        const fTokens = salientTokens(
+          `${ranked[0].subject.replace(/-/g, " ")} ${ranked[0].predicate.replace(/-/g, " ")} ${renderFactObject(ranked[0].object)}`,
+        );
+        let shared = false;
+        for (const tok of qTokens) {
+          if (fTokens.has(tok)) {
+            shared = true;
+            break;
+          }
+        }
+        if (shared) subject = ranked[0].subject;
+      }
       const tem = subject ? temporal({ ...task, subject }) : null;
       if (tem) {
         if (tem.conclusions.length > 0) {
@@ -2044,7 +2067,16 @@ export class ArchieNativeEngine implements ArchieRuntime {
     // cannot see across turns; the engine can, honestly.
     {
       const memTurns = session?.memory.recentTurns(8) ?? [];
-      const ownerTurns = memTurns.filter((t) => t.role === "owner");
+      // BATCH 51 Defect 5 (live-verified 2026-10-23): the
+      // current input is ALREADY in session memory when route
+      // runs, so the last owner turn was the follow-up
+      // itself — askedPrice ("whats the price of granite" in
+      // the PREVIOUS turn) never matched and "what about
+      // sharp sand" fell to a knowledge dump. Exclude the
+      // current input: the context turn is the one before it.
+      const ownerTurns = memTurns.filter(
+        (t) => t.role === "owner" && t.text !== input,
+      );
       const lastOwner = ownerTurns[ownerTurns.length - 1]?.text ?? "";
       const askedPrice = /\bprice\b|\bhow\s+much\b|\bcost\b/i.test(lastOwner);
       const sameMarket = /\bsame\s+(?:market|place|region|area)\b/i.test(input);
@@ -2096,8 +2128,15 @@ export class ArchieNativeEngine implements ArchieRuntime {
       [
         "knowledge_query",
         "howto_guidance",
-        "research_request",
         "price_query",
+        // BATCH 51 Defect 1 (live-verified 2026-10-23):
+        // "research the history of cement in nigeria" — an
+        // EXPLICIT owner research request — was intercepted by
+        // the temporal strategy and refused with "I hold no
+        // dated facts" instead of researching. An explicit
+        // research request always goes to the research
+        // pipeline; the strategy stash serves QUESTION-like
+        // intents only.
       ].includes(nlu.intent)
     ) {
       const strat = await this.strategyAnswer(
@@ -3436,6 +3475,80 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // generic disambiguation hits. A recall question is
           // answered from retained owner knowledge and
           // episodic statements only, never from research.
+          // BATCH 51 Defect 3b (live-verified 2026-10-23):
+          // "when is my birthday" now routes here as a
+          // knowledge question — but auto-researching the
+          // owner's birthday on the public web would be
+          // absurd. A when-question about the owner's own
+          // personal dates is answered from retained
+          // knowledge only: honest "not on record", never
+          // researched, never blindly celebrated.
+          const personalDateM =
+            /\bwhen\s+is\s+(?:my|our)\s+(birthday|wedding|anniversary|graduation|interview|appointment|flight)\b/i.exec(
+              input,
+            ) ??
+            /\bwhen\s+(?:is|was)\s+i\s+born\b/i.exec(input);
+          if (personalDateM) {
+            const what = personalDateM[1] ?? "date of birth";
+            const onRecord = this.facts
+              .list()
+              .filter(
+                (f) =>
+                  f.status !== "uncertain" &&
+                  /(?:birthday|wedding|anniversary|birth|graduation|interview|appointment|flight)/i.test(
+                    `${f.subject} ${f.predicate}`,
+                  ),
+              );
+            if (onRecord.length > 0) {
+              const lines = onRecord
+                .slice(0, 3)
+                .map(
+                  (f) =>
+                    `${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")}: ${renderFactObject(f.object)} [${f.status}]`,
+                );
+              return this.compose(
+                `From my retained knowledge on that:\n${lines.join("\n")}`,
+                0.8,
+                onRecord.slice(0, 3).map((f) => f.id),
+              );
+            }
+            return this.compose(
+              `I do not have your ${what} on record — retained knowledge holds nothing about it, and I will not research a personal date on the public web. Teach me ("remember that my ${what} is ...") and I will recall it exactly, any time you ask.`,
+              0.8,
+              [],
+            );
+          }
+          // BATCH 51 Defect 8 (live-verified 2026-10-23):
+          // "tell me about the trade you evaluated yesterday"
+          // fell to the research/teach invite — absurd for a
+          // question about ARCHIE's OWN past action in this
+          // conversation. Questions about what ARCHIE did are
+          // answered from this conversation's turns; when the
+          // action never happened, the honest answer says so.
+          if (
+            /\b(?:what|tell\s+me)\b[^.?!]*\byou\b[^.?!]*\b(?:evaluated|analyzed|told\s+me|said|taught|stored|remembered|researched|answered|calculated|converted|computed)\b/i.test(
+              input,
+            )
+          ) {
+            const archieTurns = context.salientTurns.filter(
+              (t) => t.role === "archie" && t.text.length > 12,
+            );
+            const tradeish = archieTurns.find((t) =>
+              /trade|BTC|ETH|buy|sell|stop|target|entry/i.test(t.text),
+            );
+            if (tradeish) {
+              return this.compose(
+                `From this conversation, here is what I actually did:\n“${tradeish.text.slice(0, 200)}”\nThat is the recorded exchange, not a reconstruction.`,
+                0.7,
+                [],
+              );
+            }
+            return this.compose(
+              "No such action happened in this conversation — I did not evaluate, calculate or research anything matching that. If you mean an earlier session: each session is isolated, and I honestly do not carry those exchanges. Tell me what you need and I will do it now.",
+              0.7,
+              [],
+            );
+          }
           // BATCH 50 Defect 2 (live-verified 2026-10-23):
           // conversation-META questions — "what do you
           // remember about me", "what have we discussed so
@@ -4064,32 +4177,67 @@ export class ArchieNativeEngine implements ArchieRuntime {
             }
           }
         }
-        const triple = extractTriple(input);
-        if (!triple) {
+        // BATCH 51 Defect 7: a conjunction joining two S-P-O
+        // clauses teaches BOTH facts ("my name is peter and my
+        // company is tubin constructions"), never one mangled
+        // triple.
+        const triples = extractCompoundTriples(input);
+        if (triples.length === 0) {
           return this.compose(
             "I want to learn that, but I could not extract a clean fact from it. State it as a simple subject-verb-object line (e.g. 'screeding ratio is 1:4 cement to sand') and I will retain it with provenance.",
             nlu.confidence,
             [],
           );
         }
-        const { fact, conflict } = await this.facts.assert({
-          ...triple,
-          confidence: 0.8,
-          provenance: {
-            source: "owner-taught",
-            note: `taught in conversation: ${input.slice(0, 120)}`,
-          },
-          // H-1 (audit fix 2026-09-11): a taught fact is held on
-          // the owner's AUTHORITY — it is citable with an honest
-          // label, but "validated" is earned through real
-          // verification events (explicit owner confirmation
-          // in use), never minted on arrival.
-          status: "owner-asserted",
-        });
-        const text = conflict
-          ? `Updated — this replaces ${conflict.conflictingFactIds.length} older record(s) on the same point (the older version is kept marked uncertain for history). Your latest teaching stands; no approval step needed.`
-          : `Retained as your assertion (owner-asserted — held on your authority, not independently verified): ${fact.subject} ${fact.predicate.replace(/-/g, " ")} → ${renderFactObject(fact.object)}. When I use it and you confirm I was right, it earns validated status.`;
-        return this.compose(text, nlu.confidence, [fact.id]);
+        if (triples.length === 1) {
+          const triple = triples[0];
+          const { fact, conflict } = await this.facts.assert({
+            ...triple,
+            confidence: 0.8,
+            provenance: {
+              source: "owner-taught",
+              note: `taught in conversation: ${input.slice(0, 120)}`,
+            },
+            // H-1 (audit fix 2026-09-11): a taught fact is held on
+            // the owner's AUTHORITY — it is citable with an honest
+            // label, but "validated" is earned through real
+            // verification events (explicit owner confirmation
+            // in use), never minted on arrival.
+            status: "owner-asserted",
+          });
+          const text = conflict
+            ? `Updated — this replaces ${conflict.conflictingFactIds.length} older record(s) on the same point (the older version is kept marked uncertain for history). Your latest teaching stands; no approval step needed.`
+            : `Retained as your assertion (owner-asserted — held on your authority, not independently verified): ${fact.subject} ${fact.predicate.replace(/-/g, " ")} → ${renderFactObject(fact.object)}. When I use it and you confirm I was right, it earns validated status.`;
+          return this.compose(text, nlu.confidence, [fact.id]);
+        }
+        const taughtFacts: Fact[] = [];
+        let replacedCount = 0;
+        for (const triple of triples) {
+          const { fact, conflict } = await this.facts.assert({
+            ...triple,
+            confidence: 0.8,
+            provenance: {
+              source: "owner-taught",
+              note: `taught in conversation: ${input.slice(0, 120)}`,
+            },
+            status: "owner-asserted",
+          });
+          taughtFacts.push(fact);
+          if (conflict) replacedCount += conflict.conflictingFactIds.length;
+        }
+        const taughtLines = taughtFacts.map(
+          (f) =>
+            `- ${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")} → ${renderFactObject(f.object)}`,
+        );
+        const text =
+          replacedCount > 0
+            ? `Retained ${taughtFacts.length} facts from your message (owner-asserted, on your authority), replacing ${replacedCount} older record(s) kept marked uncertain for history:\n${taughtLines.join("\n")}`
+            : `Retained ${taughtFacts.length} facts from your message (owner-asserted, held on your authority, not independently verified):\n${taughtLines.join("\n")}\nWhen I use them and you confirm I was right, each earns validated status.`;
+        return this.compose(
+          text,
+          nlu.confidence,
+          taughtFacts.map((f) => f.id),
+        );
       }
 
       case "memory_exclusion": {
@@ -5785,6 +5933,36 @@ function extractTriple(
   }
   const subject = subjectRaw.replace(/\s+/g, "-");
   return { subject, predicate: "is", object: objectText };
+}
+
+/** BATCH 51 Defect 7 (live-verified 2026-10-23): compound
+ *  teaching — "my name is peter and my company is tubin
+ *  constructions" extracted ONE mangled triple (subject
+ *  "my-name", object "peter and my company is tubin
+ *  constructions"). A conjunction joining two S-P-O clauses
+ *  teaches BOTH facts; each segment goes through the same
+ *  single-triple extractor (same rules, no guessing). The
+ *  split only happens when the text after "and/also/plus"
+ *  clearly starts a NEW subject-verb clause. */
+function extractCompoundTriples(
+  input: string,
+): Array<{ subject: string; predicate: string; object: unknown }> {
+  const segments = input
+    .split(
+      /\s+(?:and|also|plus)\s+(?=[a-z][a-z0-9 '-]*\s+(?:is|are|has|uses|means|converts|produces|contains|requires|needs|weighs|costs|creates|generates)\b)/i,
+    )
+    .map((seg) => seg.trim())
+    .filter((seg) => seg.length > 0);
+  const triples: Array<{
+    subject: string;
+    predicate: string;
+    object: unknown;
+  }> = [];
+  for (const seg of segments) {
+    const t = extractTriple(seg);
+    if (t) triples.push(t);
+  }
+  return triples;
 }
 
 /** Phase 2.4: probe a knowledge question for the SPECIFIC
