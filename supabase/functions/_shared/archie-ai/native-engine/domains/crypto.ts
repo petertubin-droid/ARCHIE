@@ -116,6 +116,25 @@ async function handleCryptoMarketQuery(
   const explicitEvalRequest =
     /\bevaluate\s+(?:my\s+)?(?:trade|crypto)\b/i.test(input);
 
+  // BATCH 50 Defect 7 (live-verified 2026-10-23): imperative
+  // trade orders ("sell 0.5 bitcoin", "buy 100 dollars of
+  // bitcoin") silently degraded to a price snapshot — the
+  // ORDER itself was never acknowledged, implying chat took
+  // it. Chat cannot execute trades: order placement belongs
+  // to the FRELUX trading suite (trading tab), which calls
+  // the trading edge function directly. The honest answer
+  // says exactly that. Advice questions ("should i buy...")
+  // and price questions keep their own paths.
+  const tradeOrder =
+    /^(?:i\s+(?:want|wanna|would\s+like|'d\s+like|plan)\s+to\s+|i\s+am\s+(?:going|planning)\s+to\s+)?(?:please\s+)?(?:buy|sell|short)\b/i.test(
+      input,
+    );
+  if (tradeOrder && !wantsTradeEval && symbol) {
+    return (
+      `Chat cannot execute trades — I read market data, I do not place orders. Order placement happens on the FRELUX trading suite (open the trading tab to place it there). ` +
+      `I can evaluate a full trade plan here if you give me the numbers ('should i ${direction === "short" ? "sell" : "buy"} ${symbol.replace("-USD", "").toLowerCase()}, entry 3000, stop 2800, target 3300, size 500, portfolio 25000') — never with guessed parameters.`
+    );
+  }
   if (!symbol) {
     return (
       "Ask me for a live crypto price — for example 'what is the price of bitcoin' — or give me a trade to evaluate ('should i buy eth, entry 3000, stop 2800, target 3300, size 500, portfolio 25000'). " +

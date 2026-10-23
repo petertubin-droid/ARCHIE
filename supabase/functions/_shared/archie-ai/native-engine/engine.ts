@@ -1594,11 +1594,21 @@ export class ArchieNativeEngine implements ArchieRuntime {
       sel.chosen.includes("causal");
     // "A or B" numeric questions / disagreement language →
     // the conflicting-evidence band.
+    // BATCH 50 Defect 8b (live-verified 2026-10-23):
+    // "should i use 16mm or 12mm rods for my slab" hit the
+    // conflict band — bare "or" + a digit read as a factual
+    // DISPUTE ("your sources disagree") when the owner asked
+    // for ADVICE. Advice questions ("should i ...", "which
+    // should i ...") are not disagreement claims; they fall
+    // through to the honest advice paths.
     const conflictClaim =
-      /\b(disagree|disagrees|disagreeing|conflicting|conflicts?|contradict|contradicts|contradiction)\b/i.test(
+      (/\b(disagree|disagrees|disagreeing|conflicting|conflicts?|contradict|contradicts|contradiction)\b/i.test(
         input,
       ) ||
-      (/\bor\b/i.test(input) && /\d/.test(input));
+        (/\bor\b/i.test(input) &&
+          /\d/.test(input) &&
+          !/\b(?:should|which)\s+i\b/i.test(input))) &&
+      !/\b(?:should|which)\s+i\b/i.test(input);
 
     if (conflictClaim) {
       const cons = consistency(strategyTask);
@@ -2744,6 +2754,25 @@ export class ArchieNativeEngine implements ArchieRuntime {
               invocation,
             ]);
           }
+          // BATCH 50 Defect 5b: the batch 48 fall-through
+          // (natural phrasing + unknown unit → arithmetic)
+          // is right for stray words, wrong for CURRENCY:
+          // "how much is 100 dollars in naira" must get the
+          // honest no-FX answer, not an arithmetic nag. FX
+          // conversion needs live rates; they are never
+          // guessed.
+          const CURRENCY_WORD =
+            /^(?:naira|kobo|dollars?|usd|ngn|euros?|pounds?|\u20a6)$/i;
+          if (
+            CURRENCY_WORD.test(convDirect[2]) ||
+            CURRENCY_WORD.test(convDirect[3])
+          ) {
+            return this.compose(
+              "I do not convert currencies — a live exchange rate is real-time market data I do not hold in this deployment, and I will not guess one. My deterministic unit conversion covers length, mass, volume and temperature only.",
+              nlu.confidence,
+              [],
+            );
+          }
         }
         if (convHowMany) {
           const invocation = await this.invokeCalculation("convert_units", {
@@ -2782,18 +2811,35 @@ export class ArchieNativeEngine implements ArchieRuntime {
         // reduction of the user's own words, answer in those
         // words instead ("15% of 2400 = 360").
         let shownExpr = expression;
+        // BATCH 50 Defect 6b: the reconstruction now also
+        // accepts the spelled-out "percent" and number-word
+        // scales ("15% of 2.5 million") — the scaled base
+        // ("2500000") never matched the user's words, so the
+        // reply fell back to raw pipeline syntax.
+        const SCALE_MULT: Record<string, number> = {
+          million: 1e6,
+          mn: 1e6,
+          billion: 1e9,
+          bn: 1e9,
+          thousand: 1e3,
+          k: 1e3,
+        };
         const pctOf = input.match(
-          /(\d+(?:\.\d+)?)\s*%\s*of\s*(-?[\d.,]+)/i,
+          /(\d+(?:\.\d+)?)\s*(?:%|percent)\s+of\s+(-?[\d.,]+)(?:\s*(million|mn|billion|bn|thousand|k))?\b/i,
         );
         if (pctOf) {
           const pctNum = pctOf[1];
-          const baseNum = pctOf[2].replace(/,/g, "");
+          const scale = (pctOf[3] ?? "").toLowerCase();
+          const mult = SCALE_MULT[scale] ?? 1;
+          const baseNum = String(
+            Number(pctOf[2].replace(/,/g, "")) * mult,
+          );
           const esc = (v: string) => v.replace(/\./g, "\\.");
           const synthetic = new RegExp(
             `^\\(\\((${esc(pctNum)})/100\\)\\*\\(?(${esc(baseNum)})\\)?\\)$`,
           );
           if (synthetic.test(expression))
-            shownExpr = `${pctNum}% of ${pctOf[2]}`;
+            shownExpr = `${pctNum}% of ${pctOf[2]}${scale ? ` ${scale}` : ""}`;
         }
         let text = invocation.ok
           ? `${shownExpr} = ${String(invocation.output)} (computed deterministically in-engine)`
@@ -2824,6 +2870,25 @@ export class ArchieNativeEngine implements ArchieRuntime {
 
       case "knowledge_query":
       case "howto_guidance": {
+        // BATCH 50 Defect 3 (live-verified 2026-10-23):
+        // "remind me to call the site foreman" got the
+        // knowledge-miss with a research/teach invite — an
+        // offer to "research" a reminder. Chat has no
+        // scheduler, no task store and no future messaging;
+        // the honest answer says exactly that. Recall-style
+        // "remind me what i said" keeps its own path (the
+        // guard below only matches action reminders).
+        if (
+          /\bremind\s+me\s+to\b|\bremind\s+me\s+(?:on|at|next|every|tomorrow|later|tonight|today)\b|\bset\s+(?:a\s+)?reminder\b|\bschedule\s+(?:a\s+)?reminder\b|\bdont\s+let\s+me\s+forget\b|\bdon'?t\s+let\s+me\s+forget\b/i.test(
+            input,
+          )
+        ) {
+          return this.compose(
+            "I have no scheduler in this deployment — I cannot set reminders, hold tasks between sessions, or message you at a future time. Teach me the fact (for example \"remember that I must call the site foreman before Friday\") and I will recall it whenever you ask; the reminder itself belongs in your calendar.",
+            0.9,
+            [],
+          );
+        }
         // BATCH 49 Defect 6 (live-verified 2026-10-22): the
         // compound "open the gate and tell me the price of
         // cement" routed its first clause to a knowledge
@@ -3371,6 +3436,76 @@ export class ArchieNativeEngine implements ArchieRuntime {
           // generic disambiguation hits. A recall question is
           // answered from retained owner knowledge and
           // episodic statements only, never from research.
+          // BATCH 50 Defect 2 (live-verified 2026-10-23):
+          // conversation-META questions — "what do you
+          // remember about me", "what have we discussed so
+          // far" — fell to auto-research and returned public
+          // garbage ("Remember", the 1926 film; far-right
+          // subcultures). These are questions about THIS
+          // conversation and the owner's retained knowledge;
+          // public web research is exactly the wrong tool.
+          const ownerStatementsForMeta =
+            context.salientTurns.filter((t) => {
+              if (t.role !== "owner") return false;
+              const text = t.text.trim();
+              if (text.length <= 12) return false;
+              if (/\?$/.test(text)) return false;
+              if (
+                /^(?:what|who|when|where|why|how|which|is|are|do|does|did|can|could|will|would|tell|show|give|whats|open|close|start|stop|buy|sell|convert|remind)\b/i.test(
+                  text,
+                )
+              )
+                return false;
+              return true;
+            });
+          const metaRecall =
+            /\bwhat\s+(?:do|did)\s+you\s+(?:remember|know|hold)\s+about\s+me\b/i.test(
+              input,
+            ) ||
+            /\bwhat\s+have\s+we\s+(?:discussed|talked\s+about|covered|spoken\s+about|gone\s+over)\b/i.test(
+              input,
+            );
+          if (metaRecall) {
+            const taughtMeta = this.facts
+              .list()
+              .filter(
+                (f) =>
+                  f.status !== "uncertain" &&
+                  (f.status === "owner-asserted" ||
+                    (f.provenance?.source ?? "").startsWith("owner")),
+              )
+              .slice(0, 5);
+            const taughtLines = taughtMeta.map(
+              (f) =>
+                `${f.subject.replace(/-/g, " ")} ${f.predicate.replace(/-/g, " ")}: ${renderFactObject(f.object)}`,
+            );
+            const stmtLines = ownerStatementsForMeta
+              .slice(0, 2)
+              .map((t) => `“${t.text.slice(0, 140)}”`);
+            if (taughtLines.length > 0) {
+              return this.compose(
+                `Here is what you have taught me (owner-asserted, on your authority):\n${taughtLines.join("\n")}${
+                  stmtLines.length > 0
+                    ? `\nAnd from this conversation:\n${stmtLines.join("\n")}\n(Episodic context, not retained knowledge.)`
+                    : ""
+                }`,
+                0.8,
+                taughtMeta.map((f) => f.id),
+              );
+            }
+            if (stmtLines.length > 0) {
+              return this.compose(
+                `From this conversation:\n${stmtLines.join("\n")}\nThat is episodic context, not retained knowledge — teach me (“remember that …”) if any of it should be permanent.`,
+                0.7,
+                [],
+              );
+            }
+            return this.compose(
+              "Nothing yet: you have taught me no facts, and this conversation holds no statements from you. Teach me (\"remember that ...\") and I will retain it with provenance.",
+              0.7,
+              [],
+            );
+          }
           const recallTopic =
             /\bwhat\s+(?:did|have|do)\s+i\s+(?:tell|say|teach|mention)(?:\s+(?:you|u))?\s*(?:about|on|regarding)\s+(.+)$/i.exec(
               input,
@@ -3478,6 +3613,19 @@ export class ArchieNativeEngine implements ArchieRuntime {
             const text = t.text.trim();
             if (text.length <= 12) return false;
             if (text === inputTrim || text.includes(inputTrim)) return false;
+            // BATCH 50 Defect 6 (live-verified 2026-10-23):
+            // "whats 9200 naira in dollars" quoted an earlier
+            // QUESTION back as something the owner "said". A
+            // question is not a statement; quoting it as
+            // recall is dishonest. Question-shaped turns are
+            // excluded from the episodic recall list.
+            if (/\?$/.test(text)) return false;
+            if (
+              /^(?:what|who|when|where|why|how|which|is|are|do|does|did|can|could|will|would|tell|show|give|whats|convert|remind)\b/i.test(
+                text,
+              )
+            )
+              return false;
             // Relevance floor: recency alone is not recall.
             if ((t.relevance ?? 0) < 0.3) return false;
             const key = text.slice(0, 160).toLowerCase();
@@ -3602,6 +3750,31 @@ export class ArchieNativeEngine implements ArchieRuntime {
                 }
               }
             }
+          }
+          // BATCH 50 Defect 8 (live-verified 2026-10-23):
+          // "should i use granite or sand for my foundation"
+          // auto-researched and returned a GEOLOGY snippet
+          // ("in granite rocks this results in more feldspar
+          // minerals in the sand...") — a material-science
+          // answer dressed as construction advice. Structural
+          // material choice is an engineering decision: the
+          // honest answer defers to the engineer and offers
+          // the deterministic calculators that DO exist. No
+          // public-web snippet can substitute for engineering
+          // judgment, so research is not triggered for these.
+          if (
+            /\bshould\s+i\b[^.?!]*\b(?:use|choose|pick|prefer|go\s+with)\b/i.test(
+              input,
+            ) &&
+            /\b(?:foundation|footing|slab|beam|column|septic|retaining\s+wall|raft|pile|raft\s+foundation|roof|blockwork|reinforcement|rebar|choking|laterite|hardcore)\b/i.test(
+              input,
+            )
+          ) {
+            return this.compose(
+              "That is a structural decision, and I do not give engineering judgments: material choice for it depends on soil tests, loads and design that only your engineer can verify. I hold no validated engineering rules on it either. What I can do deterministically is arithmetic — blocks for a wall, paint for an area, cement bags for a concrete volume. Consult your engineer before committing to a material choice.",
+              0.8,
+              [],
+            );
           }
           if (
             // BATCH 46: guest sessions never auto-research. The
@@ -3811,6 +3984,25 @@ export class ArchieNativeEngine implements ArchieRuntime {
       }
 
       case "teaching": {
+        // BATCH 50 Defect 3b: "remind me to call the site
+        // foreman" classifies as TEACHING — the fact
+        // extractor then fails ("could not extract a clean
+        // fact"). An action reminder is not a fact to learn;
+        // the honest answer is the no-scheduler reply. Recall
+        // questions ("remind me what i said about X") keep
+        // their own path: this guard matches only action
+        // reminders.
+        if (
+          /\bremind\s+me\s+to\b|\bremind\s+me\s+(?:on|at|next|every|tomorrow|later|tonight|today)\b|\bset\s+(?:a\s+)?reminder\b|\bschedule\s+(?:a\s+)?reminder\b|\bdont\s+let\s+me\s+forget\b|\bdon'?t\s+let\s+me\s+forget\b/i.test(
+            input,
+          )
+        ) {
+          return this.compose(
+            "I have no scheduler in this deployment — I cannot set reminders, hold tasks between sessions, or message you at a future time. Teach me the fact (for example \"remember that I must call the site foreman before Friday\") and I will recall it whenever you ask; the reminder itself belongs in your calendar.",
+            0.9,
+            [],
+          );
+        }
         // Secrets are never memorized — the immune system's
         // redaction gate applies to memory writes too.
         const secretScan = redactSecrets(input);
@@ -5442,6 +5634,12 @@ function extractPriceProduct(input: string): string | null {
       /\b(current|market|latest|price|prices|cost|today|now|this|week|month|please|the|a|an|per|there|for)\b/g,
       " ",
     )
+    // BATCH 50 Defect 4 (live-verified 2026-10-23): pidgin
+    // interrogatives survived product extraction —
+    // "wetin be the price of iron rod" produced the product
+    // "wetin be of iron rod". The intent routes correctly;
+    // the product must route to the material alone.
+    .replace(/\b(?:wetin|be|na|abeg|shey|sha|abi)\b/g, " ")
     // TRAILING MARKET QUALIFIER (owner directive 2026-09-14):
     // "cement in lagos" keeps the product as "cement"; the
     // region goes to the region hint, not the product name.
@@ -5461,8 +5659,27 @@ function extractPriceProduct(input: string): string | null {
 function extractExpression(input: string): string | null {
   // Word operators → symbols first, so "25 times 48" and
   // "12.5 percent of 8000" extract as real arithmetic.
-  const normalized = input
+  // BATCH 50 Defect 6 (live-verified 2026-10-23): number
+  // WORD multipliers were never scaled — "what is 15% of 2.5
+  // million" computed "15% of 2.5 = 0.375" instead of
+  // 375000. Million/thousand/billion (and their short forms
+  // k/m/bn) multiply the number they follow BEFORE the
+  // arithmetic runs; anything unparseable stays untouched.
+  const withScales = input
     .toLowerCase()
+    .replace(
+      /(\d+(?:\.\d+)?)\s*(?:billion|bn)\b/g,
+      (_m, n) => String(Number(n) * 1e9),
+    )
+    .replace(
+      /(\d+(?:\.\d+)?)\s*(?:million|mn)\b/g,
+      (_m, n) => String(Number(n) * 1e6),
+    )
+    .replace(
+      /(\d+(?:\.\d+)?)\s*(?:thousand|k)\b/g,
+      (_m, n) => String(Number(n) * 1e3),
+    );
+  const normalized = withScales
     .replace(/to the power of/g, "^")
     .replace(/divided by|over/g, "/")
     .replace(/multiplied by|times/g, "*")

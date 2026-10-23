@@ -1608,6 +1608,20 @@ const RULE_CASCADE: Array<{
       /\d+\s*(?:times|plus|minus|divided\s+by|multiplied\s+by|over|[-+*/^])\s*\d+|\d+(?:\.\d+)?\s*(?:percent|%)\s*of\s*\d+/i,
     confidence: 0.9,
   },
+  {
+    // BATCH 50 Defect 5 (live-verified 2026-10-23): currency
+    // conversion questions ("how much is 100 dollars in
+    // naira", "whats 9200 naira in dollars") fell to greeting
+    // / episodic noise — no rule owned them. They route to
+    // math_question so the deterministic converter answers
+    // with its HONEST refusal (it does length, mass, volume
+    // and temperature only; FX rates need live data and are
+    // never guessed).
+    intent: "math_question",
+    pattern:
+      /\b[\d.,]+\s*(?:naira|kobo|n?dollars?|usd|ngn|euros?|pounds?|\u20a6)\b[^.?!]{0,30}\b(?:in|to|into)\s+(?:naira|kobo|n?dollars?|usd|ngn|euros?|pounds?|\u20a6)\b|\b(?:naira|kobo|n?dollars?|usd|ngn|euros?|pounds?|\u20a6)\b[^.?!]{0,20}\b[\d.,]+\s*(?:naira|kobo|n?dollars?|usd|ngn|euros?|pounds?|\u20a6)\b[^.?!]{0,20}\b(?:in|to|into)\s/i,
+    confidence: 0.9,
+  },
   // Definitional interrogatives ("what is the X of Y").
   {
     intent: "knowledge_query",
