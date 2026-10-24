@@ -55,6 +55,7 @@ describe("ARCHIE bounded runtime schema dialect", () => {
     cyclic.self = cyclic;
     expect(validateToolCall({ type: "object" }, cyclic).valid).toBe(false);
     expect(validateRuntimeSchema({}, cyclic).valid).toBe(false);
+    // eslint-disable-next-line no-sparse-arrays -- sparse arrays are the regression input
     expect(validateRuntimeSchema([, 1], { type: "array" }).valid).toBe(false);
     expect(validateRuntimeSchema({ child: Object.assign(Object.create({ inherited: true }), { value: 1 }) }, { type: "object" }).valid).toBe(false);
   });
